@@ -1,0 +1,46 @@
+# ─────────────────────────────────────────────────────────────
+# Dual-Robot Dashboard (agrobot | jackal) — Python dependencies
+# Tested on Python 3.10 / Ubuntu 22.04 / ROS 2 Humble
+# Install with:  pip3 install -r requirements.txt
+# ─────────────────────────────────────────────────────────────
+
+# Object detection (YOLOv8) — includes torch / torchvision as transitive deps
+ultralytics>=8.4
+
+# Computer vision — used by object_detector.py and dashboard/serve.py
+opencv-python>=4.5
+
+# Numerical arrays — used by object_detector.py (also pulled in by ultralytics)
+numpy>=1.21
+
+# GNSS and robot chassis serial communication
+pyserial>=3.5
+
+# Chassis configuration files (config/chassis/*.yaml). dashboard/chassis.py has a
+# minimal built-in fallback parser, so this is optional but recommended.
+pyyaml>=5.3
+
+# Test runner
+pytest>=6.0
+
+# ─────────────────────────────────────────────────────────────
+# NOT pip-installable — must come from ROS 2 Humble apt packages.
+# Common to both chassis:
+#
+#   sudo apt install \
+#     ros-humble-rclpy \
+#     ros-humble-std-msgs \
+#     ros-humble-geometry-msgs \
+#     ros-humble-sensor-msgs \
+#     ros-humble-nav-msgs \
+#     ros-humble-realsense2-camera
+#
+# agrobot chassis additionally needs:
+#
+#     ros-humble-tf2-ros \
+#     ros-humble-rosbridge-server \
+#     ros-humble-robot-state-publisher \
+#     python3-colcon-common-extensions
+#
+# jackal chassis: nothing extra (the Jackal's onboard stack runs on the robot).
+# ─────────────────────────────────────────────────────────────

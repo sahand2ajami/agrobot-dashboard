@@ -1,0 +1,12 @@
+# Selects which chassis the dashboard and launch scripts use by default.
+#
+# Valid values: agrobot | jackal
+#   agrobot   — Agrobot differential-drive robot (Modbus RTU over serial)
+#   jackal — Clearpath Jackal UGV (ROS 2 Twist over a LAN cable)
+#
+# Override this default at launch time, without editing the file:
+#   ./launch_dashboard.sh --chassis jackal
+#   ROBOT_CHASSIS=jackal python3 dashboard/serve.py
+#
+# The per-chassis parameters live in config/chassis/<name>.yaml
+chassis: agrobot

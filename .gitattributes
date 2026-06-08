@@ -1,0 +1,20 @@
+# The runtime is Linux (Jetson, Ubuntu 22.04 + ROS 2 Humble). Editing happens on
+# Windows, so normalize line endings to LF in the repository — otherwise CRLF can
+# sneak into the shell scripts and break them on Linux ("bad interpreter").
+* text=auto eol=lf
+
+# Files that MUST stay LF to execute / parse correctly on the robot.
+*.sh    text eol=lf
+*.bash  text eol=lf
+*.py    text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.html  text eol=lf
+*.xml   text eol=lf
+
+# Binary assets — never apply line-ending conversion.
+*.pt    binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.pkl   binary

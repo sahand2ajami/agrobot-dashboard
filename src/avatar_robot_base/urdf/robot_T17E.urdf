@@ -1,0 +1,47 @@
+<robot name="avatar_T17E">
+  <link name="base_footprint"/>
+  <link name="base_link">
+    <visual>
+      <geometry>
+        <box size="1.90 1.30 0.30"/> 
+      </geometry>
+      <material name="yellow"><color rgba="1.0 0.8 0.1 1"/></material>
+    </visual>
+  </link>
+
+  <joint name="base_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 0.15"/>
+  </joint>
+
+  <!-- 左侧驱动轮 -->
+  <link name="left_wheel">
+    <visual>
+      <geometry>
+        <cylinder length="0.08" radius="0.13"/>
+      </geometry>
+      <material name="black"><color rgba="0.1 0.1 0.1 1"/></material>
+    </visual>
+  </link>
+  <joint name="left_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="left_wheel"/>
+    <origin xyz="0 0.65 0" rpy="1.5708 0 0"/>
+  </joint>
+
+  <!-- 右侧驱动轮 -->
+  <link name="right_wheel">
+    <visual>
+      <geometry>
+        <cylinder length="0.08" radius="0.13"/>
+      </geometry>
+      <material name="black"><color rgba="0.1 0.1 0.1 1"/></material>
+    </visual>
+  </link>
+  <joint name="right_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="right_wheel"/>
+    <origin xyz="0 -0.65 0" rpy="1.5708 0 0"/>
+  </joint>
+</robot>

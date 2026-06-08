@@ -1,0 +1,39 @@
+# ROS2 build artifacts
+build/
+install/
+log/
+
+# Logs
+logs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+dist/
+.pytest_cache/
+
+# Editor / OS
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.*
+
+# Local editor settings
+.editor/settings.local.json
+.editor/worktrees/
+
+# Brand assets (kept local, not distributed with the repo)
+dashboard/logo/
+
+# Read-only upstream clones, kept for traceability — never modified, never committed
+reference/
+
+# Scratch files
+_tmp_*

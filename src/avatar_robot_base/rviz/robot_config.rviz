@@ -1,0 +1,33 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Value: true
+    - Class: rviz_default_plugins/RobotModel
+      Name: RobotModel
+      Value: true
+      Description Source: File
+      Description File: /home/vboxuser/ros2_ws/install/avatar_robot_base/share/avatar_robot_base/urdf/robot.urdf
+    - Class: rviz_default_plugins/Path
+      Name: Path
+      Value: true
+      Topic: /odom_path
+    - Class: rviz_default_plugins/Odometry
+      Name: Odometry
+      Value: true
+      Topic: /odom
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Value: true
+  Global Options:
+    Fixed Frame: odom
+    Background Color: 48; 48; 48
+    Frame Rate: 30
+  Window Geometry:
+    x: 0
+    y: 0
+    width: 1920
+    height: 1080

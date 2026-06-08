@@ -1,0 +1,43 @@
+# Clearpath Jackal UGV — ROS 2 (DDS) over a LAN cable.
+#
+# The dashboard publishes geometry_msgs/Twist directly on `speed_cmd_topic`;
+# the Jackal's onboard stack drives the motors. The camera arrives back over ROS.
+# There is no separate base driver node and no wheel-odom/battery feedback to the
+# dashboard, so those panels are hidden.
+name: jackal
+description: "Clearpath Jackal UGV (ROS 2 Twist over LAN)"
+
+# How the dashboard reaches the base:
+#   ros_twist -> publish geometry_msgs/Twist (linear.x, angular.z) unchanged.
+comms: ros_twist
+
+# Velocity command ceilings accepted by the dashboard (m/s, rad/s).
+# Jackal physical max ~2 m/s; a little headroom.
+max_linear: 3.0
+max_angular: 3.0
+
+# ROS 2 topics
+speed_cmd_topic: /jackal1/cmd_vel
+camera_topic: /jackal1/sensors/camera_0/color/image
+# (no wheel_odom_topic — Jackal does not report wheel encoders to the dashboard)
+
+# Rear camera source: realsense (the Jackal's onboard camera over ROS, the default)
+# | webcam (a local USB UVC camera plugged into the Jetson, e.g. Logitech).
+# Choosing 'webcam' captures the local device and skips the ROS camera_topic.
+rear_camera: realsense
+# rear_camera_device: /dev/video0   # optional explicit V4L2 device/index for webcam
+
+# LAN network setup, applied by launch_dashboard.sh before starting the server.
+host_iface: eno1
+host_ip: 192.168.1.100/24    # Jetson address on the Jackal subnet
+robot_ip: 192.168.1.200      # Jackal address
+ros_domain_id: 0             # Jackal is hard-wired to ROS domain 0
+
+# Dashboard panels — Jackal reports none of the agrobot-specific telemetry.
+features:
+  battery: false
+  oil: false
+  wheel_odom: false
+  fwd2m: false
+  modbus_slider: false
+  actuators: true       # Jackal carries the same planter/auger payload

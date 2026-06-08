@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <transport_descriptors>
+    <transport_descriptor>
+      <transport_id>udp_eno1_jackal</transport_id>
+      <type>UDPv4</type>
+      <interfaceWhiteList>
+        <address>192.168.1.100</address>
+      </interfaceWhiteList>
+      <sendBufferSize>1048576</sendBufferSize>
+      <receiveBufferSize>4194304</receiveBufferSize>
+    </transport_descriptor>
+  </transport_descriptors>
+
+  <participant profile_name="rtps_participant_profile" is_default_profile="true">
+    <rtps>
+      <useBuiltinTransports>false</useBuiltinTransports>
+      <userTransports>
+        <transport_id>udp_eno1_jackal</transport_id>
+      </userTransports>
+      <builtin>
+        <initialPeersList>
+          <locator>
+            <udpv4>
+              <address>192.168.1.200</address>
+            </udpv4>
+          </locator>
+        </initialPeersList>
+      </builtin>
+    </rtps>
+  </participant>
+</profiles>

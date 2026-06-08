@@ -1,0 +1,52 @@
+<robot name="avatar_robot">
+
+  <!-- T3 尺寸 -->
+  <link name="base_footprint"/>
+  <link name="base_link">
+    <visual>
+      <geometry>
+        <box size="0.33 0.29 0.12"/>  <!-- 车长 车宽 高度 -->
+      </geometry>
+      <material name="blue"><color rgba="0 0.6 1 1"/></material>
+    </visual>
+  </link>
+
+  <joint name="base_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 0.06"/>
+  </joint>
+
+  <!-- 左轮子 -->
+  <link name="left_wheel">
+    <visual>
+      <geometry>
+        <cylinder length="0.04" radius="0.0325"/> <!-- T3 轮子半径 0.0325m -->
+      </geometry>
+      <material name="black"><color rgba="0 0 0 1"/></material>
+    </visual>
+  </link>
+
+  <joint name="left_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="left_wheel"/>
+    <origin xyz="0 0.145 0" rpy="1.5708 0 0"/>
+  </joint>
+
+  <!-- 右轮子 -->
+  <link name="right_wheel">
+    <visual>
+      <geometry>
+        <cylinder length="0.04" radius="0.0325"/>
+      </geometry>
+      <material name="black"><color rgba="0 0 0 1"/></material>
+    </visual>
+  </link>
+
+  <joint name="right_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="right_wheel"/>
+    <origin xyz="0 -0.145 0" rpy="1.5708 0 0"/>
+  </joint>
+
+</robot>

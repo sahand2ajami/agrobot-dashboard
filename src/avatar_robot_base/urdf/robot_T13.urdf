@@ -1,0 +1,45 @@
+<robot name="avatar_T13">
+  <link name="base_footprint"/>
+  <link name="base_link">
+    <visual>
+      <geometry>
+        <box size="1.32 0.854 0.25"/>
+      </geometry>
+      <material name="orange"><color rgba="1.0 0.5 0.1 1"/></material>
+    </visual>
+  </link>
+
+  <joint name="base_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 0.12"/>
+  </joint>
+
+  <link name="left_wheel">
+    <visual>
+      <geometry>
+        <cylinder length="0.06" radius="0.09"/>
+      </geometry>
+      <material name="black"><color rgba="0 0 0 1"/></material>
+    </visual>
+  </link>
+  <joint name="left_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="left_wheel"/>
+    <origin xyz="0 0.427 0" rpy="1.5708 0 0"/>
+  </joint>
+
+  <link name="right_wheel">
+    <visual>
+      <geometry>
+        <cylinder length="0.06" radius="0.09"/>
+      </geometry>
+      <material name="black"><color rgba="0 0 0 1"/></material>
+    </visual>
+  </link>
+  <joint name="right_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="right_wheel"/>
+    <origin xyz="0 -0.427 0" rpy="1.5708 0 0"/>
+  </joint>
+</robot>

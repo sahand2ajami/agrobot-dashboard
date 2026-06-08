@@ -1,0 +1,21 @@
+object_detector:
+  ros__parameters:
+    # YOLOv8 weights — any ultralytics model name or absolute path to a .pt file.
+    # yolov8n.pt  fastest,  least accurate (~2× faster than s)
+    # yolov8s.pt  balanced  (default)
+    # yolov8m.pt  more accurate, heavier GPU load
+    model: yolov8s.pt
+
+    # Minimum confidence to report a detection (0.0–1.0)
+    confidence: 0.5
+
+    # Maximum inference rate (Hz). Keep ≤10 when FAST-LIO is also running to
+    # avoid starving it of GPU. Raise to 15–20 when running dashboard-only.
+    throttle_hz: 10.0
+
+    # Set false to disable aligned-depth lookup (bounding boxes only, no distance)
+    use_depth: true
+
+    # Half-size of the depth sampling patch at the bounding-box centre (pixels).
+    # Larger → more robust to depth noise; smaller → more spatially precise.
+    depth_sample_radius: 5

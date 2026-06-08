@@ -1,0 +1,55 @@
+# Agrobot differential-drive robot — Modbus RTU over serial.
+#
+# The dashboard publishes Int16MultiArray[left, right] on `speed_cmd_topic`;
+# the separate robot_base_node (ROS) turns that into Modbus writes over the
+# serial port and reports wheel odometry / battery / oil / error back.
+name: agrobot
+description: "Agrobot tree-planting robot (Modbus RTU chassis)"
+
+# How the dashboard reaches the base:
+#   modbus_speed -> Twist is converted to wheel speeds, published as Int16MultiArray.
+comms: modbus_speed
+
+# Velocity command ceilings accepted by the dashboard (m/s, rad/s).
+# High on purpose: lets the Modbus master slider reach the full INT16 range.
+max_linear: 15.0
+max_angular: 15.0
+
+# Twist -> wheel-speed scaling (used only when comms = modbus_speed).
+linear_scale: 3000      # (linear_x m/s)   * linear_scale  = base speed units
+angular_scale: 1000     # (angular_z rad/s) * angular_scale = differential units
+speed_max: 32767        # INT16 max — Modbus master slider full range
+pulse_per_m: 3211.0     # encoder pulses per metre (calibrated; used by auto-forward-2m)
+
+# ROS 2 topics
+speed_cmd_topic: /avatar_robot/speed_cmd
+wheel_odom_topic: /avatar_robot/wheel_odom      # subscribed for odometry/mileage
+battery_topic: /avatar_robot/battery            # chassis pack voltage (Float32, V) from robot_base_node
+camera_topic: /camera/camera/color/image_raw    # RealSense D435i color stream
+
+# Chassis battery (shown on the dashboard when feature `battery` is on). The pack
+# voltage from robot_base_node is mapped to a 0-100% gauge over [min_v, max_v].
+# Defaults model the ~48 V (14S Li-ion) pack: 42 V ≈ empty, 58 V ≈ full.
+battery_min_v: 42.0
+battery_max_v: 58.0
+
+# Rear camera source: realsense (D435 color) | webcam (generic USB UVC, e.g. Logitech).
+# Override per launch with:  ./launch_dashboard.sh --rear-camera webcam
+rear_camera: realsense
+# rear_camera_device: /dev/video0   # optional explicit V4L2 device/index (auto-detected if omitted)
+
+# Modbus driver (robot_base_node). The node currently hard-codes these; they are
+# recorded here for reference and for the launch script / future parameterisation.
+serial_port: /dev/ttyUSB0
+baud: 38400
+slave_id: 1
+chassis_variant: T13    # T3 | T13 | T17E — selects odom_calculation params + URDF
+
+# Dashboard panels available on this chassis.
+features:
+  battery: true
+  oil: true
+  wheel_odom: true
+  fwd2m: true
+  modbus_slider: true
+  actuators: true       # tree-planting tools (planter / auger) + planted counter
