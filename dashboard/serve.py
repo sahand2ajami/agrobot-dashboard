@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import socketserver
+import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -769,6 +770,19 @@ class Handler(SimpleHTTPRequestHandler):
 class _Server(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True
     daemon_threads      = True
+
+    def handle_error(self, request, client_address):
+        # A client that closes the connection mid-response — navigating away,
+        # aborting an MJPEG stream, or closing a tab while a static file or
+        # camera frame is still being written — surfaces here as a broken pipe
+        # / connection reset. That is normal client behaviour, not a server
+        # fault, so swallow it quietly. Genuine errors fall through to the
+        # default handler so they stay visible.
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (BrokenPipeError, ConnectionResetError,
+                            ConnectionAbortedError)):
+            return
+        super().handle_error(request, client_address)
 
 
 def _recording_loop():
