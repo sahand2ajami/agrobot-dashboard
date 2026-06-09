@@ -4,8 +4,9 @@
 # One dashboard, two chassis. The active chassis decides which services start and
 # how the dashboard talks to the base:
 #
-#   agrobot   — RealSense D435i + GNSS + YOLOv8 detector + robot_base_node (Modbus RTU
-#            over serial) + rosbridge + dashboard HTTP server.
+#   agrobot   — RealSense D435i (color) + GNSS + robot_base_node (Modbus RTU over
+#            serial) + rosbridge + dashboard HTTP server. Person detection runs
+#            on-demand inside the dashboard (ZED front feed), not as a separate node.
 #            cmd chain: browser -> serve.py -> /avatar_robot/speed_cmd -> robot_base_node -> Modbus
 #
 #   jackal — LAN setup (host IP on eno1, ROS domain) + GNSS + dashboard HTTP server.
@@ -156,10 +157,10 @@ start_gnss() {
 if [[ "$CHASSIS" == "agrobot" ]]; then
   # The agrobot robot exposes its base over Modbus RTU; we run the full sensor stack.
 
-  log "[agrobot] Starting RealSense D435i (color + aligned depth)"
+  log "[agrobot] Starting RealSense D435i (color only — depth/alignment disabled to save CPU)"
   ros2 run realsense2_camera realsense2_camera_node --ros-args \
     -r __node:=camera -r __ns:=/camera \
-    -p enable_color:=true -p enable_depth:=true -p align_depth.enable:=true \
+    -p enable_color:=true -p enable_depth:=false -p align_depth.enable:=false \
     -p enable_infra1:=false -p enable_infra2:=false \
     -p enable_accel:=false -p enable_gyro:=false \
     -p initial_reset:=true -p rgb_camera.power_line_frequency:=0 &
@@ -168,9 +169,10 @@ if [[ "$CHASSIS" == "agrobot" ]]; then
 
   start_gnss
 
-  log "[agrobot] Starting object_detector (YOLOv8s, persons only)"
-  python3 -u "$SCRIPT_DIR/scripts/object_detector.py" 2>>"$LOG_FILE" &
-  sleep 3
+  # Person detection now runs ON DEMAND inside the dashboard (serve.py, ZED front
+  # feed, yolov8n/FP16 on the GPU) — only while the detection view is open. The old
+  # always-on RealSense object_detector.py (a second YOLO + depth) was dropped to cut
+  # CPU; re-enable it here if you ever need RealSense distance-to-person again.
 
   log "[agrobot] Starting robot_base_node (Modbus RTU → /avatar_robot/speed_cmd)"
   if [[ -e /dev/ttyUSB0 && ( ! -r /dev/ttyUSB0 || ! -w /dev/ttyUSB0 ) ]]; then

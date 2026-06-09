@@ -59,9 +59,9 @@ DETECTIONS_FILE      = "/tmp/object_detections.json"
 ZED_DEVICE           = "/dev/zed2i"
 RS_DEVICE_DEFAULT    = "/dev/video4"   # RealSense D435 color stream (YUYV)
 WEBCAM_DEVICE_DEFAULT = "/dev/video0"  # generic USB UVC webcam (e.g. Logitech)
-RS_DISPLAY_FPS       = 30.0   # live camera capture / display
+RS_DISPLAY_FPS       = 20.0   # live camera capture / display (20 fps: smoother + far lighter than 30 on the Jetson)
 RECORD_FPS           = 15.0   # rear.mp4 + front.mp4 saved at 15 fps (lighter on the Jetson)
-STREAM_FPS           = 30.0   # live MJPEG stream to the browser at 30 fps
+STREAM_FPS           = 20.0   # live MJPEG stream to the browser at 20 fps
 
 # Agrobot robot speed parameters
 # Manual example: [500,500] = conservative go-ahead, recommended range 300~800.
@@ -133,6 +133,12 @@ class Handler(SimpleHTTPRequestHandler):
 
     _det_lock         = threading.Lock()
     _det_jpeg: bytes  = None
+    # On-demand detection: YOLO inference runs ONLY while a client is actively
+    # viewing detections. Each detection request stamps this monotonic time; the
+    # capture loop checks _detection_wanted() and skips inference entirely when the
+    # detection view is closed — so person-detection costs zero CPU/GPU when off.
+    _det_last_request = 0.0
+    DET_IDLE_TIMEOUT  = 3.0   # stop inferring this long after the last detection request
 
     _zed_lock            = threading.Lock()
     _zed_jpeg: bytes     = None
@@ -347,7 +353,19 @@ class Handler(SimpleHTTPRequestHandler):
         }).encode()
         self._json_response(200, body)
 
+    @classmethod
+    def _mark_detection_wanted(cls):
+        """A client is viewing detections — keep YOLO inference running."""
+        cls._det_last_request = time.monotonic()
+
+    @classmethod
+    def _detection_wanted(cls) -> bool:
+        """True while a client has requested detections recently; the capture loop
+        uses this to run YOLO on demand only (zero cost when the view is closed)."""
+        return (time.monotonic() - cls._det_last_request) < cls.DET_IDLE_TIMEOUT
+
     def _serve_detection_image(self):
+        Handler._mark_detection_wanted()
         with Handler._det_lock:
             frame = Handler._det_jpeg
         if frame is None:
@@ -361,6 +379,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.wfile.write(frame)
 
     def _serve_detection_data(self):
+        Handler._mark_detection_wanted()
         try:
             data = Path(DETECTIONS_FILE).read_text()
             self._json_response(200, data.encode())
@@ -414,7 +433,9 @@ class Handler(SimpleHTTPRequestHandler):
         self._stream_jpeg(get_frame)
 
     def _serve_detection_stream(self):
+        Handler._mark_detection_wanted()
         def get_frame():
+            Handler._mark_detection_wanted()   # keep YOLO alive while this stream is open
             with Handler._det_lock:
                 return Handler._det_jpeg
         self._stream_jpeg(get_frame)
@@ -1022,10 +1043,50 @@ def _start_rear_camera_thread(source="realsense", device=None):
     log.info("[rear-cam] Direct capture thread started (%s, %s)", _resolve_dev(), label)
 
 
-YOLO_MODEL        = 'yolov8s.pt'
+# Person-detection (front/ZED feed), tuned for the Jetson Orin GPU.
+# The CPU cost of detection is dominated by fixed per-call overhead (~18 ms/call),
+# NOT by model/image size, so the CPU savings come from running ON DEMAND only
+# (see Handler._detection_wanted() — zero cost when the view is closed) and from a
+# lower inference rate. We therefore keep the accurate yolov8s @ 640 and just add
+# FP16 + GPU device + a 5 Hz cap; this never starves the (now separate) teleop loop.
+YOLO_MODEL        = 'yolov8s.pt'   # accurate model; CPU cost ≈ nano's, so no reason to shrink
 YOLO_CONFIDENCE   = 0.5
 YOLO_PERSON_CLASS = 0
-YOLO_THROTTLE_HZ  = 10.0
+YOLO_THROTTLE_HZ  = 5.0            # infer at 5 Hz while viewed (was 10) — the real CPU lever
+YOLO_IMGSZ        = 640            # full resolution for best small/distant-person accuracy
+YOLO_DEVICE       = 0              # CUDA device index (auto-falls back to CPU if unavailable)
+YOLO_HALF         = True           # FP16 on the GPU — faster, lower memory, accuracy unchanged
+
+
+def _load_yolo(label=""):
+    """Load the YOLO model on the GPU (FP16) with CPU thread-thrash limited, and
+    warm it up. Returns (model, device, half) or (None, 'cpu', False) on failure.
+
+    torch.set_num_threads(1): the heavy math runs on the GPU, so letting torch
+    spawn one intra-op thread per core (12 here) only thrashes the CPU and fights
+    the control loop for cores. One thread for the small CPU-side ops is faster
+    and far steadier under load.
+    """
+    try:
+        import numpy as np
+        import torch
+        from ultralytics import YOLO
+        torch.set_num_threads(1)
+        if torch.cuda.is_available():
+            dev, half = YOLO_DEVICE, YOLO_HALF
+        else:
+            dev, half = "cpu", False
+            log.warning("[yolo] CUDA unavailable — running on CPU (slow)")
+        model = YOLO(YOLO_MODEL)
+        model(np.zeros((YOLO_IMGSZ, YOLO_IMGSZ, 3), dtype=np.uint8),
+              classes=[YOLO_PERSON_CLASS], imgsz=YOLO_IMGSZ, device=dev,
+              half=half, verbose=False)   # warm-up so the first real frame isn't slow
+        log.info("[yolo] %s'%s' ready (device=%s, half=%s, imgsz=%d, %.0f Hz)",
+                 f"{label} " if label else "", YOLO_MODEL, dev, half, YOLO_IMGSZ, YOLO_THROTTLE_HZ)
+        return model, dev, half
+    except Exception as exc:
+        log.warning("[yolo] model unavailable — %s", exc)
+        return None, "cpu", False
 
 # ZED SDK is the only color path; the OpenCV fallback is grayscale on this Jetson.
 # The SDK open can fail transiently ("CAMERA NOT DETECTED") if the camera is still
@@ -1061,20 +1122,12 @@ def _start_zed_thread():
     # ── pyzed SDK capture (full color) ────────────────────────────────────────
     def _capture_loop_sdk(zed, image_mat):
         import pyzed.sl as sl
-        yolo = None
-        try:
-            from ultralytics import YOLO
-            yolo = YOLO(YOLO_MODEL)
-            yolo(np.zeros((480, 640, 3), dtype=np.uint8),
-                 classes=[YOLO_PERSON_CLASS], verbose=False)
-            log.info("[zed] YOLO model '%s' ready (SDK path)", YOLO_MODEL)
-        except Exception as exc:
-            log.warning("[zed] YOLO unavailable — %s", exc)
+        yolo, yolo_dev, yolo_half = _load_yolo("(SDK path)")
 
         runtime_params   = sl.RuntimeParameters()
         last_infer       = 0.0
         last_display     = 0.0
-        _display_interval = 1.0 / 30.0
+        _display_interval = 1.0 / STREAM_FPS
         retry_sleep      = 1.0
         lost             = 0     # consecutive grab failures (camera-lost detection)
 
@@ -1100,7 +1153,8 @@ def _start_zed_thread():
                             Handler._zed_frame_count     += 1
                             Handler._zed_last_frame_time = time.monotonic()
 
-                if yolo is None:
+                # On-demand: only run YOLO while a client is viewing detections.
+                if yolo is None or not Handler._detection_wanted():
                     continue
                 now = time.monotonic()
                 if now - last_infer < _min_infer_interval:
@@ -1109,7 +1163,8 @@ def _start_zed_thread():
 
                 try:
                     results  = yolo(left, classes=[YOLO_PERSON_CLASS],
-                                    conf=YOLO_CONFIDENCE, verbose=False)
+                                    conf=YOLO_CONFIDENCE, imgsz=YOLO_IMGSZ,
+                                    device=yolo_dev, half=yolo_half, verbose=False)
                     annotated = left.copy()
                     detections = []
                     for result in results:
@@ -1155,15 +1210,7 @@ def _start_zed_thread():
 
     # ── OpenCV fallback (grayscale — YUYV color bug on Jetson pip OpenCV) ─────
     def _capture_loop_opencv():
-        yolo = None
-        try:
-            from ultralytics import YOLO
-            yolo = YOLO(YOLO_MODEL)
-            yolo(np.zeros((480, 640, 3), dtype=np.uint8),
-                 classes=[YOLO_PERSON_CLASS], verbose=False)
-            log.info("[zed] YOLO model '%s' ready (OpenCV fallback)", YOLO_MODEL)
-        except Exception as exc:
-            log.warning("[zed] YOLO unavailable — %s", exc)
+        yolo, yolo_dev, yolo_half = _load_yolo("(OpenCV fallback)")
 
         def _device_index():
             try:
@@ -1180,7 +1227,7 @@ def _start_zed_thread():
         cap = None
         last_infer    = 0.0
         last_display  = 0.0
-        _display_interval = 1.0 / 30.0
+        _display_interval = 1.0 / STREAM_FPS
         retry_sleep   = 1.0
 
         while True:
@@ -1223,7 +1270,8 @@ def _start_zed_thread():
                         Handler._zed_frame_count     += 1
                         Handler._zed_last_frame_time = time.monotonic()
 
-            if yolo is None:
+            # On-demand: only run YOLO while a client is viewing detections.
+            if yolo is None or not Handler._detection_wanted():
                 continue
             now = time.monotonic()
             if now - last_infer < _min_infer_interval:
@@ -1232,7 +1280,8 @@ def _start_zed_thread():
 
             try:
                 results   = yolo(left, classes=[YOLO_PERSON_CLASS],
-                                 conf=YOLO_CONFIDENCE, verbose=False)
+                                 conf=YOLO_CONFIDENCE, imgsz=YOLO_IMGSZ,
+                                 device=yolo_dev, half=yolo_half, verbose=False)
                 annotated = left.copy()
                 detections = []
                 for result in results:
@@ -1350,6 +1399,11 @@ def main():
     log.info("[chassis] active: %s — %s (comms=%s, rear_camera=%s)",
              CHASSIS.name, CHASSIS.description, CHASSIS.comms, rear_src)
 
+    # Set true once the ROS camera subscription is created and delivering the rear
+    # feed; the local V4L2 capture is then skipped to avoid encoding the same camera
+    # twice (agrobot) or uselessly re-opening a non-existent local device (jackal).
+    _ros_camera_active = False
+
     try:
         import rclpy
         from rclpy.node import Node
@@ -1370,22 +1424,41 @@ def main():
         if CHASSIS.has_feature("battery") and CHASSIS.battery_topic:
             log.info("[chassis_battery] Subscribed to %s", CHASSIS.battery_topic)
 
-        def _vel_publish_cb():
+        # The 20 Hz velocity command runs on a DEDICATED thread, not a ROS timer in
+        # the executor. The same executor also runs the camera-image callback (JPEG
+        # encode); keeping control on its own thread means a busy executor can never
+        # delay or jitter a teleop command — the root cause of the key→robot lag and
+        # deadman stalls under camera/AI load. publish_velocity() only builds and
+        # publishes a message, which is thread-safe in rclpy. Deadman semantics are
+        # unchanged: silence past VEL_TIMEOUT publishes a single stop, then idles.
+        def _vel_publish_once():
             with Handler._vel_lock:
                 if not Handler._vel_active:
-                    return
+                    return None
                 if time.monotonic() - Handler._vel_last > Handler.VEL_TIMEOUT:
                     Handler._vel_active = False
-                    lx, az = 0.0, 0.0
-                else:
-                    lx = Handler._vel_lin
-                    az = Handler._vel_ang
-                    if lx == 0.0 and az == 0.0:
-                        Handler._vel_active = False
+                    return (0.0, 0.0)
+                lx = Handler._vel_lin
+                az = Handler._vel_ang
+                if lx == 0.0 and az == 0.0:
+                    Handler._vel_active = False
+                return (lx, az)
 
-            publish_velocity(lx, az)
+        def _vel_loop():
+            period = 0.05   # 20 Hz
+            while True:
+                t0 = time.monotonic()
+                try:
+                    cmd = _vel_publish_once()
+                    if cmd is not None:
+                        publish_velocity(cmd[0], cmd[1])
+                except Exception as exc:
+                    log.error("[speed_cmd] publish error: %s", exc)
+                dt = time.monotonic() - t0
+                if dt < period:
+                    time.sleep(period - dt)
 
-        _node.create_timer(0.05, _vel_publish_cb)  # 20 Hz
+        threading.Thread(target=_vel_loop, daemon=True, name="vel-control").start()
 
         # Camera subscriber — topic depends on the active chassis.
         _cam_qos = QoSProfile(
@@ -1398,7 +1471,15 @@ def main():
         # Skip the ROS camera topic when a local webcam is the rear source (the two
         # feeds would fight over the same buffer) or when the rear view is disabled.
         if _encode_fn and CHASSIS.camera_topic and rear_src not in ("webcam", "none"):
+            _cam_enc_interval = 1.0 / max(STREAM_FPS, 1.0)
+            _cam_last_enc     = [0.0]   # mutable holder for the closure
             def _on_image(msg: RosImage):
+                # Throttle to the display rate: the publisher may emit 30 fps, but the
+                # browser only needs STREAM_FPS and every JPEG encode costs CPU.
+                now = time.monotonic()
+                if now - _cam_last_enc[0] < _cam_enc_interval:
+                    return
+                _cam_last_enc[0] = now
                 try:
                     frame = _encode_fn(msg)
                     if frame:
@@ -1420,6 +1501,7 @@ def main():
 
             _node.create_subscription(RosImage, CHASSIS.camera_topic,
                                       _on_image, _cam_qos)
+            _ros_camera_active = True
             log.info("[camera] Subscribed to %s", CHASSIS.camera_topic)
         elif not _encode_fn:
             log.warning("[camera] neither cv2 nor PIL found — /api/camera will return 503")
@@ -1446,6 +1528,10 @@ def main():
 
     if rear_src == "none":
         log.info("[rear-cam] rear_camera=none — rear view disabled, no rear capture")
+    elif _ros_camera_active:
+        # The rear feed already arrives over ROS — don't also capture/encode it via
+        # V4L2 (that doubled the work on agrobot and error-looped on jackal).
+        log.info("[rear-cam] rear feed served via ROS camera topic — skipping redundant V4L2 capture")
     else:
         _start_rear_camera_thread(rear_src, CHASSIS.rear_camera_device)
     _start_zed_thread()
