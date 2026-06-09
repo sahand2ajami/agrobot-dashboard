@@ -306,12 +306,17 @@ def resolve_name(cli_name=None):
 
 def resolve_rear_camera(cli_value=None, chassis=None):
     """Resolve the rear-camera source, priority:
-    --rear-camera flag  >  $REAR_CAMERA  >  chassis yaml  >  'realsense'."""
+    --rear-camera flag  >  $REAR_CAMERA  >  chassis yaml  >  'realsense'.
+
+    Valid sources: 'realsense' | 'webcam' | 'none' (rear view disabled).
+    'off'/'disabled' are accepted as aliases for 'none'."""
     val = (cli_value
            or os.environ.get("REAR_CAMERA")
            or (chassis.rear_camera if chassis else None)
            or "realsense")
     val = str(val).strip().lower()
+    if val in ("none", "off", "disabled", "disable", "no"):
+        return "none"
     return val if val in ("realsense", "webcam") else "realsense"
 
 

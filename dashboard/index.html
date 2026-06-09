@@ -1202,10 +1202,20 @@ let _camSwapped = false;   // false: front=main, rear=pip
 let _pipH = 'left', _pipV = 'bottom';
 let _camDetOn = false;
 
+// Rear view removed via config (rear_camera: none) — front camera fills the frame.
+function _noRear() { return window.__chassis && window.__chassis.rear_camera === 'none'; }
+
 function _applyCamStreams() {
+  const el = id => document.getElementById(id);
+  if (_noRear()) {
+    // Front (ZED) only — no rear feed, no picture-in-picture, no swap.
+    el('splitLabelMain').textContent = 'Front';
+    _attachStream('splitImgMain', 'splitErrMain', _camDetOn ? CFG.detStreamUrl : CFG.zedStreamUrl);
+    const pip = el('pipWrap'); if (pip) pip.style.display = 'none';
+    return;
+  }
   const mainUrl = _camSwapped ? CFG.camStreamUrl : (_camDetOn ? CFG.detStreamUrl : CFG.zedStreamUrl);
   const pipUrl  = _camSwapped ? (_camDetOn ? CFG.detStreamUrl : CFG.zedStreamUrl) : CFG.camStreamUrl;
-  const el = id => document.getElementById(id);
   el('splitLabelMain').textContent = _camSwapped ? 'Rear'  : 'Front';
   el('splitLabelPip').textContent  = _camSwapped ? 'Front' : 'Rear';
   _attachStream('splitImgMain', 'splitErrMain', mainUrl);
@@ -1347,6 +1357,14 @@ function _loadCameras(detOn) {
         </div>
       </div>
     </div>`;
+  if (_noRear()) {
+    _camSwapped = false;                       // front is always the main view
+    const pip = document.getElementById('pipWrap');
+    if (pip) pip.style.display = 'none';        // no rear PiP, no swap target
+    _applyCamStreams();
+    if (detOn) _startDetPoll();
+    return;
+  }
   _applyCamStreams();
   _applyPipZone();
   _initPipInteraction();
@@ -2068,6 +2086,11 @@ function _applyChassisConfig() {
       if (cfg.chassis) {
         document.title = cfg.chassis.charAt(0).toUpperCase() + cfg.chassis.slice(1) +
                          ' Teleop Dashboard';
+      }
+      // Cameras render once before /api/config resolves; re-render so a disabled
+      // rear view (rear_camera: none) drops the PiP and shows the front full-frame.
+      if (cfg.rear_camera === 'none' && typeof _loadCameras === 'function') {
+        _loadCameras(_camDetOn);
       }
     })
     .catch(() => {});

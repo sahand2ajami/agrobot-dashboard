@@ -22,7 +22,8 @@ camera_topic: /jackal1/sensors/camera_0/color/image
 # (no wheel_odom_topic — Jackal does not report wheel encoders to the dashboard)
 
 # Rear camera source: realsense (the Jackal's onboard camera over ROS, the default)
-# | webcam (a local USB UVC camera plugged into the Jetson, e.g. Logitech).
+# | webcam (a local USB UVC camera plugged into the Jetson, e.g. Logitech)
+# | none (disable the rear view — front camera fills the frame, no picture-in-picture).
 # Choosing 'webcam' captures the local device and skips the ROS camera_topic.
 rear_camera: realsense
 # rear_camera_device: /dev/video0   # optional explicit V4L2 device/index for webcam

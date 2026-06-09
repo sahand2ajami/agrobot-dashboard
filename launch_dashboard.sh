@@ -108,6 +108,21 @@ cleanup() {
 }
 trap cleanup INT TERM EXIT
 
+# ── Pre-flight: free port $PORT so re-running this script cleanly takes over an
+#    existing dashboard instead of crashing with "Address already in use" (which
+#    leaves the page with both camera feeds black). Port-specific so a second
+#    dashboard on another --port is left untouched.
+if command -v fuser &>/dev/null && ss -ltn 2>/dev/null | grep -q ":$PORT "; then
+  log "Port $PORT already in use — stopping the previous instance on it..."
+  fuser -k -TERM "$PORT/tcp" 2>/dev/null || true
+  for _ in $(seq 1 10); do
+    ss -ltn 2>/dev/null | grep -q ":$PORT " || break
+    sleep 0.5
+  done
+  ss -ltn 2>/dev/null | grep -q ":$PORT " && fuser -k -KILL "$PORT/tcp" 2>/dev/null || true
+  sleep 1
+fi
+
 # ── Logo (gitignored brand asset — copy from Downloads if present) ────────────
 LOGO_SRC="$HOME/Downloads/logo_agrobot_robotics/svg/white_transparent.svg"
 LOGO_DST="$SCRIPT_DIR/dashboard/logo/svg/white_transparent.svg"

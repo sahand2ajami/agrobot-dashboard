@@ -875,27 +875,51 @@ def _find_rs_device() -> str:
     return RS_DEVICE_DEFAULT
 
 
+def _is_capture_webcam(dev):
+    """True if `dev` is a generic USB UVC capture camera (not a RealSense or ZED).
+    The ZED and RealSense are driven elsewhere (ZED SDK / RealSense node), so the
+    rear webcam must never grab them — doing so yields a grayscale, split stereo
+    frame and blocks the ZED SDK's color path."""
+    import subprocess
+    try:
+        info = subprocess.run(
+            ['v4l2-ctl', f'--device={dev}', '--info', '--list-formats'],
+            capture_output=True, text=True, timeout=2,
+        ).stdout
+    except Exception:
+        return False
+    if 'RealSense' in info or 'ZED' in info:
+        return False
+    return ('Video Capture' in info or 'MJPG' in info or 'YUYV' in info)
+
+
 def _find_webcam_device(preferred=None):
-    """Return a generic USB UVC webcam device (e.g. Logitech): the preferred one if
-    given, else the first /dev/videoN that is a capture device and is NOT a RealSense."""
+    """Resolve the rear USB webcam to a STABLE device path so it can never be
+    confused with the ZED/RealSense and survives unplug/replug or node renumbering.
+
+    Priority: explicit `preferred` > a /dev/v4l/by-id/* symlink (keyed to the
+    camera's USB serial — does not change when devices are re-enumerated) > a bare
+    /dev/videoN scan. RealSense and ZED nodes are always skipped."""
     if preferred is not None:
         return preferred
-    import os, subprocess
+    import os
+    # Prefer the serial-keyed by-id symlinks: stable across replug/renumber.
+    byid_dir = "/dev/v4l/by-id"
+    try:
+        names = sorted(n for n in os.listdir(byid_dir) if n.endswith("-video-index0"))
+    except OSError:
+        names = []
+    for name in names:
+        if "RealSense" in name or "ZED" in name:   # skip by name without opening
+            continue
+        path = os.path.join(byid_dir, name)
+        if _is_capture_webcam(path):
+            return path                              # stable serial-keyed path
+    # Fallback: scan bare nodes (older kernels / no by-id) and skip ZED/RealSense.
     for i in range(10):
         dev = f"/dev/video{i}"
-        if not os.path.exists(dev):
-            continue
-        try:
-            info = subprocess.run(
-                ['v4l2-ctl', f'--device={dev}', '--info', '--list-formats'],
-                capture_output=True, text=True, timeout=2,
-            ).stdout
-            if 'RealSense' in info:
-                continue
-            if 'Video Capture' in info or 'MJPG' in info or 'YUYV' in info:
-                return dev
-        except Exception:
-            pass
+        if os.path.exists(dev) and _is_capture_webcam(dev):
+            return dev
     return WEBCAM_DEVICE_DEFAULT
 
 
@@ -918,21 +942,25 @@ def _start_rear_camera_thread(source="realsense", device=None):
         return
 
     if source == "webcam":
-        dev      = _find_webcam_device(device)
         use_mjpg = True
         label    = "webcam (USB UVC)"
+        # Re-resolved on every (re)connect so an unplug/replug re-binds to the
+        # correct stable by-id path rather than whatever node it lands on.
+        _resolve_dev = lambda: _find_webcam_device(device)
     else:
-        dev      = device if device is not None else _find_rs_device()
         use_mjpg = False
         label    = "RealSense color"
+        _resolve_dev = lambda: (device if device is not None else _find_rs_device())
 
     def _capture_loop():
         _interval    = 1.0 / max(RS_DISPLAY_FPS, 0.1)
         last_display = 0.0
         retry_sleep  = 1.0   # exponential back-off on repeated failures
         cap = None
+        dev = _resolve_dev()
         while True:
             if cap is None or not cap.isOpened():
+                dev = _resolve_dev()              # re-bind on each reconnect (replug-safe)
                 with _quiet_stderr():
                     cap = cv2.VideoCapture(dev, cv2.CAP_V4L2)
                 if cap.isOpened():
@@ -991,7 +1019,7 @@ def _start_rear_camera_thread(source="realsense", device=None):
                                   n, frame.shape[1], frame.shape[0])
 
     threading.Thread(target=_capture_loop, daemon=True, name="rear-cam").start()
-    log.info("[rear-cam] Direct capture thread started (%s, %s)", dev, label)
+    log.info("[rear-cam] Direct capture thread started (%s, %s)", _resolve_dev(), label)
 
 
 YOLO_MODEL        = 'yolov8s.pt'
@@ -999,9 +1027,21 @@ YOLO_CONFIDENCE   = 0.5
 YOLO_PERSON_CLASS = 0
 YOLO_THROTTLE_HZ  = 10.0
 
+# ZED SDK is the only color path; the OpenCV fallback is grayscale on this Jetson.
+# The SDK open can fail transiently ("CAMERA NOT DETECTED") if the camera is still
+# releasing from a prior (unclean) shutdown or a V4L2 process briefly holds it, so
+# retry before giving up to grayscale instead of falling back on the first failure.
+ZED_SDK_OPEN_RETRIES     = 6
+ZED_SDK_OPEN_RETRY_DELAY = 2.5   # seconds between attempts (~15 s total)
+ZED_GRAB_LOST_LIMIT      = 15    # consecutive grab failures → treat camera as lost, re-open
+
 
 def _start_zed_thread():
-    """Capture ZED 2i frames via pyzed SDK (color) or OpenCV fallback (grayscale)."""
+    """Capture the ZED 2i front feed in COLOR via the pyzed SDK, which identifies the
+    camera by USB serial (deterministic) and yields a single rectified left-eye image
+    (no split, no mirror). The SDK open is retried until the camera is available, so
+    the feed is always color — the grayscale OpenCV fallback runs ONLY when the pyzed
+    SDK is not installed at all."""
     try:
         import cv2
         import numpy as np
@@ -1036,6 +1076,7 @@ def _start_zed_thread():
         last_display     = 0.0
         _display_interval = 1.0 / 30.0
         retry_sleep      = 1.0
+        lost             = 0     # consecutive grab failures (camera-lost detection)
 
         while True:
             err = zed.grab(runtime_params)
@@ -1047,6 +1088,7 @@ def _start_zed_thread():
                 Handler._zed_connected  = True
                 Handler._zed_last_error = None
                 retry_sleep = 1.0
+                lost = 0
 
                 now_disp = time.monotonic()
                 if now_disp - last_display >= _display_interval:
@@ -1102,6 +1144,12 @@ def _start_zed_thread():
             else:
                 Handler._zed_connected  = False
                 Handler._zed_last_error = f"grab error: {err}"
+                lost += 1
+                # Camera unplugged / hung: stop grabbing and return so the caller
+                # closes this handle and re-opens (by serial) when it reconnects.
+                if lost >= ZED_GRAB_LOST_LIMIT:
+                    log.warning("[zed] grab failing (%s) — releasing to re-open on reconnect", err)
+                    return
                 time.sleep(retry_sleep)
                 retry_sleep = min(retry_sleep * 2, 5.0)
 
@@ -1214,35 +1262,68 @@ def _start_zed_thread():
             except Exception as exc:
                 log.error("[zed] YOLO error: %s", exc)
 
-    # ── Try pyzed SDK first; fall back to OpenCV ───────────────────────────────
+    # ── ZED front feed: SDK only (color), retried forever. The SDK identifies the
+    #    camera by its USB serial, so the front view is deterministic — it is always
+    #    the ZED, never another camera, and never the grayscale V4L2 fallback. If the
+    #    ZED is absent/busy the front reports "unavailable" and auto-recovers on
+    #    reconnect. The grayscale OpenCV fallback runs ONLY when pyzed is not installed.
     def _start():
         try:
             # libusb 1.0.25 (Ubuntu 22.04) doesn't auto-init the default context;
             # ZED SDK calls libusb_get_device_list(NULL) which segfaults without it.
             import ctypes
             ctypes.CDLL('/lib/aarch64-linux-gnu/libusb-1.0.so.0').libusb_init(None)
-
             import pyzed.sl as sl
-            zed        = sl.Camera()
-            init_params = sl.InitParameters()
-            init_params.camera_resolution = sl.RESOLUTION.HD720
-            init_params.camera_fps        = 30
-            init_params.depth_mode        = sl.DEPTH_MODE.NONE
-
-            err = zed.open(init_params)
-            if err != sl.ERROR_CODE.SUCCESS:
-                raise RuntimeError(f"ZED SDK open failed: {err}")
-
-            image_mat = sl.Mat()
-            log.info("[zed] ZED SDK opened — color feed active")
-            _capture_loop_sdk(zed, image_mat)
-
         except ImportError:
-            log.info("[zed] pyzed not found — using OpenCV grayscale fallback")
+            log.warning("[zed] pyzed SDK not installed — cannot guarantee color; "
+                        "using OpenCV grayscale fallback")
             _capture_loop_opencv()
+            return
         except Exception as exc:
-            log.warning("[zed] SDK error (%s) — falling back to OpenCV", exc)
+            log.warning("[zed] libusb/pyzed init failed (%s) — OpenCV grayscale fallback", exc)
             _capture_loop_opencv()
+            return
+
+        attempt = 0
+        delay   = ZED_SDK_OPEN_RETRY_DELAY
+        while True:                       # retry forever — color or nothing, never grayscale
+            attempt += 1
+            zed = None
+            try:
+                zed         = sl.Camera()
+                init_params = sl.InitParameters()
+                init_params.camera_resolution = sl.RESOLUTION.HD720
+                init_params.camera_fps        = 30
+                init_params.depth_mode        = sl.DEPTH_MODE.NONE
+
+                err = zed.open(init_params)
+                if err == sl.ERROR_CODE.SUCCESS:
+                    image_mat = sl.Mat()
+                    log.info("[zed] ZED SDK opened — color feed active")
+                    delay = ZED_SDK_OPEN_RETRY_DELAY
+                    _capture_loop_sdk(zed, image_mat)   # returns if the camera is lost
+                    # capture loop exited (camera unplugged) — release and re-open below
+                    err = "camera lost"
+                else:
+                    Handler._zed_last_error = f"SDK open: {err}"
+            except Exception as exc:
+                err = exc
+                Handler._zed_last_error = f"SDK open: {exc}"
+
+            with Handler._zed_lock:
+                Handler._zed_connected = False
+            try:
+                if zed is not None:
+                    zed.close()   # release before retrying so the next open can detect it
+            except Exception:
+                pass
+
+            # Stay quiet after the first few failures to avoid log spam while idle.
+            if attempt <= ZED_SDK_OPEN_RETRIES or attempt % 10 == 0:
+                log.warning("[zed] SDK open failed (%s) — retrying in %.1fs (color-only, "
+                            "no grayscale)", err, delay)
+            time.sleep(delay)
+            delay = min(delay * 1.5, 5.0)
 
     threading.Thread(target=_start, daemon=True, name="zed-capture").start()
     log.info("[zed] Capture thread started (%s)", ZED_DEVICE)
@@ -1255,7 +1336,7 @@ def main():
     ap.add_argument("--chassis", default=None,
                     help="agrobot | jackal — overrides config/active_chassis.yaml")
     ap.add_argument("--rear-camera", dest="rear_camera", default=None,
-                    help="realsense | webcam — overrides the chassis rear_camera setting")
+                    help="realsense | webcam | none — overrides the chassis rear_camera setting")
     args = ap.parse_args()
 
     Handler.gnss_file = args.gnss
@@ -1314,9 +1395,9 @@ def main():
         )
 
         _encode_fn = _build_encode_fn()
-        # Skip the ROS camera topic when a local webcam is the rear source, so the
-        # two feeds don't fight over the same buffer.
-        if _encode_fn and CHASSIS.camera_topic and rear_src != "webcam":
+        # Skip the ROS camera topic when a local webcam is the rear source (the two
+        # feeds would fight over the same buffer) or when the rear view is disabled.
+        if _encode_fn and CHASSIS.camera_topic and rear_src not in ("webcam", "none"):
             def _on_image(msg: RosImage):
                 try:
                     frame = _encode_fn(msg)
@@ -1344,6 +1425,8 @@ def main():
             log.warning("[camera] neither cv2 nor PIL found — /api/camera will return 503")
         elif rear_src == "webcam":
             log.info("[camera] rear_camera=webcam — local capture only, ROS camera topic skipped")
+        elif rear_src == "none":
+            log.info("[camera] rear_camera=none — rear view disabled, ROS camera topic skipped")
         else:
             log.info("[camera] no ROS camera_topic for this chassis — using local capture only")
 
@@ -1361,7 +1444,10 @@ def main():
     except Exception as exc:
         log.warning("[rclpy] ROS init failed — teleop will not work. Reason: %s", exc)
 
-    _start_rear_camera_thread(rear_src, CHASSIS.rear_camera_device)
+    if rear_src == "none":
+        log.info("[rear-cam] rear_camera=none — rear view disabled, no rear capture")
+    else:
+        _start_rear_camera_thread(rear_src, CHASSIS.rear_camera_device)
     _start_zed_thread()
 
     with _Server(("", args.port), Handler) as httpd:

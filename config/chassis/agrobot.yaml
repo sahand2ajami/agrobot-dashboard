@@ -33,8 +33,9 @@ camera_topic: /camera/camera/color/image_raw    # RealSense D435i color stream
 battery_min_v: 42.0
 battery_max_v: 58.0
 
-# Rear camera source: realsense (D435 color) | webcam (generic USB UVC, e.g. Logitech).
-# Override per launch with:  ./launch_dashboard.sh --rear-camera webcam
+# Rear camera source: realsense (D435 color) | webcam (generic USB UVC, e.g. Logitech)
+# | none (disable the rear view — front camera fills the frame, no picture-in-picture).
+# Override per launch with:  ./launch_dashboard.sh --rear-camera webcam   (or none)
 rear_camera: realsense
 # rear_camera_device: /dev/video0   # optional explicit V4L2 device/index (auto-detected if omitted)
 
