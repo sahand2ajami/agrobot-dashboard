@@ -261,6 +261,32 @@
     .act-det { background: #161b22; color: #7d8590; border: 1px solid #30363d; }
     .act-det:hover { background: #21262d; color: #e6edf3; border-color: #58a6ff; }
     .act-det.on { background: #112240; color: #58a6ff; border-color: #388bfd; box-shadow: 0 0 8px rgba(56,139,253,.4); }
+    /* Disabled state for actuator + settings buttons (PLC not ready / wrong mode). */
+    .act-btn:disabled, .act-btn.disabled { opacity: .4; pointer-events: none; }
+
+    /* ── PLC machine status strip (agrobot) ── */
+    .plc-strip { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+    .plc-chip {
+      font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 6px;
+      background: #161b22; border: 1px solid #30363d; color: #7d8590; white-space: nowrap;
+    }
+    .plc-chip.ok   { background: #1c4a2a; color: #3fb950; border-color: #2ea043; }
+    .plc-chip.warn { background: #2d1f00; color: #d29922; border-color: #9e6a03; }
+    .plc-chip.err  { background: #2d0b0a; color: #f85149; border-color: #9e2620; }
+    .plc-chip.cyc  { background: #0d2244; color: #79c0ff; border-color: #1f6feb; }
+
+    /* ── PLC settings (machine setup + robot arm) ── */
+    .sp-btn:disabled, .sp-btn.disabled { opacity: .4; pointer-events: none; }
+    .sp-btn.danger { border-color: #9e2620; color: #f85149; }
+    .sp-btn.danger:hover { background: #2d0b0a; border-color: #f85149; color: #fff; }
+    .sp-btn-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+    .sp-btn-grid.cols3 { grid-template-columns: repeat(3, 1fr); }
+    .plc-sub-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      padding: 6px 10px; background: #0d1117; border: 1px solid #21262d; border-radius: 6px;
+    }
+    .plc-sub-row .plc-sub-name { font-size: 12px; font-weight: 600; color: #adbac7; }
+    .plc-sub-row .sp-btn { flex: 0 0 auto; padding: 3px 10px; }
 
     /* ── Action cluster (actuators + 2m + REC) ── */
     /* Flex rows so each row fills the same total width regardless of how many
@@ -793,6 +819,17 @@
               <i class="ti ti-bolt" aria-hidden="true"></i>Both
             </button>
           </div>
+          <!-- PLC machine status: gateway link, mode, safety, live sequence state.
+               Hidden on chassis without the PLC (jackal) via data-chassis-feature. -->
+          <div class="plc-strip" data-chassis-feature="plc" id="plcStrip">
+            <span class="plc-chip" id="plcGw">● Gateway</span>
+            <span class="plc-chip" id="plcMode">MODE —</span>
+            <span class="plc-chip" id="plcEstop">E-stop</span>
+            <span class="plc-chip" id="plcGate">Gate</span>
+            <span class="plc-chip err" id="plcFault" style="display:none">FAULT</span>
+            <span class="plc-chip cyc" id="plcAugerCyc" style="display:none">Auger ⟳</span>
+            <span class="plc-chip cyc" id="plcPlanterCyc" style="display:none">Planter ⟳</span>
+          </div>
           <div class="action-row">
             <button class="fwd-btn" id="fwd2mBtn" onclick="moveForward2m()" data-chassis-feature="fwd2m">
               → 2 m
@@ -945,6 +982,67 @@
           <span class="sp-status-label"><i class="ti ti-bolt" aria-hidden="true"></i>Chassis Battery</span>
           <span class="sp-status-val" id="stChassisBatt">&mdash;</span>
         </div>
+      </div>
+    </div>
+
+    <!-- Machine Setup (PLC) — mode, fault, home, and per-subsystem enables. The PLC
+         gates sequence starts on Auto mode + subsystem-enabled + safety, so the operator
+         satisfies those preconditions here. Hidden on chassis without a PLC (jackal). -->
+    <div class="sp-section" data-chassis-feature="plc">
+      <div class="sp-section-title">Machine Setup (PLC)</div>
+      <div class="sp-btn-grid">
+        <button class="sp-btn" id="plcSetManual" onclick="plcMachine('SET_MANUAL')">Set Manual</button>
+        <button class="sp-btn" id="plcSetAuto"   onclick="plcMachine('SET_AUTO')">Set Auto</button>
+        <button class="sp-btn danger" id="plcFaultReset" onclick="plcMachine('FAULT_RESET')">Fault Reset</button>
+        <button class="sp-btn" id="plcHomeAll"    onclick="plcMachine('HOME_ALL')">Home All</button>
+      </div>
+      <div class="sp-section-title" style="margin-top:12px">Subsystems</div>
+      <div class="sp-status-grid">
+        <div class="plc-sub-row">
+          <span class="plc-sub-name">Auger <span class="plc-chip" id="plcAugerEn">—</span></span>
+          <span>
+            <button class="sp-btn" onclick="plcMachine('ENABLE_AUGER')">Enable</button>
+            <button class="sp-btn" onclick="plcMachine('DISABLE_AUGER')">Disable</button>
+          </span>
+        </div>
+        <div class="plc-sub-row">
+          <span class="plc-sub-name">Planter <span class="plc-chip" id="plcPlanterEn">—</span></span>
+          <span>
+            <button class="sp-btn" onclick="plcMachine('ENABLE_PLANTER')">Enable</button>
+            <button class="sp-btn" onclick="plcMachine('DISABLE_PLANTER')">Disable</button>
+          </span>
+        </div>
+        <div class="plc-sub-row">
+          <span class="plc-sub-name">Robot <span class="plc-chip" id="plcRobotEn">—</span></span>
+          <span>
+            <button class="sp-btn" onclick="plcMachine('ENABLE_ROBOT')">Enable</button>
+            <button class="sp-btn" onclick="plcMachine('DISABLE_ROBOT')">Disable</button>
+          </span>
+        </div>
+        <div class="plc-sub-row">
+          <span class="plc-sub-name">AMR <span class="plc-chip" id="plcAmrEn">—</span></span>
+          <span>
+            <button class="sp-btn" onclick="plcMachine('ENABLE_AMR')">Enable</button>
+            <button class="sp-btn" onclick="plcMachine('DISABLE_AMR')">Disable</button>
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Robot Arm (PLC) — manipulator pushbuttons. Disabled until the robot subsystem
+         is enabled (see Machine Setup). Shutdown is confirmed before sending. -->
+    <div class="sp-section" data-chassis-feature="plc">
+      <div class="sp-section-title">Robot Arm</div>
+      <div class="sp-btn-grid cols3" id="plcRobotBtns">
+        <button class="sp-btn" data-robot-cmd onclick="plcRobot('HOME')">Home</button>
+        <button class="sp-btn" data-robot-cmd onclick="plcRobot('MOTORS_ON')">Motors On</button>
+        <button class="sp-btn" data-robot-cmd onclick="plcRobot('MOTORS_OFF')">Motors Off</button>
+        <button class="sp-btn" data-robot-cmd onclick="plcRobot('START')">Start</button>
+        <button class="sp-btn" data-robot-cmd onclick="plcRobot('STOP')">Stop</button>
+        <button class="sp-btn" data-robot-cmd onclick="plcRobot('PAUSE')">Pause</button>
+        <button class="sp-btn" data-robot-cmd onclick="plcRobot('CONTINUE')">Continue</button>
+        <button class="sp-btn" data-robot-cmd onclick="plcRobot('RESET')">Reset</button>
+        <button class="sp-btn danger" data-robot-cmd onclick="plcRobot('SHUTDOWN')">Shutdown</button>
       </div>
     </div>
 
@@ -1724,7 +1822,14 @@ function updateActuatorUI() {
   document.getElementById('bothBtn').classList.toggle('on', actuatorState.auger);
 }
 
+// Dispatcher: on a PLC-equipped chassis (agrobot) the actuator buttons drive the real
+// PLC; otherwise they keep the original cosmetic behaviour (jackal — local pin only).
 function toggleActuator(which) {
+  if (_plcEnabled) return _toggleActuatorPlc(which);
+  return _toggleActuatorLocal(which);
+}
+
+function _toggleActuatorLocal(which) {
   if (which === 'auger') {
     actuatorState.auger = !actuatorState.auger;
     updateActuatorUI();
@@ -1737,6 +1842,173 @@ function toggleActuator(which) {
     updateActuatorUI();
   }
   _recordPlant();
+}
+
+/* ── PLC machine control (agrobot) ──────────────────────────────────────────────
+   The browser talks REST to serve.py, which relays gRPC to the PLC gateway. A
+   command returning success only means the Modbus write landed; real completion is
+   confirmed by polling /api/plc/sequence and watching *_in_cycle clear. */
+let _plcEnabled         = false;
+let _plcStatus          = { connected: false };
+let _plcStatusPollTimer = null;
+let _plcSeqPollTimer    = null;
+let _plcSeqDeadline     = 0;       // keep polling sequence state until this time (ms)
+let _augerWasInCycle    = false;   // edge detection for "Auger complete"
+let _planterWasInCycle  = false;   // edge detection for "Planter complete" (+ pin)
+
+async function _plcPost(path, command) {
+  try {
+    const r = await _fetchWithTimeout(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command }),
+    }, 3000);
+    return await r.json();
+  } catch {
+    return { connected: false, success: false, message: 'request failed' };
+  }
+}
+
+// Toast helper: distinguishes gateway-offline / PLC-refused / OK. Returns true on OK.
+function _plcToast(resp, okMsg) {
+  if (!resp || resp.connected === false) { showToast('PLC gateway offline', true); return false; }
+  if (resp.success === false)            { showToast(resp.message || 'PLC command failed', true); return false; }
+  showToast(okMsg || resp.message || 'OK');
+  return true;
+}
+
+function _toggleActuatorPlc(which) {
+  if (which === 'auger') {
+    const cmd = _plcStatus.auger_in_cycle ? 'STOP' : 'START';
+    _plcPost('/api/plc/auger', cmd).then(r => {
+      if (_plcToast(r, cmd === 'START' ? 'Auger starting…' : 'Stopping auger…')) _startPlcSeqPoll();
+    });
+    return;
+  }
+  if (which === 'planter') {
+    _pulseBtn('planterBtn');
+    _plcPost('/api/plc/planter', 'START').then(r => {
+      if (_plcToast(r, 'Planter starting…')) _startPlcSeqPoll();
+    });
+    return;
+  }
+  if (which === 'both') {
+    _pulseBtn('bothBtn');
+    _plcPost('/api/plc/both', 'START').then(r => {
+      if (_plcToast(r, 'Auger + Planter starting…')) _startPlcSeqPoll();
+    });
+  }
+}
+
+function plcMachine(cmd) {
+  _plcPost('/api/plc/machine', cmd).then(r => {
+    if (_plcToast(r, cmd.replace(/_/g, ' ') + ' sent')) _pollPlcStatus();
+  });
+}
+
+function plcRobot(cmd) {
+  if (cmd === 'SHUTDOWN' && !confirm('Shut down the robot arm?')) return;
+  _plcPost('/api/plc/robot', cmd).then(r => {
+    if (_plcToast(r, 'Robot arm: ' + cmd.replace(/_/g, ' '))) _pollPlcStatus();
+  });
+}
+
+/* — Machine status poll (always on while PLC enabled) — */
+async function _pollPlcStatus() {
+  let d;
+  try { d = await _fetchWithTimeout('/api/plc/status', { cache: 'no-store' }, 2500).then(r => r.json()); }
+  catch { d = { connected: false }; }
+  _plcStatus = d;
+  _renderPlcStatus(d);
+}
+
+function _chip(id, on, label, cls) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = label;
+  el.className = 'plc-chip' + (on ? (' ' + (cls || 'ok')) : '');
+}
+
+function _renderPlcStatus(d) {
+  const online = d && d.connected !== false;
+  _chip('plcGw', online, online ? '● Gateway' : '● Gateway offline', online ? 'ok' : 'err');
+
+  // Mode / safety only meaningful when online.
+  const mode = !online ? 'MODE —' : (d.mode_auto ? 'AUTO' : 'MANUAL');
+  _chip('plcMode', online, mode, d.mode_auto ? 'ok' : 'warn');
+  _chip('plcEstop', online && d.estop_ok, 'E-stop', d.estop_ok ? 'ok' : 'err');
+  _chip('plcGate',  online && d.gate_ok,  'Gate',  d.gate_ok  ? 'ok' : 'err');
+
+  const fault = document.getElementById('plcFault');
+  if (fault) fault.style.display = (online && d.faulted) ? '' : 'none';
+
+  const ac = document.getElementById('plcAugerCyc');
+  if (ac) ac.style.display = (online && d.auger_in_cycle) ? '' : 'none';
+  const pc = document.getElementById('plcPlanterCyc');
+  if (pc) pc.style.display = (online && d.planter_in_cycle) ? '' : 'none';
+
+  // Subsystem enabled pills (Machine Setup section).
+  _chip('plcAugerEn',   online && d.auger_enabled,   d.auger_enabled   ? 'on' : 'off');
+  _chip('plcPlanterEn', online && d.planter_enabled, d.planter_enabled ? 'on' : 'off');
+  _chip('plcRobotEn',   online && d.robot_enabled,   d.robot_enabled   ? 'on' : 'off');
+  _chip('plcAmrEn',     online && d.amr_enabled,     d.amr_enabled     ? 'on' : 'off');
+
+  _updatePlcButtons(d);
+}
+
+function _updatePlcButtons(d) {
+  const online = d && d.connected !== false;
+  // Sequence buttons: need gateway online + Auto mode (PLC refuses starts in Manual).
+  const seqReady = online && d.mode_auto;
+  const planterBtn = document.getElementById('planterBtn');
+  const bothBtn    = document.getElementById('bothBtn');
+  const augerBtn   = document.getElementById('augerBtn');
+  if (planterBtn) planterBtn.disabled = !seqReady;
+  if (bothBtn)    bothBtn.disabled    = !seqReady;
+  // Auger doubles as a stop button while running, so allow it whenever online.
+  if (augerBtn) {
+    augerBtn.disabled = !online;
+    augerBtn.classList.toggle('on', online && !!d.auger_in_cycle);
+  }
+  // Mode buttons: disable the already-active mode.
+  const setAuto = document.getElementById('plcSetAuto');
+  const setMan  = document.getElementById('plcSetManual');
+  if (setAuto) setAuto.disabled = !online || d.mode_auto;
+  if (setMan)  setMan.disabled  = !online || d.mode_manual;
+  // Robot-arm buttons: only when the robot subsystem is enabled.
+  document.querySelectorAll('#plcRobotBtns [data-robot-cmd]').forEach(b => {
+    b.disabled = !(online && d.robot_enabled);
+  });
+}
+
+/* — Sequence detail poll (runs while a sequence is active, detects completion) — */
+function _startPlcSeqPoll() {
+  _plcSeqDeadline = Date.now() + 8000;   // poll ≥8 s after a command (PLC may delay InCycle)
+  if (_plcSeqPollTimer) return;
+  _plcSeqPollTimer = setInterval(_pollPlcSequence, 500);
+  _pollPlcSequence();
+}
+function _stopPlcSeqPoll() {
+  if (_plcSeqPollTimer) { clearInterval(_plcSeqPollTimer); _plcSeqPollTimer = null; }
+}
+async function _pollPlcSequence() {
+  let d;
+  try { d = await _fetchWithTimeout('/api/plc/sequence', { cache: 'no-store' }, 2500).then(r => r.json()); }
+  catch { return; }
+  if (d.connected === false) { _stopPlcSeqPoll(); return; }
+
+  // Completion edges: a sequence that WAS running and is now idle has finished.
+  if (_augerWasInCycle && !d.auger_in_cycle) showToast('Auger complete ✓');
+  if (_planterWasInCycle && !d.planter_in_cycle) {
+    showToast('Planter complete ✓');
+    _recordPlant();                      // log the seedling only on confirmed completion
+  }
+  _augerWasInCycle   = !!d.auger_in_cycle;
+  _planterWasInCycle = !!d.planter_in_cycle;
+
+  // Keep polling while anything runs (+grace); otherwise stop after the deadline.
+  if (d.auger_in_cycle || d.planter_in_cycle) _plcSeqDeadline = Date.now() + 4000;
+  else if (Date.now() > _plcSeqDeadline)      _stopPlcSeqPoll();
 }
 
 /* ── Init ── */
@@ -2083,6 +2355,14 @@ function _applyChassisConfig() {
         const key = el.getAttribute('data-chassis-feature');
         if (feats[key] === false) el.style.display = 'none';
       });
+      // PLC machine control (agrobot): wire the actuator buttons to the gateway and start
+      // polling machine status. On chassis without a PLC the panels are already hidden
+      // above and the actuator buttons keep their cosmetic behaviour.
+      _plcEnabled = feats.plc === true;
+      if (_plcEnabled && !_plcStatusPollTimer) {
+        _pollPlcStatus();
+        _plcStatusPollTimer = setInterval(_pollPlcStatus, 1000);
+      }
       if (cfg.chassis) {
         document.title = cfg.chassis.charAt(0).toUpperCase() + cfg.chassis.slice(1) +
                          ' Teleop Dashboard';

@@ -48,6 +48,8 @@ agrobot_dual_robot/
 ├── dashboard/
 │   ├── serve.py                    # robot-agnostic HTTP server (port 8766) + ROS bridge
 │   ├── chassis.py                  # loads the active chassis, builds its ROS publisher/subscriptions
+│   ├── plc_client.py               # gRPC client to the PLC gateway (agrobot auger/planter/robot arm)
+│   ├── plc/                        # vendored gRPC client stubs (protobuf 4.x copy of the gateway's)
 │   ├── index.html                  # the single-page dashboard UI (adapts via /api/config)
 │   └── index_wide.html             # wide-angle UI variant (no crop, ZED HD2K)
 ├── scripts/
@@ -404,6 +406,54 @@ Server: `dashboard/serve.py`, default port **8766**.
 | POST | `/api/record/start`, `/api/record/stop` | Start/stop a camera + GPS-track recording session. |
 | GET | `/api/camera*`, `/api/zed*`, `/api/detection*` | MJPEG streams / status / detection data. |
 | GET/POST | `/api/settings` | Read / write speed and Modbus settings. |
+| POST | `/api/plc/{auger,planter,both}` | PLC sequence control `{command: START\|STOP}` (agrobot). 503 without `plc.enabled`. |
+| POST | `/api/plc/{machine,robot}` | PLC machine-setup / robot-arm pushbuttons `{command}` (agrobot). |
+| GET | `/api/plc/{status,sequence,auger_motor}` | PLC machine status / sequence detail / auger VFD (agrobot). |
+
+---
+
+## PLC integration (agrobot tree-planter)
+
+The auger, planter, and robot manipulator live on an **LS Electric PLC**, fronted by a
+separate **gRPC gateway** (`~/plc_gateway/gRPC-Gateway-Agrobot`, port **50051**). The dashboard
+relays the actuator + robot-arm controls to it — `serve.py` is the gRPC client, so the
+browser only ever speaks REST:
+
+```
+Browser ──REST :8766──► serve.py ──gRPC :50051──► PLC Gateway ──Modbus TCP :502──► LS PLC
+```
+
+- **Run the gateway separately:** `cd ~/plc_gateway/gRPC-Gateway-Agrobot && python main.py`
+  (starts on :50051; runs in offline/mock mode if the PLC is unreachable). The dashboard
+  connects lazily — if the gateway is down the UI just shows **"Gateway offline"** and the
+  rest of the dashboard is unaffected.
+- **Test with NO PLC / NO real gateway** — a software emulator ships with the dashboard:
+  ```bash
+  python3 scripts/mock_plc_gateway.py --auto      # AUTO + all subsystems enabled
+  ```
+  It speaks the same gRPC service on :50051 and emulates mode/safety gating plus
+  auger/planter cycles that auto-complete (so the dashboard's completion toast + seedling
+  pin fire). Flags: `--cycle-secs N`, `--fault`, `--estop`, `--gate-open`. Run the
+  dashboard normally against it (`./launch_dashboard.sh --chassis agrobot`). See the three
+  fidelity tiers (emulator → gateway offline-mode → XG5000 PLC simulator) in DEVELOPMENT.md.
+- **Per-chassis config** in `config/chassis/<name>.yaml`:
+  ```yaml
+  plc:
+    enabled: true      # agrobot: true · jackal: false
+    host: 127.0.0.1
+    port: 50051
+  ```
+- **Teleop flow:** in Settings → *Machine Setup (PLC)* set **Auto** and enable the
+  subsystems, then the **Planter / Auger / Both** buttons start the real sequence. The
+  dashboard polls the PLC and toasts *"complete"* when the cycle finishes (and only then
+  logs the seedling pin). The *Robot Arm* panel drives the manipulator (Home/Start/Stop/…).
+- `success:true` from the gateway means the Modbus write landed, **not** that the machine
+  moved — the PLC ladder gates motion on Auto-mode + enabled + safety interlocks.
+
+> **protobuf note:** `dashboard/plc/` holds a client copy of the gateway's gRPC stubs
+> regenerated for protobuf 4.x (the upstream stubs are protobuf 6.x and won't import under
+> the dashboard's runtime). Wire format is version-independent. To regenerate after a proto
+> change, see the header of `dashboard/plc/__init__.py`.
 
 ---
 

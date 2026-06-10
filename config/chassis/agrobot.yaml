@@ -46,6 +46,16 @@ baud: 38400
 slave_id: 1
 chassis_variant: T13    # T3 | T13 | T17E — selects odom_calculation params + URDF
 
+# PLC Gateway — the auger / planter / robot manipulator are owned by an LS Electric
+# PLC, fronted by a gRPC gateway (~/plc_gateway/gRPC-Gateway-Agrobot on port 50051). The
+# dashboard relays the actuator + robot-arm buttons to it. Run the gateway SEPARATELY;
+# the dashboard connects on demand and degrades gracefully ("Gateway offline") when it
+# is not up. host/port point at the gateway (localhost when co-located on the Jetson).
+plc:
+  enabled: true
+  host: 127.0.0.1
+  port: 50051
+
 # Dashboard panels available on this chassis.
 features:
   battery: true

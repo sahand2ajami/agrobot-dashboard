@@ -1,0 +1,99 @@
+syntax = "proto3";
+
+package robot;
+
+service RobotService {
+
+  // ── Sequence control ───────────────────────────────────────────────────────
+  rpc ControlAuger    (SequenceCommandRequest) returns (SequenceStatusResponse) {}
+  rpc ControlPlanter  (SequenceCommandRequest) returns (SequenceStatusResponse) {}
+  rpc ControlBoth     (SequenceCommandRequest) returns (SequenceStatusResponse) {}
+
+  // ── Machine-level pushbutton commands ─────────────────────────────────────
+  rpc MachineCommand   (MachineCommandRequest) returns (MachineStatusResponse) {}
+  rpc GetMachineStatus (Empty)                 returns (MachineStatusResponse) {}
+
+  // ── Full sequence state readback ───────────────────────────────────────────
+  rpc GetSequenceDetail (Empty) returns (SequenceDetailResponse) {}
+
+  // ── Robot arm control ──────────────────────────────────────────────────────
+  rpc ControlRobot (MachineCommandRequest) returns (MachineStatusResponse) {}
+
+  // ── Auger motor status ────────────────────────────────────────────────────
+  rpc GetAugerMotorStatus (Empty) returns (AugerMotorStatusResponse) {}
+}
+
+message Empty {}
+
+// ── Sequence control ───────────────────────────────────────────────────────
+message SequenceCommandRequest {
+  string command = 1; // "START" or "STOP"  (case-insensitive)
+}
+
+message SequenceStatusResponse {
+  bool   success        = 1;
+  string message        = 2;
+  bool   auger_active   = 3;
+  bool   planter_active = 4;
+}
+
+// ── Machine command ────────────────────────────────────────────────────────
+// MachineCommand supported values:
+//   START / STOP / HOME_ALL / FAULT_RESET / SET_AUTO / SET_MANUAL
+//   ENABLE_AUGER / DISABLE_AUGER / ENABLE_PLANTER / DISABLE_PLANTER
+//   RESET_AUGER  / RESET_PLANTER
+//   ENABLE_ROBOT / DISABLE_ROBOT / ENABLE_AMR / DISABLE_AMR
+//
+// ControlRobot supported values:
+//   HOME / PAUSE / CONTINUE / MOTORS_ON / MOTORS_OFF
+//   START / STOP / RESET / SHUTDOWN
+message MachineCommandRequest {
+  string command = 1;
+}
+
+message MachineStatusResponse {
+  bool   success         = 1;
+  string message         = 2;
+  bool   estop_ok        = 3;
+  bool   gate_ok         = 4;
+  bool   faulted         = 5;
+  bool   auger_enabled   = 6;
+  bool   planter_enabled = 7;
+  bool   robot_enabled   = 8;
+  bool   amr_enabled     = 9;
+  bool   auger_in_cycle   = 10;
+  bool   planter_in_cycle = 11;
+  bool   mode_auto        = 12;
+  bool   mode_manual      = 13;
+}
+
+// ── Auger motor status ─────────────────────────────────────────────────────
+// Reads ud_HMI_MotorIND at %MW2500 (HMI_IND_Auger).
+// velocity_target / velocity_actual: raw drive units (0–4096 typical VFD range).
+message AugerMotorStatusResponse {
+  bool   success          = 1;
+  string message          = 2;
+  bool   running          = 3;  // blade is spinning (RunOutput active)
+  bool   fwd_direction    = 4;  // forward direction active (FwdOutput)
+  bool   faulted          = 5;  // drive has a fault
+  uint32 velocity_target  = 6;  // speed setpoint (raw units)
+  uint32 velocity_actual  = 7;  // speed measured (raw units)
+}
+
+// ── Sequence detail ────────────────────────────────────────────────────────
+message SequenceDetailResponse {
+  bool   auger_home        = 1;
+  bool   auger_setup_ok    = 2;
+  bool   auger_ok_to_start = 3;
+  bool   auger_enabled     = 4;
+  bool   auger_in_cycle    = 5;
+  bool   auger_complete    = 6;
+  uint32 auger_step        = 7;
+  bool   planter_home        = 8;
+  bool   planter_setup_ok    = 9;
+  bool   planter_ok_to_start = 10;
+  bool   planter_enabled     = 11;
+  bool   planter_in_cycle    = 12;
+  bool   planter_complete    = 13;
+  uint32 planter_step        = 14;
+}

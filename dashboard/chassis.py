@@ -152,6 +152,14 @@ class Chassis:
         self.slave_id        = self.cfg.get("slave_id")
         self.chassis_variant = self.cfg.get("chassis_variant")
 
+        # PLC Gateway (agrobot tree-planter only). The dashboard relays auger / planter /
+        # robot-arm commands to the gRPC gateway at plc_host:plc_port; disabled chassis
+        # (jackal) simply leave plc_enabled false and the PLC endpoints/UI stay hidden.
+        plc = dict(self.cfg.get("plc") or {})
+        self.plc_enabled = bool(plc.get("enabled", False))
+        self.plc_host    = plc.get("host", "127.0.0.1")
+        self.plc_port    = int(plc.get("port", 50051))
+
     # -- helpers --------------------------------------------------------------
     def has_feature(self, key):
         return bool(self.features.get(key, False))
@@ -176,9 +184,13 @@ class Chassis:
             "description": self.description,
             "comms":       self.comms,
             "rear_camera": self.rear_camera,
-            "features":    self.features,
+            "features":    {**self.features, "plc": self.plc_enabled},
             "battery":     {"minV": self.battery_min_v,
                             "maxV": self.battery_max_v},
+            # Expose PLC as a derived feature flag so the UI's data-chassis-feature
+            # hide mechanism gates the PLC panels automatically (true on agrobot only).
+            # `actuators` stays separate — jackal keeps its cosmetic planter buttons.
+            "plc":         {"enabled": self.plc_enabled},
             "limits":      {"maxLinear": self.max_linear,
                             "maxAngular": self.max_angular},
             "scaling":     {"linearScale": self.linear_scale,
