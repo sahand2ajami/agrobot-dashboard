@@ -191,7 +191,7 @@ dashboard path uses `robot_base_node` directly.
 
 | Script | When to use |
 |--------|-------------|
-| `./launch_dashboard.sh [--chassis X] [--port N]` | Full dashboard for chassis X |
+| `./launch_dashboard.sh [--chassis X] [--port N] [--headless]` | Full dashboard for chassis X. `--headless` (or `DASHBOARD_HEADLESS=1`) serves only and skips opening a local browser — view it from another device at the printed `http://<jetson-ip>:<port>`. Default still opens a browser on the Jetson. |
 | `./launch_dashboard_wide.sh [--chassis X]` | Wide-angle UI (`serve_wide.py` monkey-patches `serve.py`, so chassis logic is inherited) |
 | `./start_all.sh`, `./start.sh <variant>`, `./teleop.sh` | agrobot-only ROS dev helpers; they exit early if the active chassis is not `agrobot` |
 

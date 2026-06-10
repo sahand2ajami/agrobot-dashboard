@@ -24,7 +24,7 @@ The original repositories are left untouched; read-only clones live under
 1. [Repository layout](#repository-layout)
 2. [Install & build (one-time)](#install--build-one-time)
 3. [Configuration](#configuration) — how chassis and options are selected
-4. **[Tutorial 1 — Bring up the dashboard](#tutorial-1--bring-up-the-dashboard)** (agrobot, jackal, wide, rear camera, remote access)
+4. **[Tutorial 1 — Bring up the dashboard](#tutorial-1--bring-up-the-dashboard)** (agrobot, jackal, wide, rear camera, headless / remote access)
 5. **[Tutorial 2 — Using the dashboard](#tutorial-2--using-the-dashboard)** (driving, cameras, GPS, recording, planting, status)
 6. [Configuration cookbook](#configuration-cookbook) — copy-paste commands per scenario
 7. [HTTP API](#http-api)
@@ -52,7 +52,7 @@ agrobot_dual_robot/
 │   └── index_wide.html             # wide-angle UI variant (no crop, ZED HD2K)
 ├── scripts/
 │   ├── gnss_p9_read.py             # Columbus P-9 Race GNSS reader → /tmp/gnss_coords.json
-│   └── object_detector.py          # YOLOv8 person detector (agrobot)
+│   └── object_detector.py          # standalone YOLOv8 detector (optional; detection now runs in the dashboard, on-demand)
 ├── src/avatar_robot_base/          # agrobot ROS 2 package: Modbus driver + odometry (T3/T13/T17E)
 ├── launch_dashboard.sh             # unified launcher (chassis-aware)
 ├── launch_dashboard_wide.sh        # wide-UI launcher
@@ -97,6 +97,19 @@ the API responds, and missing devices degrade gracefully (panels show "No data")
 
 ## Configuration
 
+**Every run option at a glance.** All are optional — running `./launch_dashboard.sh`
+with no flags uses every default (agrobot chassis, RealSense rear camera present, a local
+browser on the Jetson, port 8766):
+
+| Option | Values | Default | How to set it (highest priority first) |
+|--------|--------|---------|----------------------------------------|
+| **Chassis** | `agrobot` \| `jackal` | **`agrobot`** | `--chassis <name>` → `ROBOT_CHASSIS` env → `chassis:` in `config/active_chassis.yaml` |
+| **Rear camera** | `realsense` \| `webcam` \| `none` | **`realsense`** (present) | `--rear-camera <v>` → `REAR_CAMERA` env → `rear_camera:` in the chassis YAML |
+| **Headless** (don't open a browser on the Jetson) | enabled \| disabled | **disabled** (opens a local browser) | `--headless` / `--no-headless` → `DASHBOARD_HEADLESS=1` env |
+| **Port** | any free TCP port | **`8766`** | `--port <n>` |
+
+Each option is explained in detail below.
+
 ### Selecting the chassis
 
 The active chassis is resolved in this order (highest priority first):
@@ -137,28 +150,55 @@ UI never hard-code robot details — they read these files (the server) and `/ap
 | `host_iface`, `host_ip`, `robot_ip`, `ros_domain_id` | jackal | LAN setup applied by the launcher. |
 | `features` | both | Booleans that show/hide UI panels: `battery`, `oil`, `wheel_odom`, `fwd2m`, `modbus_slider`, `actuators`. |
 
-### Rear camera source (realsense | webcam)
+### Rear camera (realsense | webcam | none)
 
-The rear camera can be the RealSense D435 or a generic USB webcam (e.g. a Logitech).
-Resolution order: `--rear-camera` flag → `REAR_CAMERA` env → `rear_camera:` in the
-chassis YAML → `realsense`.
+The dashboard shows a rear camera in a picture-in-picture corner. You choose its
+**source** — the RealSense D435 or a generic USB webcam (e.g. a Logitech) — or turn the
+rear view **off** entirely. Resolution order: `--rear-camera` flag → `REAR_CAMERA` env
+→ `rear_camera:` in the chassis YAML → `realsense`.
 
 ```bash
 ./launch_dashboard.sh --chassis agrobot --rear-camera webcam     # use a USB webcam
+./launch_dashboard.sh --chassis agrobot --rear-camera none       # no rear view (front fills the frame)
 REAR_CAMERA=webcam ./launch_dashboard.sh                       # same, via env
 ```
 
-When `webcam` is selected the server opens the local USB camera as MJPG (full 30 fps)
-and **skips the ROS camera topic** so the two feeds don't fight over the buffer.
-Pin a specific device with `rear_camera_device: /dev/video2` if auto-detection picks
-the wrong one. The front (ZED) camera is unaffected.
+- **`realsense`** (default) — the RealSense D435 rear feed.
+- **`webcam`** — opens a local USB UVC camera and **skips the ROS camera topic** so the
+  two feeds don't fight over the buffer. Pin a specific device with
+  `rear_camera_device: /dev/video2` if auto-detection picks the wrong one.
+- **`none`** (aliases: `off`, `disabled`) — disables the rear view and its capture
+  entirely; the front (ZED) camera fills the frame. Saves CPU when you only need the
+  front view.
+
+The front (ZED) camera is unaffected by this setting.
+
+### Headless (don't open a browser on the Jetson)
+
+By default the launcher opens a browser **on the Jetson** at `http://localhost:8766`.
+In **headless** mode it skips that and only serves — you open the dashboard from your
+laptop's browser instead. This removes the Jetson's browser-rendering cost (and, if you
+use a remote desktop like NoMachine, its screen re-encoding too), leaving more CPU for
+the camera and control loops.
+
+```bash
+./launch_dashboard.sh --headless          # serve only; don't open a local browser
+./launch_dashboard.sh --no-headless       # force a local browser (the default)
+export DASHBOARD_HEADLESS=1               # make headless the default (e.g. in ~/.bashrc)
+```
+
+Precedence: `--headless`/`--no-headless` flag → `DASHBOARD_HEADLESS` env → default
+(open a browser). In headless mode the launcher prints every address the Jetson is
+reachable on — open whichever shares a network with your laptop. See Tutorial 1 →
+*Access from another device* for the full workflow.
 
 ---
 
 ## Tutorial 1 — Bring up the dashboard
 
 The launcher starts exactly the services the chosen chassis needs, waits for the HTTP
-server to accept connections, then opens a browser at `http://localhost:8766`.
+server to accept connections, then (unless `--headless`) opens a browser at
+`http://localhost:8766`.
 
 ### A. agrobot robot (Modbus)
 
@@ -168,8 +208,9 @@ source install/setup.bash
 ./launch_dashboard.sh --chassis agrobot
 ```
 
-This brings up, in order: RealSense D435i → GNSS reader → YOLOv8 detector →
-`robot_base_node` (Modbus RTU on `/dev/ttyUSB0`) → rosbridge → dashboard server.
+This brings up, in order: RealSense D435i (color) → GNSS reader → `robot_base_node`
+(Modbus RTU on `/dev/ttyUSB0`) → rosbridge → dashboard server. Person detection runs
+**inside the dashboard** on the ZED front feed, on demand (see Tutorial 2 → Cameras).
 You should see the **Chassis Link** card go green, **Chassis Battery** show a voltage,
 and the rear camera appear once the RealSense initialises. Drive with **W A S D**.
 
@@ -212,11 +253,29 @@ Same services, but a no-crop layout and ZED HD2K resolution:
 ./launch_dashboard.sh --chassis jackal --port 8767   # second robot, second port
 ```
 
-### E. Access from another device on the network
+### E. Access from another device (and headless mode)
 
-The launcher prints both a local and a network URL, e.g.
-`Network → http://192.168.1.100:8766`. Open that address from a laptop or tablet on
-the same network — the full UI (driving, cameras, map) works in any modern browser.
+You can drive entirely from a laptop/tablet browser — the Jetson doesn't need to run a
+browser at all. This is the recommended setup: it removes the Jetson's browser
+rendering (and a remote desktop's screen re-encoding), leaving more CPU for the camera
+and control loops.
+
+```bash
+./launch_dashboard.sh --chassis agrobot --headless
+```
+
+In headless mode the launcher lists every address the Jetson is reachable on, e.g.:
+
+```
+Open the dashboard from your laptop's browser at one of these:
+  →  http://192.168.1.100:8766      (wired LAN)
+  →  http://10.111.38.27:8766       (WiFi)
+  →  http://100.x.x.x:8766          (Tailscale, if configured — reachable anywhere)
+```
+
+Open whichever address shares a network with your laptop; the full UI (driving,
+cameras, map) works in any modern browser. Without `--headless`, the launcher still
+prints a `Network → …` URL you can use the same way while a local browser is also open.
 
 ### F. Stopping
 
@@ -256,18 +315,20 @@ on the active chassis — the UI hides panels a chassis doesn't support.
 
 - The view is a **split**: the **front** camera (ZED) fills the frame and the **rear**
   camera (RealSense or webcam) sits in a picture-in-picture corner. **Click the PiP**
-  to swap which feed is large.
-- **Detection** button — toggles the YOLOv8 person-detection overlay on the front
-  feed (agrobot). Toggling it only swaps the displayed stream; **it does not touch the
-  chassis link, GPS, or driving** — WASD stays fully responsive.
-- The live feed runs at 30 fps regardless of the recording frame rate.
+  to swap which feed is large. (With `--rear-camera none` there is no PiP — the front
+  fills the frame.)
+- **Detection** button — overlays YOLOv8 person detection on the front (ZED) feed.
+  Detection runs **on demand**: YOLO only does work while this view is open, so it
+  costs nothing when off. Toggling it never touches the chassis link, GPS, or driving —
+  WASD stays fully responsive.
+- The live feed streams at 20 fps (recordings are saved at 15 fps).
 
 ### GPS map & recording
 
 - The map follows the robot. **Center on robot** re-centres, **+ / −** zoom, and the
   compass button toggles 2D/3D.
 - **REC** starts a recording session:
-  - Front + rear camera are saved at **15 fps** (the live view stays 30 fps).
+  - Front + rear camera are saved at **15 fps** (the live view stays 20 fps).
   - A blue marker stays at the screen centre and the map pans under it, drawing the
     GPS trace as the robot moves.
   - Press **STOP** to end: recording stops, the live trace is released, and the camera
@@ -312,8 +373,11 @@ slider** lets you command raw Modbus speed units directly; its scale mirrors
 | Run agrobot explicitly | `./launch_dashboard.sh --chassis agrobot` |
 | Run the Jackal | `./launch_dashboard.sh --chassis jackal` |
 | Use a USB webcam as the rear camera | `./launch_dashboard.sh --chassis agrobot --rear-camera webcam` |
+| Turn off the rear camera (front only) | `./launch_dashboard.sh --rear-camera none` |
 | Pin the webcam device | set `rear_camera_device: /dev/video2` in `agrobot.yaml` |
 | Change the default chassis permanently | edit `chassis:` in `config/active_chassis.yaml` |
+| Run headless (drive from your laptop's browser) | `./launch_dashboard.sh --headless` |
+| Make headless the default | `export DASHBOARD_HEADLESS=1` (e.g. in `~/.bashrc`) |
 | Run on a different port | `./launch_dashboard.sh --chassis agrobot --port 8080` |
 | Run two robots side by side | launch each chassis on its own `--port` |
 | Use the wide-angle UI | `./launch_dashboard_wide.sh --chassis agrobot` |

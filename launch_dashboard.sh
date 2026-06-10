@@ -22,6 +22,14 @@
 #   ./launch_dashboard.sh                      # use config/active_chassis.yaml
 #   ./launch_dashboard.sh --chassis jackal
 #   ./launch_dashboard.sh --chassis agrobot --port 8080
+#   ./launch_dashboard.sh --headless           # serve only; don't open a browser on
+#                                              #   the Jetson — view it from your laptop
+#                                              #   at the "Network" URL printed below.
+#   ./launch_dashboard.sh --no-headless        # force-open a local browser (the default)
+#
+# Headless can also be defaulted without typing the flag:
+#   export DASHBOARD_HEADLESS=1                 # e.g. in ~/.bashrc, to make headless default
+# Precedence: --headless/--no-headless flag > $DASHBOARD_HEADLESS > default (open browser).
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -29,9 +37,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Which dashboard server module to run (overridden by launch_dashboard_wide.sh).
 SERVE_PY="${SERVE_PY:-dashboard/serve.py}"
 
-# ── Parse --chassis / --port / --rear-camera (both "--x val" and "--x=val") ───
+# ── Parse --chassis / --port / --rear-camera (both "--x val" and "--x=val") and
+#    the valueless --headless / --no-headless flags ─────────────────────────────
 CLI_CHASSIS=""
 CLI_REAR=""
+CLI_HEADLESS=""          # "" = not set on the CLI; falls back to $DASHBOARD_HEADLESS
 PORT=8766
 prev=""
 for arg in "$@"; do
@@ -39,12 +49,24 @@ for arg in "$@"; do
     --chassis=*)      CLI_CHASSIS="${arg#--chassis=}" ;;
     --port=*)         PORT="${arg#--port=}" ;;
     --rear-camera=*)  CLI_REAR="${arg#--rear-camera=}" ;;
+    --headless)       CLI_HEADLESS=1 ;;
+    --no-headless)    CLI_HEADLESS=0 ;;
+    --headless=*)     CLI_HEADLESS="${arg#--headless=}" ;;
   esac
   [[ "$prev" == "--chassis" ]]     && CLI_CHASSIS="$arg"
   [[ "$prev" == "--port"    ]]     && PORT="$arg"
   [[ "$prev" == "--rear-camera" ]] && CLI_REAR="$arg"
   prev="$arg"
 done
+
+# Resolve headless mode: CLI flag > $DASHBOARD_HEADLESS env > default (0 = open a
+# local browser, the original behaviour). Accepts 1/true/yes/on (case-insensitive).
+_truthy() { case "${1,,}" in 1|true|yes|on) printf 1 ;; *) printf 0 ;; esac; }
+if [[ -n "$CLI_HEADLESS" ]]; then
+  HEADLESS="$(_truthy "$CLI_HEADLESS")"
+else
+  HEADLESS="$(_truthy "${DASHBOARD_HEADLESS:-0}")"
+fi
 
 # ── ROS 2 environment ─────────────────────────────────────────────────────────
 set +u
@@ -234,18 +256,33 @@ for _ in $(seq 1 30); do
 done
 
 if [[ "$READY" == "1" ]]; then
-  log "Server ready — opening browser at $URL"
-  log "  Network → http://${NET_IP}:${PORT}"
-  if command -v firefox &>/dev/null; then
-    setsid firefox --new-window "$URL" </dev/null &>/dev/null &
-  elif command -v firefox-esr &>/dev/null; then
-    setsid firefox-esr --new-window "$URL" </dev/null &>/dev/null &
-  elif command -v chromium-browser &>/dev/null; then
-    setsid chromium-browser "$URL" </dev/null &>/dev/null &
-  elif command -v xdg-open &>/dev/null; then
-    setsid xdg-open "$URL" </dev/null &>/dev/null &
+  if [[ "$HEADLESS" == "1" ]]; then
+    log "Server ready — HEADLESS (no local browser opened)."
+    log "  Open the dashboard from your laptop's browser at one of these"
+    log "  (whichever address your laptop can reach this Jetson on):"
+    _shown=0
+    for _ip in $(hostname -I 2>/dev/null); do
+      case "$_ip" in
+        127.*|169.254.*|172.17.*|172.18.*) continue ;;  # skip loopback / link-local / docker bridge
+      esac
+      log "    →  http://${_ip}:${PORT}"
+      _shown=1
+    done
+    [[ "$_shown" == "1" ]] || log "    →  http://${NET_IP}:${PORT}"
   else
-    log "No browser found — open $URL manually"
+    log "Server ready — opening browser at $URL"
+    log "  Network → http://${NET_IP}:${PORT}"
+    if command -v firefox &>/dev/null; then
+      setsid firefox --new-window "$URL" </dev/null &>/dev/null &
+    elif command -v firefox-esr &>/dev/null; then
+      setsid firefox-esr --new-window "$URL" </dev/null &>/dev/null &
+    elif command -v chromium-browser &>/dev/null; then
+      setsid chromium-browser "$URL" </dev/null &>/dev/null &
+    elif command -v xdg-open &>/dev/null; then
+      setsid xdg-open "$URL" </dev/null &>/dev/null &
+    else
+      log "No browser found — open $URL manually"
+    fi
   fi
 else
   log "Server did not respond within 30 s — check the log above"
