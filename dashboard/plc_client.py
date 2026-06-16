@@ -43,6 +43,125 @@ ROBOT_COMMANDS = frozenset({
 
 _UNAVAILABLE = "PLC client unavailable"
 
+# ── PLC tag / register reference ─────────────────────────────────────────────
+# Curated map of the PLC symbols this integration actually touches, surfaced by
+# GET /api/plc/tags for the dashboard's "PLC Reference" panel. For each *read* group,
+# ``source`` names the read endpoint that returns its values (status / sequence /
+# auger_motor) and every field ``key`` matches a JSON key in that response, so the UI
+# can show live values next to the mapping. Each *write* group lists the command set
+# that pulses its bits. Structs/addresses are verified against the PLC global symbol
+# table (docs/plc/GTS_Tree_Planter_symbols.csv); the exact bit index within each shared
+# word and the Modbus address base are the two live-PLC open items (docs/plc/README.md).
+PLC_TAG_MAP = {
+    "read": [
+        {
+            "symbol": "HMI_IND", "address": "%MW1000", "type": "ud_HMI_IND",
+            "rpc": "GetMachineStatus", "api": "/api/plc/status", "source": "status",
+            "desc": "Machine indicators — E-stop, safety gate, fault, mode and per-subsystem enables.",
+            "fields": [
+                {"key": "estop_ok",        "label": "E-stop OK",       "kind": "bool"},
+                {"key": "gate_ok",         "label": "Safety gate OK",  "kind": "bool"},
+                {"key": "faulted",         "label": "Machine faulted", "kind": "bool"},
+                {"key": "mode_auto",       "label": "Auto mode",       "kind": "bool"},
+                {"key": "mode_manual",     "label": "Manual mode",     "kind": "bool"},
+                {"key": "auger_enabled",   "label": "Auger enabled",   "kind": "bool"},
+                {"key": "planter_enabled", "label": "Planter enabled", "kind": "bool"},
+                {"key": "robot_enabled",   "label": "Robot enabled",   "kind": "bool"},
+                {"key": "amr_enabled",     "label": "AMR enabled",     "kind": "bool"},
+            ],
+        },
+        {
+            "symbol": "AugerSeq", "address": "%MW2700", "type": "ud_sequence",
+            "rpc": "GetSequenceDetail", "api": "/api/plc/sequence", "source": "sequence",
+            "desc": "Auger planting-sequence state machine.",
+            "fields": [
+                {"key": "auger_home",        "label": "At home",     "kind": "bool"},
+                {"key": "auger_setup_ok",    "label": "Setup OK",    "kind": "bool"},
+                {"key": "auger_ok_to_start", "label": "OK to start", "kind": "bool"},
+                {"key": "auger_enabled",     "label": "Enabled",     "kind": "bool"},
+                {"key": "auger_in_cycle",    "label": "In cycle",    "kind": "bool"},
+                {"key": "auger_complete",    "label": "Complete",    "kind": "bool"},
+                {"key": "auger_step",        "label": "Step #",      "kind": "uint"},
+            ],
+        },
+        {
+            "symbol": "PlanterSeq", "address": "%MW2800", "type": "ud_sequence",
+            "rpc": "GetSequenceDetail", "api": "/api/plc/sequence", "source": "sequence",
+            "desc": "Planter planting-sequence state machine.",
+            "fields": [
+                {"key": "planter_home",        "label": "At home",     "kind": "bool"},
+                {"key": "planter_setup_ok",    "label": "Setup OK",    "kind": "bool"},
+                {"key": "planter_ok_to_start", "label": "OK to start", "kind": "bool"},
+                {"key": "planter_enabled",     "label": "Enabled",     "kind": "bool"},
+                {"key": "planter_in_cycle",    "label": "In cycle",    "kind": "bool"},
+                {"key": "planter_complete",    "label": "Complete",    "kind": "bool"},
+                {"key": "planter_step",        "label": "Step #",      "kind": "uint"},
+            ],
+        },
+        {
+            "symbol": "HMI_IND_Auger", "address": "%MW2500", "type": "ud_HMI_MotorIND",
+            "rpc": "GetAugerMotorStatus", "api": "/api/plc/auger_motor", "source": "auger_motor",
+            "desc": "Auger VFD telemetry (velocities in raw drive units, 0–4096 typical).",
+            "fields": [
+                {"key": "running",         "label": "Running",          "kind": "bool"},
+                {"key": "fwd_direction",   "label": "Forward dir",      "kind": "bool"},
+                {"key": "faulted",         "label": "Drive faulted",    "kind": "bool"},
+                {"key": "velocity_target", "label": "Vel target (raw)", "kind": "uint"},
+                {"key": "velocity_actual", "label": "Vel actual (raw)", "kind": "uint"},
+            ],
+        },
+    ],
+    "write": [
+        {
+            "symbol": "HMI_PB", "address": "%MW5000", "type": "ud_HMI_PB",
+            "rpc": "MachineCommand", "api": "/api/plc/machine",
+            "desc": "Machine-level pushbuttons — mode, fault-reset, home, and subsystem enables.",
+            "commands": sorted(MACHINE_COMMANDS),
+        },
+        {
+            "symbol": "HMI_PB_Robot", "address": "%MW6200", "type": "ud_HMI_RobotPB",
+            "rpc": "ControlRobot", "api": "/api/plc/robot",
+            "desc": "Robot-arm manipulator pushbuttons.",
+            "commands": sorted(ROBOT_COMMANDS),
+        },
+        {
+            "symbol": "HMI_PB_Auger", "address": "%MW6500", "type": "ud_HMI_MotorPB",
+            "rpc": "ControlAuger", "api": "/api/plc/auger",
+            "desc": "Auger sequence start/stop pushbuttons.",
+            "commands": sorted(SEQUENCE_COMMANDS),
+        },
+    ],
+    "reserved": [
+        {"symbol": "AMR_2_PLC", "address": "%MW100", "type": "ARRAY[0..9] OF WORD",
+         "desc": "Reserved AMR→PLC handshake — declared in the PLC, not referenced in this ladder build."},
+        {"symbol": "PLC_2_AMR", "address": "%MW200", "type": "ARRAY[0..9] OF WORD",
+         "desc": "Reserved PLC→AMR handshake — declared in the PLC, not referenced in this ladder build."},
+    ],
+    "notes": {
+        "verified": "Structs and %MW addresses verified against the PLC global symbol table.",
+        "open_items": [
+            "Exact bit index within each shared word (e.g. SET_AUTO / START / ENABLE_* in HMI_PB) is packed in the binary UDT — bench-confirm in XG5000.",
+            "Modbus address base: the PLC's Modbus-TCP/FEnet server must expose %MW at the offsets the gateway assumes.",
+        ],
+        "planter_seq": "ControlPlanter / ControlBoth are gateway-mapped sequence RPCs; their pushbutton register is internal to the gateway and not separately listed here.",
+    },
+}
+
+
+def symbol_roles():
+    """Map PLC symbol name → role ('read' / 'write' / 'reserved') for annotating the
+    full symbol table. Symbols absent from the map are used by the PLC but not by this
+    integration."""
+    roles = {}
+    for grp in PLC_TAG_MAP["read"]:
+        roles[grp["symbol"]] = "read"
+    for grp in PLC_TAG_MAP["write"]:
+        roles[grp["symbol"]] = "write"
+    for grp in PLC_TAG_MAP["reserved"]:
+        roles[grp["symbol"]] = "reserved"
+    return roles
+
+
 
 def _msg_to_dict(msg):
     """Flatten a protobuf response into a JSON-friendly dict (scalar fields only)."""

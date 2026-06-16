@@ -90,6 +90,7 @@ Unchanged from the agrobot dashboard, plus one new endpoint:
 | POST | `/api/plc/machine` | **New (PLC).** `{command}` (SET_AUTO, ENABLE_*, HOME_ALL, FAULT_RESET…) → `MachineCommand`. |
 | POST | `/api/plc/robot` | **New (PLC).** `{command}` (HOME, START, STOP, PAUSE, MOTORS_ON…) → `ControlRobot`. |
 | GET | `/api/plc/{status,sequence,auger_motor}` | **New (PLC).** `GetMachineStatus` / `GetSequenceDetail` / `GetAugerMotorStatus`. |
+| GET | `/api/plc/tags` | **New (PLC).** Static tag/register reference for the UI's **PLC Reference** panel: the curated read/write/reserved tag map (`plc_client.PLC_TAG_MAP`) + the full PLC symbol table (read from `docs/plc/GTS_Tree_Planter_symbols.csv`), each symbol annotated with its integration role. Makes no gateway call (works gateway-down); 503 on a chassis without a PLC. |
 
 > All `/api/plc/*` routes return **503** on a chassis without `plc.enabled` (jackal). They
 > never 5xx on a downed gateway — the response is a normal 200 with `connected:false`, so
@@ -105,7 +106,8 @@ Unchanged from the agrobot dashboard, plus one new endpoint:
 Gated elements: Modbus master slider (`modbus_slider`), auto-forward-2 m button
 (`fwd2m`), Distance-Traveled + Chassis-Link cards (`wheel_odom`), the Chassis-Battery
 status card (`battery`), the planter/auger buttons + Planted counter (`actuators`), and
-the PLC panels — machine-status strip, Machine-Setup + Robot-Arm sections (`plc`).
+the PLC panels — machine-status strip, Machine-Setup + Robot-Arm sections, and the
+header **PLC Reference** button + panel (`plc`).
 
 > `plc` is a **derived** feature flag: `to_browser_config()` sets `features.plc` from the
 > chassis's `plc.enabled`, so the same hide mechanism gates the PLC UI. It is independent
@@ -234,10 +236,10 @@ blocks on it.
 | File | Role |
 |------|------|
 | `dashboard/plc/` | **Vendored** client stubs (`robot_control_pb2*.py` + the `.proto`). |
-| `dashboard/plc_client.py` | `PlcClient` — thread-safe gRPC wrapper. Lazy-imports grpc/stubs (import-safe without them), one method per RPC, returns plain dicts with `connected`/`success`/`message`, short per-call deadline, auto-reconnect on error. Also exports the command allow-lists. |
+| `dashboard/plc_client.py` | `PlcClient` — thread-safe gRPC wrapper. Lazy-imports grpc/stubs (import-safe without them), one method per RPC, returns plain dicts with `connected`/`success`/`message`, short per-call deadline, auto-reconnect on error. Also exports the command allow-lists and `PLC_TAG_MAP` + `symbol_roles()` (the read/write/reserved tag→register reference served at `/api/plc/tags`). |
 | `dashboard/serve.py` | 8 `/api/plc/*` routes → `Handler.plc.*` (built in `main()` when `chassis.plc_enabled`). |
 | `config/chassis/*.yaml` | `plc: {enabled, host, port}`. agrobot enabled; jackal disabled. |
-| `dashboard/index.html` | `_toggleActuatorPlc` + status/sequence pollers; Machine-Setup & Robot-Arm panels (Settings); PLC status strip. |
+| `dashboard/index.html` | `_toggleActuatorPlc` + status/sequence pollers; Machine-Setup & Robot-Arm panels (Settings); PLC status strip; **PLC Reference panel** (`openPlcPanel`/`_renderPlcRef`) — a header button beside the gear that documents every PLC tag (read/write/reserved · struct · `%MW` · gateway RPC) with live values polled while open, plus the full symbol table from `/api/plc/tags`. |
 
 **Key semantics**
 - `success:true` from the gateway means the **Modbus write landed, not that the machine

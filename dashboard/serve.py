@@ -35,9 +35,11 @@ except ImportError:                       # imported as a package (dashboard.ser
 # PLC command allow-lists (import-safe — plc_client lazy-imports grpc, so this never
 # pulls in grpc at module load and tests run without it).
 try:
-    from plc_client import SEQUENCE_COMMANDS, MACHINE_COMMANDS, ROBOT_COMMANDS
+    from plc_client import (SEQUENCE_COMMANDS, MACHINE_COMMANDS, ROBOT_COMMANDS,
+                            PLC_TAG_MAP, symbol_roles)
 except ImportError:
-    from dashboard.plc_client import SEQUENCE_COMMANDS, MACHINE_COMMANDS, ROBOT_COMMANDS
+    from dashboard.plc_client import (SEQUENCE_COMMANDS, MACHINE_COMMANDS, ROBOT_COMMANDS,
+                                      PLC_TAG_MAP, symbol_roles)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -231,6 +233,8 @@ class Handler(SimpleHTTPRequestHandler):
             self._serve_plc_read('get_sequence_detail')
         elif self.path == '/api/plc/auger_motor':
             self._serve_plc_read('get_auger_motor_status')
+        elif self.path == '/api/plc/tags':
+            self._serve_plc_tags()
         else:
             # Only serve the dashboard HTML and logo assets; everything else
             # (including serve.py) returns 403 to avoid exposing server internals.
@@ -577,6 +581,34 @@ class Handler(SimpleHTTPRequestHandler):
             return
         result = getattr(client, method_name)()
         self._json_response(200, json.dumps(result).encode())
+
+    def _serve_plc_tags(self):
+        """GET /api/plc/tags — static PLC tag/register reference for the UI's PLC panel:
+        the curated read/write/reserved tag map (PLC_TAG_MAP) plus the full PLC symbol
+        table read from docs/plc/, each symbol annotated with its integration role. No
+        gateway call — works whether or not the gateway is up; only gated on the chassis
+        having a PLC (jackal → 503, via _plc_client)."""
+        if self._plc_client() is None:
+            return
+        roles   = symbol_roles()
+        symbols = []
+        csv_path = DASHBOARD_DIR.parent / "docs" / "plc" / "GTS_Tree_Planter_symbols.csv"
+        try:
+            import csv as _csv
+            with open(csv_path, newline="") as fh:
+                for row in _csv.DictReader(fh):
+                    name = (row.get("Name") or "").strip()
+                    if not name:
+                        continue
+                    symbols.append({
+                        "name":    name,
+                        "type":    (row.get("Type") or "").strip(),
+                        "address": (row.get("Address") or "").strip(),
+                        "role":    roles.get(name, ""),
+                    })
+        except Exception as exc:
+            log.warning("PLC symbol table unavailable (%s): %s", csv_path, exc)
+        self._json_response(200, json.dumps({"map": PLC_TAG_MAP, "symbols": symbols}).encode())
 
     def _serve_plc_sequence(self, method_name):
         """POST {command: START|STOP} — forward a sequence RPC (control_auger /

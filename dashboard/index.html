@@ -288,6 +288,61 @@
     .plc-sub-row .plc-sub-name { font-size: 12px; font-weight: 600; color: #adbac7; }
     .plc-sub-row .sp-btn { flex: 0 0 auto; padding: 3px 10px; }
 
+    /* ── PLC Reference panel ── */
+    .plc-ref-loading { color: #7d8590; font-size: 13px; padding: 8px 0; }
+    .plc-ref-conn {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 13px; font-weight: 600; padding: 8px 12px;
+      border-radius: 8px; border: 1px solid #21262d; background: #0d1117;
+    }
+    .plc-ref-conn.online  { color: #3fb950; border-color: #1a7f4b; }
+    .plc-ref-conn.offline { color: #f85149; border-color: #9e2620; }
+    .plc-ref-group {
+      border: 1px solid #21262d; border-radius: 8px; overflow: hidden; background: #0d1117;
+    }
+    .plc-ref-ghead {
+      display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+      padding: 10px 12px; background: #161b22; border-bottom: 1px solid #21262d;
+    }
+    .plc-ref-sym  { font-size: 13px; font-weight: 700; color: #e6edf3; font-family: ui-monospace, monospace; }
+    .plc-ref-addr { font-size: 12px; color: #58a6ff; font-family: ui-monospace, monospace; }
+    .plc-ref-type { font-size: 11px; color: #7d8590; font-family: ui-monospace, monospace; }
+    .plc-ref-rpc  { font-size: 11px; color: #8b949e; margin-left: auto; }
+    .plc-ref-desc { font-size: 11px; color: #7d8590; padding: 8px 12px 0; }
+    .plc-ref-role {
+      font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
+      padding: 2px 7px; border-radius: 10px; border: 1px solid;
+    }
+    .plc-ref-role.read     { color: #58a6ff; border-color: #1f6feb; }
+    .plc-ref-role.write    { color: #d29922; border-color: #9e6a03; }
+    .plc-ref-role.reserved { color: #8b949e; border-color: #30363d; }
+    .plc-ref-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .plc-ref-table td { padding: 5px 12px; border-top: 1px solid #161b22; }
+    .plc-ref-table td.fld   { color: #adbac7; }
+    .plc-ref-table td.val   { text-align: right; font-family: ui-monospace, monospace; color: #7d8590; }
+    .plc-ref-table td.val.on  { color: #3fb950; font-weight: 700; }
+    .plc-ref-table td.val.off { color: #6e7681; }
+    .plc-ref-table td.val.num { color: #e6edf3; }
+    .plc-ref-cmds { display: flex; flex-wrap: wrap; gap: 5px; padding: 10px 12px; }
+    .plc-ref-cmd {
+      font-size: 11px; font-family: ui-monospace, monospace; color: #adbac7;
+      padding: 2px 8px; background: #161b22; border: 1px solid #30363d; border-radius: 5px;
+    }
+    .plc-ref-note {
+      font-size: 11px; color: #8b949e; line-height: 1.5;
+      padding: 10px 12px; background: #0d1117; border: 1px solid #21262d; border-radius: 8px;
+    }
+    .plc-ref-note b { color: #d29922; }
+    .plc-ref-note ul { margin: 6px 0 0; padding-left: 18px; }
+    .plc-symtable { width: 100%; border-collapse: collapse; font-size: 11.5px; font-family: ui-monospace, monospace; }
+    .plc-symtable th {
+      text-align: left; color: #7d8590; font-weight: 600; padding: 6px 8px;
+      border-bottom: 1px solid #30363d; position: sticky; top: 0; background: #0d1117;
+    }
+    .plc-symtable td { padding: 5px 8px; border-top: 1px solid #161b22; color: #adbac7; }
+    .plc-symtable td.addr { color: #58a6ff; }
+    .plc-symtable tr.used td { color: #e6edf3; }
+
     /* ── Action cluster (actuators + 2m + REC) ── */
     /* Flex rows so each row fills the same total width regardless of how many
        buttons it holds — e.g. row 2 with 2 buttons (jackal) still spans the full
@@ -736,6 +791,7 @@
          onerror="this.style.display='none';document.getElementById('logoText').style.display='block'">
     <span id="logoText" style="display:none;font-size:18px;font-weight:700;color:#e6edf3;letter-spacing:.5px">AGROBOT ROBOTICS</span>
     <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+      <button class="gear-btn" id="plcRefBtn" data-chassis-feature="plc" onclick="openPlcPanel()" title="PLC Reference &amp; Diagnostics"><i class="ti ti-cpu" aria-hidden="true"></i></button>
       <button class="gear-btn" id="gearBtn" onclick="openSettings()" title="Advanced Settings"><i class="ti ti-settings" aria-hidden="true"></i></button>
     </div>
   </div>
@@ -1075,6 +1131,18 @@
       </div>
     </div>
 
+  </div>
+</div>
+
+<!-- ── PLC Reference & Diagnostics overlay ── -->
+<div class="settings-overlay" id="plcOverlay" onclick="closePlcPanel()"></div>
+<div class="settings-panel" id="plcPanel">
+  <div class="sp-header">
+    <div class="sp-title"><i class="ti ti-cpu" aria-hidden="true"></i> PLC Reference</div>
+    <button class="sp-close" onclick="closePlcPanel()" title="Close"><i class="ti ti-x" aria-hidden="true"></i></button>
+  </div>
+  <div class="sp-body" id="plcPanelBody">
+    <div class="plc-ref-loading">Loading PLC tag map…</div>
   </div>
 </div>
 
@@ -2093,6 +2161,157 @@ function closeSettings() {
   document.getElementById('settingsPanel').classList.remove('open');
   document.getElementById('gearBtn').classList.remove('open');
   _stopSpPoll();
+}
+
+/* ── PLC Reference & Diagnostics panel ────────────────────────────────────────
+   Side panel (mirrors Advanced Settings) documenting every PLC tag: which we read,
+   which we write, what each maps to (struct · %MW address · gateway RPC), plus the
+   full PLC symbol table. On first open it fetches the static tag map (/api/plc/tags)
+   once; while open it polls the read endpoints so each mapped tag shows its live
+   value. Machine status reuses the always-on _plcStatus global; sequence + auger-motor
+   are polled here only while the panel is open. */
+let _plcRefMap   = null;       // cached /api/plc/tags payload
+let _plcRefTimer = null;
+let _plcRefLive  = { status: {}, sequence: {}, auger_motor: {} };
+
+function openPlcPanel() {
+  document.getElementById('plcOverlay').classList.add('open');
+  document.getElementById('plcPanel').classList.add('open');
+  document.getElementById('plcRefBtn').classList.add('open');
+  if (!_plcRefMap) {
+    _fetchWithTimeout('/api/plc/tags', { cache: 'no-store' }, 3000)
+      .then(r => r.ok ? r.json() : null)
+      .then(m => { _plcRefMap = m; _renderPlcRef(); })
+      .catch(() => { document.getElementById('plcPanelBody').innerHTML =
+        '<div class="plc-ref-loading">PLC tag map unavailable.</div>'; });
+  } else {
+    _renderPlcRef();
+  }
+  _pollPlcRefLive();
+  if (!_plcRefTimer) _plcRefTimer = setInterval(_pollPlcRefLive, 1000);
+}
+
+function closePlcPanel() {
+  document.getElementById('plcOverlay').classList.remove('open');
+  document.getElementById('plcPanel').classList.remove('open');
+  document.getElementById('plcRefBtn').classList.remove('open');
+  if (_plcRefTimer) { clearInterval(_plcRefTimer); _plcRefTimer = null; }
+}
+
+async function _pollPlcRefLive() {
+  _plcRefLive.status = _plcStatus || {};       // already polled app-wide while PLC enabled
+  const get = (p) => _fetchWithTimeout(p, { cache: 'no-store' }, 2500)
+                       .then(r => r.json()).catch(() => ({ connected: false }));
+  const [seq, aug] = await Promise.all([get('/api/plc/sequence'), get('/api/plc/auger_motor')]);
+  _plcRefLive.sequence    = seq || {};
+  _plcRefLive.auger_motor = aug || {};
+  _updatePlcRefLive();
+}
+
+function _plcEsc(s) {
+  return String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+}
+
+function _plcRefHead(g, role) {
+  return '<div class="plc-ref-ghead">' +
+    '<span class="plc-ref-sym">'  + _plcEsc(g.symbol)  + '</span>' +
+    '<span class="plc-ref-addr">' + _plcEsc(g.address) + '</span>' +
+    '<span class="plc-ref-type">' + _plcEsc(g.type)    + '</span>' +
+    '<span class="plc-ref-role ' + role + '">' + role + '</span>' +
+    (g.rpc ? '<span class="plc-ref-rpc">' + _plcEsc(g.rpc) + '</span>' : '') +
+    '</div>' + (g.desc ? '<div class="plc-ref-desc">' + _plcEsc(g.desc) + '</div>' : '');
+}
+
+function _renderPlcRef() {
+  const body = document.getElementById('plcPanelBody');
+  if (!_plcRefMap || !_plcRefMap.map) {
+    body.innerHTML = '<div class="plc-ref-loading">PLC tag map unavailable.</div>';
+    return;
+  }
+  const m = _plcRefMap.map;
+  let h = '<div class="plc-ref-conn" id="plcRefConn">● Gateway —</div>';
+
+  // Read groups — each field shows its live value.
+  h += '<div class="sp-section"><div class="sp-section-title">Tags we read from the PLC</div>';
+  (m.read || []).forEach(g => {
+    h += '<div class="plc-ref-group">' + _plcRefHead(g, 'read') + '<table class="plc-ref-table"><tbody>';
+    (g.fields || []).forEach(f => {
+      h += '<tr><td class="fld">' + _plcEsc(f.label) + '</td>' +
+           '<td class="val" id="plcv_' + g.source + '_' + f.key + '">—</td></tr>';
+    });
+    h += '</tbody></table></div>';
+  });
+  h += '</div>';
+
+  // Write groups — command set that pulses each pushbutton struct.
+  h += '<div class="sp-section"><div class="sp-section-title">Tags we write to the PLC</div>';
+  (m.write || []).forEach(g => {
+    h += '<div class="plc-ref-group">' + _plcRefHead(g, 'write') + '<div class="plc-ref-cmds">' +
+         (g.commands || []).map(c => '<span class="plc-ref-cmd">' + _plcEsc(c) + '</span>').join('') +
+         '</div></div>';
+  });
+  h += '</div>';
+
+  // Reserved (declared in the PLC, not used by the integration).
+  if (m.reserved && m.reserved.length) {
+    h += '<div class="sp-section"><div class="sp-section-title">Reserved (declared, unused)</div>';
+    m.reserved.forEach(g => { h += '<div class="plc-ref-group">' + _plcRefHead(g, 'reserved') + '</div>'; });
+    h += '</div>';
+  }
+
+  // Verification notes / open items.
+  if (m.notes) {
+    h += '<div class="sp-section"><div class="sp-section-title">Verification</div>';
+    h += '<div class="plc-ref-note">' + _plcEsc(m.notes.verified || '');
+    if (m.notes.open_items && m.notes.open_items.length) {
+      h += ' <b>Open items (confirm on live PLC):</b><ul>' +
+           m.notes.open_items.map(i => '<li>' + _plcEsc(i) + '</li>').join('') + '</ul>';
+    }
+    if (m.notes.planter_seq) h += '<div style="margin-top:6px">' + _plcEsc(m.notes.planter_seq) + '</div>';
+    h += '</div></div>';
+  }
+
+  // Full PLC symbol table (every declared tag; integration roles highlighted).
+  const syms = _plcRefMap.symbols || [];
+  if (syms.length) {
+    h += '<div class="sp-section"><div class="sp-section-title">Full PLC symbol table (' + syms.length + ')</div>';
+    h += '<table class="plc-symtable"><thead><tr><th>Name</th><th>Type</th><th>Address</th><th>Role</th></tr></thead><tbody>';
+    syms.forEach(s => {
+      h += '<tr class="' + (s.role ? 'used' : '') + '"><td>' + _plcEsc(s.name) + '</td><td>' + _plcEsc(s.type) +
+           '</td><td class="addr">' + _plcEsc(s.address) + '</td><td>' + (s.role || '—') + '</td></tr>';
+    });
+    h += '</tbody></table></div>';
+  }
+
+  body.innerHTML = h;
+  _updatePlcRefLive();
+}
+
+function _updatePlcRefLive() {
+  if (!_plcRefMap || !_plcRefMap.map) return;
+  const online = _plcRefLive.status && _plcRefLive.status.connected !== false;
+  const conn = document.getElementById('plcRefConn');
+  if (conn) {
+    conn.textContent = online ? '● Gateway online' : '● Gateway offline';
+    conn.className = 'plc-ref-conn ' + (online ? 'online' : 'offline');
+  }
+  (_plcRefMap.map.read || []).forEach(g => {
+    const src = _plcRefLive[g.source] || {};
+    const srcOnline = src.connected !== false;
+    (g.fields || []).forEach(f => {
+      const el = document.getElementById('plcv_' + g.source + '_' + f.key);
+      if (!el) return;
+      const v = src[f.key];
+      if (!srcOnline || v === undefined) { el.textContent = '—'; el.className = 'val'; return; }
+      if (f.kind === 'bool') {
+        el.textContent = v ? 'TRUE' : 'false';
+        el.className   = 'val ' + (v ? 'on' : 'off');
+      } else {
+        el.textContent = v;
+        el.className   = 'val num';
+      }
+    });
+  });
 }
 
 let _modbusMasterDragging = false;
