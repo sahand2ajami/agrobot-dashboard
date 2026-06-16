@@ -152,13 +152,13 @@ class Chassis:
         self.slave_id        = self.cfg.get("slave_id")
         self.chassis_variant = self.cfg.get("chassis_variant")
 
-        # PLC Gateway (agrobot tree-planter only). The dashboard relays auger / planter /
-        # robot-arm commands to the gRPC gateway at plc_host:plc_port; disabled chassis
-        # (jackal) simply leave plc_enabled false and the PLC endpoints/UI stay hidden.
+        # PLC (agrobot tree-planter only). The dashboard sends auger / planter / robot-arm
+        # commands DIRECTLY over Modbus TCP to the PLC at plc_host:plc_port (502); disabled
+        # chassis (jackal) simply leave plc_enabled false and the PLC endpoints/UI stay hidden.
         plc = dict(self.cfg.get("plc") or {})
         self.plc_enabled = bool(plc.get("enabled", False))
         self.plc_host    = plc.get("host", "127.0.0.1")
-        self.plc_port    = int(plc.get("port", 50051))
+        self.plc_port    = int(plc.get("port", 502))
 
     # -- helpers --------------------------------------------------------------
     def has_feature(self, key):

@@ -2026,14 +2026,13 @@ function _renderPlcStatus(d) {
 
 function _updatePlcButtons(d) {
   const online = d && d.connected !== false;
-  // Sequence buttons: need gateway online + Auto mode (PLC refuses starts in Manual).
-  const seqReady = online && d.mode_auto;
+  // Auger / planter / both all just pulse AMR_2_PLC handshake bits, so enable them
+  // whenever the PLC is online (no Auto-mode gate — same as the auger).
   const planterBtn = document.getElementById('planterBtn');
   const bothBtn    = document.getElementById('bothBtn');
   const augerBtn   = document.getElementById('augerBtn');
-  if (planterBtn) planterBtn.disabled = !seqReady;
-  if (bothBtn)    bothBtn.disabled    = !seqReady;
-  // Auger doubles as a stop button while running, so allow it whenever online.
+  if (planterBtn) planterBtn.disabled = !online;
+  if (bothBtn)    bothBtn.disabled    = !online;
   if (augerBtn) {
     augerBtn.disabled = !online;
     augerBtn.classList.toggle('on', online && !!d.auger_in_cycle);

@@ -86,7 +86,7 @@ Unchanged from the agrobot dashboard, plus one new endpoint:
 | POST | `/api/cmd_vel` | `{linear_x, angular_z}`. Rejected with 400 if it exceeds the **active chassis's** `max_linear`/`max_angular` (falls back to module `MAX_*` when `Handler.chassis` is unset, e.g. in tests). |
 | POST | `/api/fwd2m` | Server-side 2 m auto-drive. Returns 503 on a chassis whose `fwd2m` feature is false (jackal). |
 | GET | `/api/wheel_odom`, `/api/camera*`, `/api/zed*`, `/api/detection*`, `/api/gnss`, `/api/settings` | As before. |
-| POST | `/api/plc/{auger,planter,both}` | **New (PLC).** `{command: START\|STOP}` → gRPC `ControlAuger/Planter/Both`. |
+| POST | `/api/plc/{auger,planter,both}` | **New (PLC).** `{command: START\|STOP}` → Modbus pulse of the auger/planter pushbutton word(s). |
 | POST | `/api/plc/machine` | **New (PLC).** `{command}` (SET_AUTO, ENABLE_*, HOME_ALL, FAULT_RESET…) → `MachineCommand`. |
 | POST | `/api/plc/robot` | **New (PLC).** `{command}` (HOME, START, STOP, PAUSE, MOTORS_ON…) → `ControlRobot`. |
 | GET | `/api/plc/{status,sequence,auger_motor}` | **New (PLC).** `GetMachineStatus` / `GetSequenceDetail` / `GetAugerMotorStatus`. |
@@ -206,55 +206,54 @@ dashboard path uses `robot_base_node` directly.
 
 ## PLC integration (agrobot tree-planter)
 
-The auger, planter, and robot manipulator are owned by an **LS Electric PLC**, fronted by
-a separate **gRPC gateway** (`~/plc_gateway/gRPC-Gateway-Agrobot`, port 50051) that turns
-clean RPCs into Modbus TCP writes. The browser can't speak gRPC, so `serve.py` is the gRPC
-client and relays everything as REST:
+The auger, planter, and robot manipulator are owned by an **LS Electric PLC**. The dashboard
+talks to it **directly over Modbus TCP** — `serve.py` is the Modbus client and relays the
+browser's button presses as REST:
 
 ```
-Browser ──REST──► serve.py ──gRPC──► PLC Gateway ──Modbus TCP──► LS Electric PLC
-        :8766              :50051                  :502
+Browser ──REST──► serve.py ──Modbus TCP──► LS Electric PLC
+        :8766              :502 (192.168.1.2, CPU Ethernet port on the LAN)
 ```
 
-**Run the gateway separately** (`cd ~/plc_gateway/... && python main.py`). The dashboard
-connects lazily and degrades gracefully ("Gateway offline") when it's down — startup never
-blocks on it.
+The PLC is reached over the LAN cable: the Jetson's `eno1` carries an address on the PLC's
+`192.168.1.0/24` subnet (`192.168.1.100/24`, set in `agrobot.yaml`'s `host_ip` + persisted on
+`eno1`); the PLC CPU's Ethernet port at `192.168.1.2` serves Modbus TCP on 502 (the FEnet
+card at `.1` speaks LS's own protocol — 502 is NOT served there). The dashboard connects
+lazily and degrades gracefully ("PLC offline", a normal 200 with `connected:false`) when the
+PLC is unreachable — startup never blocks on it.
 
-**Testing without the PLC — three fidelity tiers:**
-1. **Emulator (recommended, no PLC, no real gateway)** — `scripts/mock_plc_gateway.py`
-   is a Python gRPC server that speaks the same `RobotService` on :50051 using the vendored
-   stubs (so it runs in the dashboard's own Python — only `grpcio`). It emulates mode/safety
-   gating and auger/planter cycles that auto-complete after `--cycle-secs`, so the full UI
-   flow works (start → in-cycle → "complete" toast → seedling pin). `--auto` boots in AUTO
-   with everything enabled; `--fault`/`--estop`/`--gate-open` exercise the safety badges.
-2. **Real gateway in offline/mock mode** — `python main.py` in `~/plc_gateway` with no PLC
-   reachable. Exercises the *actual* gateway code, but machine state isn't realistic (no
-   sequence completion). Note the gateway needs grpcio≥1.81 + protobuf 6.x in its own venv.
-3. **XG5000 PLC simulator** — LS Electric's Windows tool runs the real ladder logic; highest
-   fidelity, but Windows-only (not on the Jetson). Point the gateway's `PLC_IP` at it.
+> **History — the gRPC gateway was removed.** This used to route through a separate gRPC
+> gateway process (`~/plc_gateway/gRPC-Gateway-Agrobot`, port 50051): `serve.py ─gRPC─► gateway
+> ─Modbus─► PLC`. The gateway ran on the same Jetson serving only this dashboard, so the gRPC
+> hop was pure overhead — plus its stubs needed protobuf 6.x and wouldn't boot under the
+> Jetson's 4.25.x. `plc_client.py` now embeds the gateway's register map + command bit-values
+> + pulse pattern and speaks Modbus itself. The old gateway repo, `dashboard/plc/` (vendored
+> gRPC stubs), and `scripts/mock_plc_gateway.py` are **no longer used** by the dashboard.
+
+**Testing without the real PLC:** point `plc.host` in `agrobot.yaml` at any Modbus-TCP server
+that exposes the `%MW`/`%MX` registers in `plc_client._REG` — e.g. a `pymodbus` simulator on
+the Jetson, or LS Electric's **XG5000** simulator (Windows, highest fidelity — runs the real
+ladder). There is no longer a Python gRPC emulator; the old `mock_plc_gateway.py` is obsolete.
 
 | File | Role |
 |------|------|
-| `dashboard/plc/` | **Vendored** client stubs (`robot_control_pb2*.py` + the `.proto`). |
-| `dashboard/plc_client.py` | `PlcClient` — thread-safe gRPC wrapper. Lazy-imports grpc/stubs (import-safe without them), one method per RPC, returns plain dicts with `connected`/`success`/`message`, short per-call deadline, auto-reconnect on error. Also exports the command allow-lists and `PLC_TAG_MAP` + `symbol_roles()` (the read/write/reserved tag→register reference served at `/api/plc/tags`). |
+| `dashboard/plc_client.py` | `PlcClient` — thread-safe **Modbus TCP** client (`pymodbus`, lazy-imported so it's import-safe / `pytest`-safe without it). One method per operation, returns plain dicts with `connected`/`success`/`message`, short socket timeout, auto-reconnect on error. Holds the ported register map (`_REG`) + command bit tables (`_MACHINE_CMD_MAP`/`_ROBOT_CMD_MAP`) + pulse helper. Also exports the command allow-lists and `PLC_TAG_MAP` + `symbol_roles()` (the read/write/reserved tag→register reference served at `/api/plc/tags`). |
 | `dashboard/serve.py` | 8 `/api/plc/*` routes → `Handler.plc.*` (built in `main()` when `chassis.plc_enabled`). |
-| `config/chassis/*.yaml` | `plc: {enabled, host, port}`. agrobot enabled; jackal disabled. |
-| `dashboard/index.html` | `_toggleActuatorPlc` + status/sequence pollers; Machine-Setup & Robot-Arm panels (Settings); PLC status strip; **PLC Reference panel** (`openPlcPanel`/`_renderPlcRef`) — a header button beside the gear that documents every PLC tag (read/write/reserved · struct · `%MW` · gateway RPC) with live values polled while open, plus the full symbol table from `/api/plc/tags`. |
+| `config/chassis/*.yaml` | `plc: {enabled, host, port}` — host/port = the PLC's **Modbus endpoint** (agrobot: `192.168.1.2:502`). jackal disabled. |
+| `dashboard/index.html` | `_toggleActuatorPlc` + status/sequence pollers; Machine-Setup & Robot-Arm panels (Settings); PLC status strip; **PLC Reference panel** (`openPlcPanel`/`_renderPlcRef`) — documents every PLC tag (read/write/reserved · struct · `%MW`) with live values polled while open, plus the full symbol table from `/api/plc/tags`. |
 
 **Key semantics**
-- `success:true` from the gateway means the **Modbus write landed, not that the machine
-  moved** — the PLC ladder gates real motion on Auto-mode + subsystem-enabled + safety. So
-  the UI confirms real completion by polling `GetSequenceDetail` and watching `*_in_cycle`
-  go `true → false` (then toasts "complete" and, for the planter, logs the seedling pin).
-- The actuator buttons branch on `_plcEnabled`: real PLC on agrobot, original cosmetic
-  pin-drop on jackal. Sequence-start buttons are disabled outside Auto mode.
-
-**protobuf-version caveat (important).** The gateway's committed stubs are generated with
-protobuf 6.x and **won't import** under the dashboard's protobuf 4.25.x. The stubs in
-`dashboard/plc/` are therefore a **client-side copy regenerated for protobuf 4.x** (gRPC
-wire format is version-independent, so a 4.x client talks to the 6.x gateway fine — this is
-verified). To regenerate after a `.proto` change, see the header of
-[dashboard/plc/__init__.py](dashboard/plc/__init__.py).
+- `success:true` means the **Modbus write landed, not that the machine moved** — the PLC
+  ladder gates real motion on Auto-mode + subsystem-enabled + safety. So the UI confirms real
+  completion by polling `get_sequence_detail` and watching `*_in_cycle` go `true → false`
+  (then toasts "complete" and, for the planter, logs the seedling pin).
+- The actuator buttons branch on `_plcEnabled`: real PLC on agrobot, original cosmetic pin-drop
+  on jackal. Sequence-start buttons are disabled outside Auto mode.
+- **Pushbuttons are pulsed**, mirroring the HMI: write the bit value → hold 100 ms → write 0.
+  Auger uses `%MW6500` (START=1/STOP=2); the planter has no MotorPB word so it's driven via
+  the machine PB word `%MW5000` (START=8192/STOP=16384); robot via `%MW6200`; machine commands
+  via `%MW5000`/`%MW5001` bits. M-area Modbus offset is 0 (so `%MW6500` → holding register 6500,
+  `%MX43204` → coil 43204) — verify this base matches the PLC's Modbus server if reads look off.
 
 ---
 

@@ -179,6 +179,20 @@ start_gnss() {
 if [[ "$CHASSIS" == "agrobot" ]]; then
   # The agrobot robot exposes its base over Modbus RTU; we run the full sensor stack.
 
+  # The auger/planter/robot-arm PLC sits on the LAN (192.168.1.0/24, via the gRPC
+  # gateway → Modbus TCP at robot_ip:502). Ensure the Jetson has an address on that
+  # subnet so the gateway can reach the PLC. Idempotent — skips if already present
+  # (it is normally persisted on eno1 via NetworkManager).
+  if [[ -n "${CH_IFACE:-}" && -n "${CH_HOSTIP:-}" ]]; then
+    ip_only="${CH_HOSTIP%%/*}"
+    subnet="${ip_only%.*}."
+    if ! ip addr show "$CH_IFACE" 2>/dev/null | grep -q "$subnet"; then
+      log "[agrobot] Adding $CH_HOSTIP to $CH_IFACE (to reach PLC at ${CH_ROBOTIP:-192.168.1.2})"
+      sudo ip addr add "$CH_HOSTIP" dev "$CH_IFACE" 2>/dev/null || \
+        log "  (could not add IP — may already exist or need sudo)"
+    fi
+  fi
+
   log "[agrobot] Starting RealSense D435i (color only — depth/alignment disabled to save CPU)"
   ros2 run realsense2_camera realsense2_camera_node --ros-args \
     -r __node:=camera -r __ns:=/camera \

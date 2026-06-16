@@ -46,15 +46,24 @@ baud: 38400
 slave_id: 1
 chassis_variant: T13    # T3 | T13 | T17E — selects odom_calculation params + URDF
 
-# PLC Gateway — the auger / planter / robot manipulator are owned by an LS Electric
-# PLC, fronted by a gRPC gateway (~/plc_gateway/gRPC-Gateway-Agrobot on port 50051). The
-# dashboard relays the actuator + robot-arm buttons to it. Run the gateway SEPARATELY;
-# the dashboard connects on demand and degrades gracefully ("Gateway offline") when it
-# is not up. host/port point at the gateway (localhost when co-located on the Jetson).
+# LAN network setup, applied by launch_dashboard.sh before starting the server.
+# The LS Electric PLC hangs off an Ethernet switch on the 192.168.1.0/24 subnet:
+#   192.168.1.1  FEnet card (LS protocol; Modbus 502 NOT served here)
+#   192.168.1.2  CPU Ethernet port — runs the Modbus TCP server the gateway uses
+# The Jetson needs an address on this subnet so the gateway can reach the PLC.
+host_iface: eno1
+host_ip: 192.168.1.100/24    # Jetson address on the PLC subnet
+robot_ip: 192.168.1.2        # PLC CPU Ethernet port (Modbus TCP target)
+
+# PLC — the auger / planter / robot manipulator are owned by an LS Electric PLC. The
+# dashboard talks to it DIRECTLY over Modbus TCP (no gRPC gateway anymore; that hop was
+# removed — see dashboard/plc_client.py). host/port point at the PLC's Modbus server: the
+# CPU Ethernet port on the LAN (same as robot_ip above). The dashboard connects on demand
+# and degrades gracefully ("PLC offline") when it is unreachable — startup never blocks.
 plc:
   enabled: true
-  host: 127.0.0.1
-  port: 50051
+  host: 192.168.1.2
+  port: 502
 
 # Dashboard panels available on this chassis.
 features:

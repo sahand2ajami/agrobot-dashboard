@@ -1,25 +1,32 @@
-"""Thin gRPC client to the PLC Gateway (RobotService on :50051).
+"""Direct Modbus TCP client to the LS Electric PLC (no gRPC gateway).
 
-The dashboard's HTTP server (serve.py) owns one PlcClient and exposes its RPCs as
-REST endpoints, so the browser never speaks gRPC directly:
+The dashboard's HTTP server (serve.py) owns one PlcClient and exposes its operations
+as REST endpoints. The browser can't speak Modbus, so serve.py is the Modbus client:
 
-    Browser --REST--> serve.py --gRPC--> PLC Gateway --Modbus TCP--> LS Electric PLC
+    Browser --REST--> serve.py --Modbus TCP--> LS Electric PLC @ host:port (502)
+
+This used to relay through a separate gRPC gateway process (serve.py --gRPC--> gateway
+--Modbus TCP--> PLC). The gateway ran on the same Jetson serving only this dashboard, so
+the gRPC hop was pure overhead plus a protobuf-version mismatch that stopped it booting.
+The register map, command bit-values, pulse pattern and the JSON shapes below are ported
+verbatim from that gateway (config.LS_CONF + network/grpc_server.py), so serve.py and the
+whole UI are unchanged — only the transport moved from gRPC to Modbus.
 
 Design points (mirroring chassis.py / the camera threads):
-- ``grpc`` and the vendored stubs are imported *lazily* inside the client, so this
-  module imports fine — and ``pytest tests/`` runs — even where grpc / the stubs are
-  absent. Nothing here pulls in hardware at import time.
-- Every public method returns a plain ``dict`` (never a protobuf) and never raises into
-  the HTTP handler: on a Gateway that is offline / unreachable it returns
-  ``{"connected": False, "success": False, "message": ...}``. A short per-call deadline
-  keeps a dead Gateway from stalling a request thread.
-- ``success: true`` from the Gateway means the Modbus write landed, *not* that the
-  machine moved (the PLC ladder gates real motion on mode/safety/preconditions). The UI
-  confirms real completion by polling GetSequenceDetail / GetMachineStatus.
+- ``pymodbus`` is imported *lazily* inside the client, so this module imports fine — and
+  ``pytest tests/`` runs — even where pymodbus is absent. Nothing pulls in hardware at
+  import time.
+- Every public method returns a plain ``dict`` and never raises into the HTTP handler: on
+  an unreachable PLC it returns ``{"connected": False, "success": False, "message": ...}``.
+  A short socket timeout keeps a dead PLC from stalling a request thread.
+- ``success: true`` means the Modbus write landed, *not* that the machine moved (the PLC
+  ladder gates real motion on Auto-mode/safety/enable). The UI confirms real completion by
+  polling get_sequence_detail and watching ``*_in_cycle``.
 """
 
 import logging
 import threading
+import time
 
 log = logging.getLogger("plc_client")
 
@@ -125,25 +132,29 @@ PLC_TAG_MAP = {
             "commands": sorted(ROBOT_COMMANDS),
         },
         {
-            "symbol": "HMI_PB_Auger", "address": "%MW6500", "type": "ud_HMI_MotorPB",
-            "rpc": "ControlAuger", "api": "/api/plc/auger",
-            "desc": "Auger sequence start/stop pushbuttons.",
+            "symbol": "AMR_2_PLC[0].0", "address": "%MX1600", "type": "BOOL (bit 0 of %MW100)",
+            "rpc": "—", "api": "/api/plc/auger",
+            "desc": "Auger button → activates AMR_2_PLC[0].0 (pulsed 1→0). AMR→PLC handshake.",
+            "commands": sorted(SEQUENCE_COMMANDS),
+        },
+        {
+            "symbol": "AMR_2_PLC[1].0", "address": "%MX1616", "type": "BOOL (bit 0 of %MW101)",
+            "rpc": "—", "api": "/api/plc/planter",
+            "desc": "Planter button → activates AMR_2_PLC[1].0 (pulsed 1→0). AMR→PLC handshake.",
             "commands": sorted(SEQUENCE_COMMANDS),
         },
     ],
     "reserved": [
-        {"symbol": "AMR_2_PLC", "address": "%MW100", "type": "ARRAY[0..9] OF WORD",
-         "desc": "Reserved AMR→PLC handshake — declared in the PLC, not referenced in this ladder build."},
         {"symbol": "PLC_2_AMR", "address": "%MW200", "type": "ARRAY[0..9] OF WORD",
          "desc": "Reserved PLC→AMR handshake — declared in the PLC, not referenced in this ladder build."},
     ],
     "notes": {
-        "verified": "Structs and %MW addresses verified against the PLC global symbol table.",
+        "verified": "Structs and %MW/%MX addresses verified against the PLC global symbol table.",
         "open_items": [
             "Exact bit index within each shared word (e.g. SET_AUTO / START / ENABLE_* in HMI_PB) is packed in the binary UDT — bench-confirm in XG5000.",
-            "Modbus address base: the PLC's Modbus-TCP/FEnet server must expose %MW at the offsets the gateway assumes.",
+            "Modbus address base: the PLC's Modbus-TCP server must expose %MW/%MX at offset 0 (so %MW100 bit 0 = coil 1600) — bench-confirm.",
         ],
-        "planter_seq": "ControlPlanter / ControlBoth are gateway-mapped sequence RPCs; their pushbutton register is internal to the gateway and not separately listed here.",
+        "amr_bits": "The auger/planter buttons drive AMR_2_PLC[0].0 / [1].0 directly over Modbus TCP (no gRPC gateway). AugerSeq/PlanterSeq reads above are unchanged.",
     },
 }
 
@@ -163,125 +174,321 @@ def symbol_roles():
 
 
 
-def _msg_to_dict(msg):
-    """Flatten a protobuf response into a JSON-friendly dict (scalar fields only)."""
-    return {f.name: getattr(msg, f.name) for f in msg.DESCRIPTOR.fields}
+# ── PLC register map + command tables (ported from the gateway) ──────────────
+# Logical name → LS Electric device address. Only the symbols this dashboard touches;
+# the full table lives in docs/plc/. %MX<n> = M-area bit (Modbus coil), %MW<n> = M-area
+# word (Modbus holding register). M-area Modbus offset is 0 on this XGK PLC, so the
+# numeric part is the Modbus address directly. Verified against config.LS_CONF.
+_REG = {
+    # ── auger / planter activation bits — AMR_2_PLC handshake (AMR→PLC @ %MW100) ──
+    # AMR_2_PLC is ARRAY[0..9] OF WORD at %MW100, so element k = %MW(100+k); ".0" = bit 0
+    # of that word → coil %MX((100+k)×16). Pulsed: write 1 → hold 100 ms → write 0.
+    "AUGER_AMR_BIT":       "%MX1600",   # AMR_2_PLC[0].0  (%MW100 bit 0)
+    "PLANTER_AMR_BIT":     "%MX1616",   # AMR_2_PLC[1].0  (%MW101 bit 0)
+    # ── machine / robot pushbutton words (writes) — pulsed: write value → 100 ms → 0 ──
+    "HMI_PB_MachineCtrl":  "%MW5000",   # machine PB word (bit values below)
+    "HMI_PB_MachineCtrl2": "%MW5001",   # machine PB word 2 (ResetPlanterSeq/robot/AMR)
+    "ROBOT_PB_CMD":        "%MW6200",   # HMI_PB_Robot word
+    # ── machine status (HMI_IND @ %MW1000) ──
+    "IND_MODE_STATUS":     "%MW1000",   # 0/1 = Manual, 2 = Auto
+    "IND_ESTOP_OK_FL":     "%MX16032",
+    "IND_GATE_OK":         "%MX16040",
+    "IND_FAULTED":         "%MX16208",
+    "IND_AUGER_ENABLED":   "%MX16044",
+    "IND_PLANTER_ENABLED": "%MX16045",
+    "IND_ROBOT_ENABLED":   "%MX16046",
+    "IND_AMR_ENABLED":     "%MX16047",
+    # ── AugerSeq (@ %MW2700 → bits %MX43200+) ──
+    "AUGER_HOME":     "%MX43200",
+    "AUGER_SETUP_OK": "%MX43201",
+    "AUGER_OK_START": "%MX43202",
+    "AUGER_ENABLED":  "%MX43203",
+    "AUGER_IN_CYCLE": "%MX43204",
+    "AUGER_COMPLETE": "%MX43205",
+    "AUGER_STEP":     "%MW2701",
+    # ── PlanterSeq (@ %MW2800 → bits %MX44800+) ──
+    "PLANTER_HOME":     "%MX44800",
+    "PLANTER_SETUP_OK": "%MX44801",
+    "PLANTER_OK_START": "%MX44802",
+    "PLANTER_ENABLED":  "%MX44803",
+    "PLANTER_IN_CYCLE": "%MX44804",
+    "PLANTER_COMPLETE": "%MX44805",
+    "PLANTER_STEP":     "%MW2801",
+    # ── Auger motor (HMI_IND_Auger @ %MW2500) ──
+    "AUGER_MOTOR_VEL_TARGET": "%MW2500",
+    "AUGER_MOTOR_VEL_ACTUAL": "%MW2501",
+    "AUGER_MOTOR_RUN":        "%MX40032",
+    "AUGER_MOTOR_FWD":        "%MX40033",
+    "AUGER_MOTOR_FAULTED":    "%MX40034",
+}
 
+# MachineCommand → (pushbutton word, bit value). See config.LS_CONF %MW5000/%MW5001 bit maps.
+_MACHINE_CMD_MAP = {
+    "START":           ("HMI_PB_MachineCtrl",  64),     # bit 6  StartPVPB
+    "STOP":            ("HMI_PB_MachineCtrl",  128),    # bit 7  StopPVPB
+    "HOME_ALL":        ("HMI_PB_MachineCtrl",  16),     # bit 4  HomeAllPVPB
+    "FAULT_RESET":     ("HMI_PB_MachineCtrl",  2),      # bit 1  FaultResetPVPB
+    "SET_AUTO":        ("HMI_PB_MachineCtrl",  1),      # bit 0  AutoPVPB
+    "SET_MANUAL":      ("HMI_PB_MachineCtrl",  32),     # bit 5  ManualPVPB
+    "ENABLE_AUGER":    ("HMI_PB_MachineCtrl",  2048),   # bit 11 EnableAugerPVPB
+    "DISABLE_AUGER":   ("HMI_PB_MachineCtrl",  4096),   # bit 12 DisableAugerPVPB
+    "ENABLE_PLANTER":  ("HMI_PB_MachineCtrl",  8192),   # bit 13 EnablePlanterPVPB
+    "DISABLE_PLANTER": ("HMI_PB_MachineCtrl",  16384),  # bit 14 DisablePlanterPVPB
+    "RESET_AUGER":     ("HMI_PB_MachineCtrl",  32768),  # bit 15 ResetAugerSeqPVPB
+    "RESET_PLANTER":   ("HMI_PB_MachineCtrl2", 1),      # bit 0  ResetPlanterSeqPVPB
+    "ENABLE_ROBOT":    ("HMI_PB_MachineCtrl2", 8192),   # bit 13 EnableRobotPVPB
+    "DISABLE_ROBOT":   ("HMI_PB_MachineCtrl2", 16384),  # bit 14 DisableRobotPVPB
+    "ENABLE_AMR":      ("HMI_PB_MachineCtrl2", 2048),   # bit 11 EnableAMRPVPB
+    "DISABLE_AMR":     ("HMI_PB_MachineCtrl2", 4096),   # bit 12 DisableAMRPVPB
+}
+
+# ControlRobot → ROBOT_PB_CMD (%MW6200) bit value.
+_ROBOT_CMD_MAP = {
+    "HOME": 1, "PAUSE": 2, "CONTINUE": 4, "MOTORS_ON": 8, "MOTORS_OFF": 16,
+    "START": 32, "STOP": 64, "SHUTDOWN": 128, "RESET": 256,
+}
 
 class PlcClient:
-    def __init__(self, host="127.0.0.1", port=50051, timeout=2.0):
+    """Modbus TCP client to the LS Electric PLC. host/port point at the PLC's Modbus
+    server (192.168.1.2:502 for agrobot). One socket, serialized by ``_lock`` so a 100 ms
+    pulse and concurrent status polls don't interleave on the wire."""
+
+    def __init__(self, host="127.0.0.1", port=502, timeout=2.0):
         self.host    = host
         self.port    = int(port)
-        self.timeout = float(timeout)          # per-call gRPC deadline (s)
+        self.timeout = float(timeout)          # Modbus socket timeout (s)
         self._lock   = threading.Lock()
-        self._grpc   = None                     # the grpc module (lazy)
-        self._pb     = None                     # robot_control_pb2 (lazy)
-        self._channel = None
-        self._stub   = None
-        self._import_error = None               # set once if grpc/stubs are unavailable
+        self._client = None                     # pymodbus ModbusTcpClient (lazy)
+        self._import_error = None               # set once if pymodbus is unavailable
 
     @property
     def target(self):
         return f"{self.host}:{self.port}"
 
-    # -- channel / stub lifecycle --------------------------------------------
-    def _ensure_stub(self):
-        """Lazily import grpc + stubs and build the channel/stub. Returns the stub,
-        or None if grpc / the vendored stubs are unavailable. Caller holds _lock."""
-        if self._stub is not None:
-            return self._stub
+    # -- connection lifecycle (caller holds _lock) ----------------------------
+    def _ensure_client(self):
+        """Lazily import pymodbus and open the TCP connection. Returns the client, or
+        None if pymodbus is missing or the PLC is unreachable."""
+        if self._client is not None:
+            return self._client
         if self._import_error is not None:
             return None
         try:
-            import grpc
-            try:                                # cwd == dashboard/  (python3 dashboard/serve.py)
-                from plc import robot_control_pb2 as pb
-                from plc import robot_control_pb2_grpc as pbg
-            except ImportError:                 # imported as a package (dashboard.plc)
-                from dashboard.plc import robot_control_pb2 as pb
-                from dashboard.plc import robot_control_pb2_grpc as pbg
-        except Exception as exc:                # grpc missing, stubs missing, etc.
+            from pymodbus.client import ModbusTcpClient
+        except Exception as exc:                # pymodbus not installed
             self._import_error = str(exc)
-            log.warning("PLC client disabled — grpc/stubs unavailable: %s", exc)
+            log.warning("PLC client disabled — pymodbus unavailable: %s", exc)
             return None
-        self._grpc    = grpc
-        self._pb      = pb
-        self._channel = grpc.insecure_channel(self.target)
-        self._stub    = pbg.RobotServiceStub(self._channel)
-        log.info("PLC gRPC client bound to %s", self.target)
-        return self._stub
-
-    def _reset_channel(self):
-        """Tear down the channel so a later call reconnects (e.g. after the Gateway
-        restarts under us). Acquires the lock itself."""
-        with self._lock:
-            if self._channel is not None:
-                try:
-                    self._channel.close()
-                except Exception:
-                    pass
-            self._channel = None
-            self._stub    = None
-
-    def _invoke(self, method_name, build_request):
-        """Run one RPC and return a uniform dict. ``build_request(pb)`` constructs the
-        request message. The gRPC network call happens *outside* the lock so concurrent
-        status polls don't queue behind a slow write."""
-        with self._lock:
-            stub = self._ensure_stub()
-            if stub is None:
-                return {"connected": False, "success": False,
-                        "message": f"{_UNAVAILABLE}: {self._import_error or 'not initialised'}"}
-            grpc    = self._grpc
-            method  = getattr(stub, method_name)
+        client = ModbusTcpClient(self.host, port=self.port, timeout=self.timeout)
+        if not client.connect():
             try:
-                request = build_request(self._pb)
+                client.close()
+            except Exception:
+                pass
+            log.warning("PLC Modbus connect failed → %s", self.target)
+            return None
+        self._client = client
+        log.info("PLC Modbus client connected → %s", self.target)
+        return self._client
+
+    def _reset(self):
+        """Drop the socket so the next call reconnects (e.g. PLC power-cycled). Caller
+        holds _lock."""
+        if self._client is not None:
+            try:
+                self._client.close()
+            except Exception:
+                pass
+        self._client = None
+
+    # -- raw device access (caller holds _lock; client is live) ---------------
+    @staticmethod
+    def _parse(device):
+        """%MX<n> → ('coil', n);  %MW<n> → ('hr', n).  Raises on anything else."""
+        raw = device.strip().upper().lstrip("%")
+        if raw.startswith("MX") and raw[2:].isdigit():
+            return "coil", int(raw[2:])
+        if raw.startswith("MW") and raw[2:].isdigit():
+            return "hr", int(raw[2:])
+        raise ValueError(f"unsupported device '{device}'")
+
+    def _read(self, name):
+        """Read a logical var → bool (coil) / int (holding register). None on Modbus
+        error; raises on a transport exception (so _op resets and reconnects)."""
+        func, addr = self._parse(_REG[name])
+        if func == "coil":
+            res = self._client.read_coils(addr, count=1)
+            return None if res.isError() else bool(res.bits[0])
+        res = self._client.read_holding_registers(addr, count=1)
+        return None if res.isError() else int(res.registers[0])
+
+    def _write(self, name, value):
+        """Write a logical var. Coil (%MX) → write_coil(bool); holding register (%MW) →
+        FC16 write_registers (matches the gateway — avoids LS XGK single-register quirks).
+        Returns True on success."""
+        func, addr = self._parse(_REG[name])
+        if func == "coil":
+            res = self._client.write_coil(addr, bool(value))
+        else:
+            res = self._client.write_registers(addr, [int(value) & 0xFFFF])
+        return not res.isError()
+
+    def _pulse(self, name, press_val=1):
+        """Momentary pushbutton: write press_val → hold ≥1 PLC scan (100 ms) → write 0."""
+        if not self._write(name, press_val):
+            return False, f"PLC write failed for {name}"
+        time.sleep(0.1)
+        self._write(name, 0)
+        return True, f"pulsed {name}: {press_val} → 0"
+
+    def _machine_status(self):
+        """HMI_IND safety/enable/fault/mode snapshot (caller holds _lock; client live)."""
+        rb = lambda n: bool(self._read(n))
+        mode = int(self._read("IND_MODE_STATUS") or 0)
+        return {
+            "estop_ok":         rb("IND_ESTOP_OK_FL"),
+            "gate_ok":          rb("IND_GATE_OK"),
+            "faulted":          rb("IND_FAULTED"),
+            "auger_enabled":    rb("IND_AUGER_ENABLED"),
+            "planter_enabled":  rb("IND_PLANTER_ENABLED"),
+            "robot_enabled":    rb("IND_ROBOT_ENABLED"),
+            "amr_enabled":      rb("IND_AMR_ENABLED"),
+            "auger_in_cycle":   rb("AUGER_IN_CYCLE"),
+            "planter_in_cycle": rb("PLANTER_IN_CYCLE"),
+            "mode_auto":        (mode == 2),
+            "mode_manual":      (mode in (0, 1)),
+        }
+
+    def _op(self, fn):
+        """Run fn() under the lock with uniform connect/error handling. fn returns a
+        dict of payload fields; _op adds ``connected`` or maps failures to the standard
+        unreachable dict. Never raises into the HTTP handler."""
+        with self._lock:
+            client = self._ensure_client()
+            if client is None:
+                return {"connected": False, "success": False,
+                        "message": f"{_UNAVAILABLE}: {self._import_error or self.target} unreachable"}
+            try:
+                out = fn()
+                out["connected"] = True
+                return out
             except Exception as exc:
-                return {"connected": False, "success": False, "message": f"bad request: {exc}"}
+                self._reset()
+                log.warning("PLC operation error: %s", exc)
+                return {"connected": False, "success": False, "message": str(exc)}
 
-        try:
-            resp = method(request, timeout=self.timeout)
-        except grpc.RpcError as exc:
-            code = exc.code() if hasattr(exc, "code") else None
-            details = exc.details() if hasattr(exc, "details") else str(exc)
-            self._reset_channel()
-            log.warning("PLC RPC %s failed (%s): %s", method_name, code, details)
-            return {"connected": False, "success": False,
-                    "message": f"Gateway unreachable ({code})"}
-        except Exception as exc:
-            self._reset_channel()
-            log.warning("PLC RPC %s error: %s", method_name, exc)
-            return {"connected": False, "success": False, "message": str(exc)}
-
-        out = _msg_to_dict(resp)
-        out["connected"] = True
-        return out
-
-    # -- write RPCs -----------------------------------------------------------
+    # -- write operations -----------------------------------------------------
+    # The auger/planter buttons activate the AMR_2_PLC handshake bits. START pulses the bit
+    # (1 → 100 ms → 0); STOP clears it. (The PLC ladder edge-detects the rising bit.)
     def control_auger(self, command):
-        return self._invoke("ControlAuger", lambda pb: pb.SequenceCommandRequest(command=command))
+        cmd = (command or "").upper()
+        def fn():
+            if cmd == "STOP":
+                ok = self._write("AUGER_AMR_BIT", 0)
+                return {"success": ok, "message": "Auger STOP: AMR_2_PLC[0].0 → 0",
+                        "auger_active": False, "planter_active": False}
+            ok, msg = self._pulse("AUGER_AMR_BIT")
+            return {"success": ok, "message": f"Auger {cmd}: AMR_2_PLC[0].0 {msg}",
+                    "auger_active": ok, "planter_active": False}
+        return self._op(fn)
 
     def control_planter(self, command):
-        return self._invoke("ControlPlanter", lambda pb: pb.SequenceCommandRequest(command=command))
+        cmd = (command or "").upper()
+        def fn():
+            if cmd == "STOP":
+                ok = self._write("PLANTER_AMR_BIT", 0)
+                return {"success": ok, "message": "Planter STOP: AMR_2_PLC[1].0 → 0",
+                        "auger_active": False, "planter_active": False}
+            ok, msg = self._pulse("PLANTER_AMR_BIT")
+            return {"success": ok, "message": f"Planter {cmd}: AMR_2_PLC[1].0 {msg}",
+                    "auger_active": False, "planter_active": ok}
+        return self._op(fn)
 
     def control_both(self, command):
-        return self._invoke("ControlBoth", lambda pb: pb.SequenceCommandRequest(command=command))
+        cmd = (command or "").upper()
+        def fn():
+            if cmd == "STOP":
+                ok_a = self._write("AUGER_AMR_BIT", 0)
+                ok_p = self._write("PLANTER_AMR_BIT", 0)
+                return {"success": (ok_a and ok_p), "message": "Both STOP: AMR_2_PLC[0].0/[1].0 → 0",
+                        "auger_active": False, "planter_active": False}
+            ok_a, msg_a = self._pulse("AUGER_AMR_BIT")
+            ok_p, msg_p = self._pulse("PLANTER_AMR_BIT")
+            return {"success": (ok_a and ok_p),
+                    "message": f"Auger AMR_2_PLC[0].0 {msg_a} | Planter AMR_2_PLC[1].0 {msg_p}",
+                    "auger_active": ok_a, "planter_active": ok_p}
+        return self._op(fn)
 
     def machine_command(self, command):
-        return self._invoke("MachineCommand", lambda pb: pb.MachineCommandRequest(command=command))
+        cmd = (command or "").upper()
+        def fn():
+            if cmd not in _MACHINE_CMD_MAP:
+                return {"success": False, "message": f"unknown command '{cmd}'"}
+            var, bit = _MACHINE_CMD_MAP[cmd]
+            ok, detail = self._pulse(var, bit)
+            status = self._machine_status()
+            status["success"] = ok
+            status["message"] = f"{cmd}: {detail}"
+            return status
+        return self._op(fn)
 
     def control_robot(self, command):
-        return self._invoke("ControlRobot", lambda pb: pb.MachineCommandRequest(command=command))
+        cmd = (command or "").upper()
+        def fn():
+            if cmd not in _ROBOT_CMD_MAP:
+                return {"success": False, "message": f"unknown robot command '{cmd}'"}
+            ok, detail = self._pulse("ROBOT_PB_CMD", _ROBOT_CMD_MAP[cmd])
+            status = self._machine_status()
+            status["success"] = ok
+            status["message"] = f"Robot {cmd}: {detail}"
+            return status
+        return self._op(fn)
 
-    # -- read RPCs ------------------------------------------------------------
+    # -- read operations ------------------------------------------------------
     def get_machine_status(self):
-        return self._invoke("GetMachineStatus", lambda pb: pb.Empty())
+        def fn():
+            status = self._machine_status()
+            status["success"] = True
+            status["message"] = "OK"
+            return status
+        return self._op(fn)
 
     def get_sequence_detail(self):
-        return self._invoke("GetSequenceDetail", lambda pb: pb.Empty())
+        def fn():
+            rb = lambda n: bool(self._read(n))
+            ri = lambda n: int(self._read(n) or 0)
+            return {
+                "auger_home":          rb("AUGER_HOME"),
+                "auger_setup_ok":      rb("AUGER_SETUP_OK"),
+                "auger_ok_to_start":   rb("AUGER_OK_START"),
+                "auger_enabled":       rb("AUGER_ENABLED"),
+                "auger_in_cycle":      rb("AUGER_IN_CYCLE"),
+                "auger_complete":      rb("AUGER_COMPLETE"),
+                "auger_step":          ri("AUGER_STEP"),
+                "planter_home":        rb("PLANTER_HOME"),
+                "planter_setup_ok":    rb("PLANTER_SETUP_OK"),
+                "planter_ok_to_start": rb("PLANTER_OK_START"),
+                "planter_enabled":     rb("PLANTER_ENABLED"),
+                "planter_in_cycle":    rb("PLANTER_IN_CYCLE"),
+                "planter_complete":    rb("PLANTER_COMPLETE"),
+                "planter_step":        ri("PLANTER_STEP"),
+            }
+        return self._op(fn)
 
     def get_auger_motor_status(self):
-        return self._invoke("GetAugerMotorStatus", lambda pb: pb.Empty())
+        def fn():
+            rb = lambda n: bool(self._read(n))
+            ri = lambda n: int(self._read(n) or 0)
+            return {
+                "success": True, "message": "OK",
+                "running":         rb("AUGER_MOTOR_RUN"),
+                "fwd_direction":   rb("AUGER_MOTOR_FWD"),
+                "faulted":         rb("AUGER_MOTOR_FAULTED"),
+                "velocity_target": ri("AUGER_MOTOR_VEL_TARGET"),
+                "velocity_actual": ri("AUGER_MOTOR_VEL_ACTUAL"),
+            }
+        return self._op(fn)
 
     def close(self):
-        self._reset_channel()
+        with self._lock:
+            self._reset()

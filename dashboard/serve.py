@@ -1524,16 +1524,16 @@ def main():
     log.info("[chassis] active: %s — %s (comms=%s, rear_camera=%s)",
              CHASSIS.name, CHASSIS.description, CHASSIS.comms, rear_src)
 
-    # PLC Gateway client — relays auger/planter/robot-arm commands to the gRPC gateway
-    # (started separately on plc_host:plc_port). Built only for chassis with plc.enabled
-    # (agrobot); the connection is lazy, so this never blocks startup if the gateway is down.
+    # PLC client — sends auger/planter/robot-arm commands DIRECTLY over Modbus TCP to the
+    # PLC at plc_host:plc_port (502). Built only for chassis with plc.enabled (agrobot); the
+    # connection is lazy, so this never blocks startup if the PLC is unreachable.
     if CHASSIS.plc_enabled:
         try:
             from plc_client import PlcClient
         except ImportError:
             from dashboard.plc_client import PlcClient
         Handler.plc = PlcClient(CHASSIS.plc_host, CHASSIS.plc_port)
-        log.info("[plc] gateway client → %s (connects on first request)", Handler.plc.target)
+        log.info("[plc] Modbus TCP client → %s (connects on first request)", Handler.plc.target)
     else:
         log.info("[plc] disabled for chassis %s", CHASSIS.name)
 
