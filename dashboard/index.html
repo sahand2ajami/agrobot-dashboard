@@ -255,7 +255,7 @@
     .act-auger { background: #311a00; color: #d29922; border: 1px solid #9e6a03; }
     .act-auger:hover { background: #9e6a03; color: #fff; }
     .act-auger.on { background: #d29922; color: #0d1117; box-shadow: 0 0 8px rgba(210,153,34,.5); }
-    .act-both { background: #0d2244; color: #79c0ff; border: 1px solid #1f6feb; }
+    .act-both { background: #1a3a6b; color: #79c0ff; border: 1px solid #1f6feb; }
     .act-both:hover { background: #1f6feb; color: #fff; }
     .act-both.on { background: #388bfd; color: #fff; box-shadow: 0 0 8px rgba(56,139,253,.5); }
     .act-det { background: #161b22; color: #7d8590; border: 1px solid #30363d; }
@@ -2026,13 +2026,10 @@ function _renderPlcStatus(d) {
 
 function _updatePlcButtons(d) {
   const online = d && d.connected !== false;
-  // Auger / planter / both all just pulse AMR_2_PLC handshake bits, so enable them
-  // whenever the PLC is online (no Auto-mode gate — same as the auger).
-  const planterBtn = document.getElementById('planterBtn');
-  const bothBtn    = document.getElementById('bothBtn');
-  const augerBtn   = document.getElementById('augerBtn');
-  if (planterBtn) planterBtn.disabled = !online;
-  if (bothBtn)    bothBtn.disabled    = !online;
+  // Planter and Both are momentary one-shot commands — no latch state to sync,
+  // so keep them always clickable; clicking offline shows a "Gateway offline" toast.
+  // Auger stays gated on PLC online because it's a latch whose state tracks auger_in_cycle.
+  const augerBtn = document.getElementById('augerBtn');
   if (augerBtn) {
     augerBtn.disabled = !online;
     augerBtn.classList.toggle('on', online && !!d.auger_in_cycle);

@@ -132,15 +132,15 @@ PLC_TAG_MAP = {
             "commands": sorted(ROBOT_COMMANDS),
         },
         {
-            "symbol": "AMR_2_PLC[0].0", "address": "%MX1600", "type": "BOOL (bit 0 of %MW100)",
+            "symbol": "AMR_2_PLC[0]", "address": "%MW100", "type": "WORD (bit 0 = AMR_2_PLC[0].0)",
             "rpc": "—", "api": "/api/plc/auger",
-            "desc": "Auger button → activates AMR_2_PLC[0].0 (pulsed 1→0). AMR→PLC handshake.",
+            "desc": "Auger button → latches AMR_2_PLC[0].0 (write word 1/0, toggles). AMR→PLC handshake.",
             "commands": sorted(SEQUENCE_COMMANDS),
         },
         {
-            "symbol": "AMR_2_PLC[1].0", "address": "%MX1616", "type": "BOOL (bit 0 of %MW101)",
+            "symbol": "AMR_2_PLC[1]", "address": "%MW101", "type": "WORD (bit 0 = AMR_2_PLC[1].0)",
             "rpc": "—", "api": "/api/plc/planter",
-            "desc": "Planter button → activates AMR_2_PLC[1].0 (pulsed 1→0). AMR→PLC handshake.",
+            "desc": "Planter button → latches AMR_2_PLC[1].0 (write word 1/0, toggles). AMR→PLC handshake.",
             "commands": sorted(SEQUENCE_COMMANDS),
         },
     ],
@@ -180,11 +180,12 @@ def symbol_roles():
 # word (Modbus holding register). M-area Modbus offset is 0 on this XGK PLC, so the
 # numeric part is the Modbus address directly. Verified against config.LS_CONF.
 _REG = {
-    # ── auger / planter activation bits — AMR_2_PLC handshake (AMR→PLC @ %MW100) ──
-    # AMR_2_PLC is ARRAY[0..9] OF WORD at %MW100, so element k = %MW(100+k); ".0" = bit 0
-    # of that word → coil %MX((100+k)×16). Pulsed: write 1 → hold 100 ms → write 0.
-    "AUGER_AMR_BIT":       "%MX1600",   # AMR_2_PLC[0].0  (%MW100 bit 0)
-    "PLANTER_AMR_BIT":     "%MX1616",   # AMR_2_PLC[1].0  (%MW101 bit 0)
+    # ── auger / planter activation words — AMR_2_PLC handshake (AMR→PLC @ %MW100) ──
+    # AMR_2_PLC is ARRAY[0..9] OF WORD; element k = %MW(100+k). We (the AMR) own this array,
+    # so we write the whole WORD register (FC16): value 1 sets bit 0 (= AMR_2_PLC[k].0), 0
+    # clears it. Word/register access works where individual-coil bit writes don't on this PLC.
+    "AUGER_AMR_WORD":   "%MW100",   # AMR_2_PLC[0]  — write 1 → bit 0 (AMR_2_PLC[0].0) set
+    "PLANTER_AMR_WORD": "%MW101",   # AMR_2_PLC[1]  — write 1 → bit 0 (AMR_2_PLC[1].0) set
     # ── machine / robot pushbutton words (writes) — pulsed: write value → 100 ms → 0 ──
     "HMI_PB_MachineCtrl":  "%MW5000",   # machine PB word (bit values below)
     "HMI_PB_MachineCtrl2": "%MW5001",   # machine PB word 2 (ResetPlanterSeq/robot/AMR)
@@ -317,20 +318,20 @@ class PlcClient:
         error; raises on a transport exception (so _op resets and reconnects)."""
         func, addr = self._parse(_REG[name])
         if func == "coil":
-            res = self._client.read_coils(addr, count=1)
+            res = self._client.read_coils(addr, count=1, device_id=1)
             return None if res.isError() else bool(res.bits[0])
-        res = self._client.read_holding_registers(addr, count=1)
+        res = self._client.read_holding_registers(addr, count=1, device_id=1)
         return None if res.isError() else int(res.registers[0])
 
     def _write(self, name, value):
         """Write a logical var. Coil (%MX) → write_coil(bool); holding register (%MW) →
-        FC16 write_registers (matches the gateway — avoids LS XGK single-register quirks).
+        FC6 write_register (single register — more broadly supported than FC16 on LS XGK).
         Returns True on success."""
         func, addr = self._parse(_REG[name])
         if func == "coil":
-            res = self._client.write_coil(addr, bool(value))
+            res = self._client.write_coil(addr, bool(value), device_id=1)
         else:
-            res = self._client.write_registers(addr, [int(value) & 0xFFFF])
+            res = self._client.write_register(addr, int(value) & 0xFFFF, device_id=1)
         return not res.isError()
 
     def _pulse(self, name, press_val=1):
@@ -378,45 +379,37 @@ class PlcClient:
                 return {"connected": False, "success": False, "message": str(exc)}
 
     # -- write operations -----------------------------------------------------
-    # The auger/planter buttons activate the AMR_2_PLC handshake bits. START pulses the bit
-    # (1 → 100 ms → 0); STOP clears it. (The PLC ladder edge-detects the rising bit.)
+    # START → write 1 to the AMR_2_PLC word (sets bit 0); STOP → write 0 (clears it).
+    # No read-first toggle: the JS caller already decides START vs STOP based on
+    # auger_in_cycle, so writing unconditionally is correct and avoids writing the
+    # wrong value when the register was left non-zero from a prior session.
     def control_auger(self, command):
-        cmd = (command or "").upper()
+        new = 0 if (command or "").upper() == "STOP" else 1
         def fn():
-            if cmd == "STOP":
-                ok = self._write("AUGER_AMR_BIT", 0)
-                return {"success": ok, "message": "Auger STOP: AMR_2_PLC[0].0 → 0",
-                        "auger_active": False, "planter_active": False}
-            ok, msg = self._pulse("AUGER_AMR_BIT")
-            return {"success": ok, "message": f"Auger {cmd}: AMR_2_PLC[0].0 {msg}",
-                    "auger_active": ok, "planter_active": False}
+            ok = self._write("AUGER_AMR_WORD", new)
+            log.debug("Auger: write %MW100=%d ok=%s", new, ok)
+            return {"success": ok, "message": f"Auger: AMR_2_PLC[0].0 → {new}",
+                    "auger_active": bool(new), "planter_active": False}
         return self._op(fn)
 
     def control_planter(self, command):
-        cmd = (command or "").upper()
+        new = 0 if (command or "").upper() == "STOP" else 1
         def fn():
-            if cmd == "STOP":
-                ok = self._write("PLANTER_AMR_BIT", 0)
-                return {"success": ok, "message": "Planter STOP: AMR_2_PLC[1].0 → 0",
-                        "auger_active": False, "planter_active": False}
-            ok, msg = self._pulse("PLANTER_AMR_BIT")
-            return {"success": ok, "message": f"Planter {cmd}: AMR_2_PLC[1].0 {msg}",
-                    "auger_active": False, "planter_active": ok}
+            ok = self._write("PLANTER_AMR_WORD", new)
+            log.debug("Planter: write %MW101=%d ok=%s", new, ok)
+            return {"success": ok, "message": f"Planter: AMR_2_PLC[1].0 → {new}",
+                    "auger_active": False, "planter_active": bool(new)}
         return self._op(fn)
 
     def control_both(self, command):
-        cmd = (command or "").upper()
+        new = 0 if (command or "").upper() == "STOP" else 1
         def fn():
-            if cmd == "STOP":
-                ok_a = self._write("AUGER_AMR_BIT", 0)
-                ok_p = self._write("PLANTER_AMR_BIT", 0)
-                return {"success": (ok_a and ok_p), "message": "Both STOP: AMR_2_PLC[0].0/[1].0 → 0",
-                        "auger_active": False, "planter_active": False}
-            ok_a, msg_a = self._pulse("AUGER_AMR_BIT")
-            ok_p, msg_p = self._pulse("PLANTER_AMR_BIT")
+            ok_a = self._write("AUGER_AMR_WORD", new)
+            ok_p = self._write("PLANTER_AMR_WORD", new)
+            log.debug("Both: write %MW100/%MW101=%d ok=%s/%s", new, ok_a, ok_p)
             return {"success": (ok_a and ok_p),
-                    "message": f"Auger AMR_2_PLC[0].0 {msg_a} | Planter AMR_2_PLC[1].0 {msg_p}",
-                    "auger_active": ok_a, "planter_active": ok_p}
+                    "message": f"Both: AMR_2_PLC[0].0/[1].0 → {new}",
+                    "auger_active": bool(new), "planter_active": bool(new)}
         return self._op(fn)
 
     def machine_command(self, command):
