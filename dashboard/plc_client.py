@@ -174,11 +174,24 @@ def symbol_roles():
 
 
 
+# ── FEnet Modbus address mapping ─────────────────────────────────────────────
+# Configured in XG5000 → Online → Standard Settings → FEnet → Modbus Settings.
+# The FEnet exposes its areas at non-zero bases; raw PLC addresses must be offset:
+#
+#   Word Read  (FC04 input regs):  Modbus reg = plc_addr - 1000  (base %MW1000)
+#   Word Write (FC06/FC16):        Modbus reg = plc_addr - 5000  (base %MW5000)
+#   Bit  Read  (FC02 disc inputs): Modbus reg = plc_addr         (base %MX0, no offset)
+#   Bit  Write (FC05/FC15 coils):  Modbus reg = plc_addr - 1000  (base %MX1000)
+#
+# Critical: reads use FC04 (input registers), NOT FC03 (holding registers). FC03
+# returns 0 for all addresses — confirmed 2026-06-17 bench session.
+_FENET_READ_WORD_BASE  = 1000   # FC04 input reg 0  = PLC %MW1000
+_FENET_WRITE_WORD_BASE = 5000   # FC06 reg 0         = PLC %MW5000
+_FENET_WRITE_COIL_BASE = 1000   # FC05 coil 0        = PLC %MX1000
+
 # ── PLC register map + command tables (ported from the gateway) ──────────────
 # Logical name → LS Electric device address. Only the symbols this dashboard touches;
-# the full table lives in docs/plc/. %MX<n> = M-area bit (Modbus coil), %MW<n> = M-area
-# word (Modbus holding register). M-area Modbus offset is 0 on this XGK PLC, so the
-# numeric part is the Modbus address directly. Verified against config.LS_CONF.
+# the full table lives in docs/plc/. %MX<n> = M-area bit, %MW<n> = M-area word.
 _REG = {
     # ── auger / planter activation words — AMR_2_PLC handshake (AMR→PLC @ %MW100) ──
     # AMR_2_PLC is ARRAY[0..9] OF WORD; element k = %MW(100+k). We (the AMR) own this array,
@@ -314,24 +327,37 @@ class PlcClient:
         raise ValueError(f"unsupported device '{device}'")
 
     def _read(self, name):
-        """Read a logical var → bool (coil) / int (holding register). None on Modbus
-        error; raises on a transport exception (so _op resets and reconnects)."""
+        """Read a logical var → bool (bit) / int (word). None on Modbus error;
+        raises on transport exception (so _op resets + reconnects on next call)."""
         func, addr = self._parse(_REG[name])
         if func == "coil":
-            res = self._client.read_coils(addr, count=1, device_id=1)
+            # FC02 discrete inputs — FEnet bit read area, no offset (%MX0 = reg 0)
+            res = self._client.read_discrete_inputs(addr, count=1)
             return None if res.isError() else bool(res.bits[0])
-        res = self._client.read_holding_registers(addr, count=1, device_id=1)
+        # FC04 input registers — FEnet word read area base = %MW1000
+        modbus_reg = addr - _FENET_READ_WORD_BASE
+        if modbus_reg < 0:
+            log.warning("_read: %s (%s) below FEnet read area (min %%MW%d)",
+                        name, _REG[name], _FENET_READ_WORD_BASE)
+            return None
+        res = self._client.read_input_registers(modbus_reg, count=1)
         return None if res.isError() else int(res.registers[0])
 
     def _write(self, name, value):
-        """Write a logical var. Coil (%MX) → write_coil(bool); holding register (%MW) →
-        FC6 write_register (single register — more broadly supported than FC16 on LS XGK).
-        Returns True on success."""
+        """Write a logical var. Bit (%MX) → FC05 write_coil; word (%MW) → FC06
+        write_register. Returns True on success, False if address is out of range."""
         func, addr = self._parse(_REG[name])
         if func == "coil":
-            res = self._client.write_coil(addr, bool(value), device_id=1)
+            modbus_coil = addr - _FENET_WRITE_COIL_BASE
+            res = self._client.write_coil(modbus_coil, bool(value))
         else:
-            res = self._client.write_register(addr, int(value) & 0xFFFF, device_id=1)
+            modbus_reg = addr - _FENET_WRITE_WORD_BASE
+            if modbus_reg < 0:
+                log.warning("_write: %s (%s) below FEnet write area (min %%MW%d) — "
+                            "PLC engineer must lower FEnet Word Write Area to %%MW0",
+                            name, _REG[name], _FENET_WRITE_WORD_BASE)
+                return False
+            res = self._client.write_register(modbus_reg, int(value) & 0xFFFF)
         return not res.isError()
 
     def _pulse(self, name, press_val=1):

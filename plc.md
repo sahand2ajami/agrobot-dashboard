@@ -85,19 +85,18 @@ or remove it from the network by unplugging the LAN cable.
 
 ---
 
-## Problem 2 — All Code Was Using FC03 Instead of FC04 for Reads  *(partially fixed)*
+## Problem 2 — All Code Was Using FC03 Instead of FC04 for Reads  *(fixed)*
 
 `plc_read.py`, `plc_test.py`, and `dashboard/plc_client.py` all used
 `read_holding_registers` (FC03) for every read. The FEnet serves reads via FC04.
 
-**Fixed in:** `plc_read.py` (2026-06-17), `plc_test.py` (2026-06-17).
-
-**Still to fix:** `dashboard/plc_client.py` — `_read()` uses `read_holding_registers`.
-Must be changed to `read_input_registers`. Awaiting approval before touching this file.
+**Fixed in:** `plc_read.py` (2026-06-17), `plc_test.py` (2026-06-17),
+`dashboard/plc_client.py` (2026-06-18 — `_read()` changed to `read_input_registers`
+for `%MW` and `read_discrete_inputs` for `%MX`).
 
 ---
 
-## Problem 3 — FEnet Address Offsets Were Wrong in All Code  *(partially fixed)*
+## Problem 3 — FEnet Address Offsets Were Wrong in All Code  *(fixed)*
 
 The original code assumed offset 0 (Modbus register N = PLC `%MWN`). The FEnet
 applies offsets: reads subtract 1000, writes subtract 5000.
@@ -108,10 +107,13 @@ Read  %MWx:  Modbus reg = x - 1000   (min x = 1000)
 Write %MWx:  Modbus reg = x - 5000   (min x = 5000)
 ```
 
-**Fixed in:** `plc_read.py`, `plc_test.py`.
+**Fixed in:** `plc_read.py`, `plc_test.py`, `dashboard/plc_client.py` (2026-06-18).
+Module-level constants `_FENET_READ_WORD_BASE = 1000` / `_FENET_WRITE_WORD_BASE = 5000`
+added. The `_write()` path now logs a clear warning and returns `False` (rather than
+silently writing the wrong register) for any `%MW` address below 5000 — correct
+behaviour until Problem 4 is resolved.
 
-**Still to fix:** `dashboard/plc_client.py` — `_read()` and `_write()` need to apply
-these offsets. Current wrong vs correct register table:
+**Current correct register table:**
 
 | Symbol | PLC addr | Wrong reg (current) | Correct read reg (FC04) | Correct write reg (FC06) |
 |--------|----------|---------------------|------------------------|--------------------------|
@@ -152,22 +154,42 @@ Original code had `if value not in (0, 1)` which blocked all machine commands
 
 ---
 
-## What Has Been Fixed (as of 2026-06-17)
+## Problem 6 — Auger Jog Register Addresses Unknown  *(unresolved)*
+
+The PLC HMI (`dashboard/plc_hmi.html`) has fully-wired press-and-hold jog buttons
+(▲ Jog Up / ▼ Jog Down) with a 600 ms watchdog auto-stop. The server side
+(`dashboard/plc_hmi_serve.py`) accepts the jog REST calls but cannot write to the
+PLC because the `%MW` addresses for auger jog up/down have not been confirmed.
+
+**To wire up:**
+1. PLC engineer identifies the auger jog registers (e.g., bits in `AMR_2_PLC` or a
+   dedicated jog word in the FEnet write area `%MW5000`+).
+2. Add `AUGER_JOG_UP` and `AUGER_JOG_DOWN` to `dashboard/plc_client._REG`.
+3. Add a `jog_auger(direction, active)` method to `PlcClient`:
+   - `active=True` → write the jog value to the register (sustained, not pulsed)
+   - `active=False` → write 0
+4. Call it from `plc_hmi_serve.py`'s `/api/hmi/auger/jog` handler.
+
+---
+
+## What Has Been Fixed (as of 2026-06-18)
 
 | File | Changes |
 |------|---------|
 | `plc_read.py` | FC04 for reads; `READ_OFFSET = 1000`; rejects addresses below `%MW1000` |
 | `plc_test.py` | FC04 for reads; FC06 for writes; correct offsets; full 16-bit value range; readback now confirms write via FC04; reconnect-on-`ConnectionResetError` |
+| `dashboard/plc_client.py` | FC04 for `%MW` reads; FC02 for `%MX` reads; correct FEnet offsets in `_read()` and `_write()`; `_write()` warns + fails gracefully for out-of-range addresses |
 
 ---
 
 ## What Still Needs to Be Done
 
-1. **`dashboard/plc_client.py`:** Switch `_read()` to FC04 (`read_input_registers`) and
-   apply correct offsets to both `_read()` and `_write()`. Awaiting approval.
-2. **`dashboard/plc_client.py`:** Add reconnect-on-`ConnectionResetError` logic.
-3. **PLC engineer:** Resolve Problem 4 (lower write area to `%MW0` or relocate `AMR_2_PLC`).
-4. **Verify on real hardware:** Run `plc_test.py` against physical PLC, write a value to
+1. **PLC engineer:** Resolve Problem 4 (lower write area to `%MW0` or relocate `AMR_2_PLC`).
+2. **PLC engineer:** Define auger jog register addresses (Problem 6).
+3. **Verify on real hardware:** Run `plc_test.py` against physical PLC, write a value to
    `%MW5000`+, confirm it appears in XG5000 at the correct `%MW` address.
-5. **Confirm bit layout:** Bench-verify the bit indices in `%MW5000`/`%MW5001` for machine
+4. **Confirm bit layout:** Bench-verify the bit indices in `%MW5000`/`%MW5001` for machine
    commands (`SET_AUTO`, `START`, `ENABLE_AUGER`, etc.) against XG5000 ladder monitor.
+5. **Wire jog:** Once jog registers confirmed, add to `plc_client._REG` and implement
+   `PlcClient.jog_auger()` (see Problem 6).
+6. **Add Planter & Machine Status pages** to the PLC HMI (`dashboard/plc_hmi.html`).
