@@ -1,195 +1,250 @@
-# PLC Integration — Field Notes & Pending Changes
+# PLC Integration Guide
 
-Running log of everything learned during the June 2026 bench sessions.
-This file is the reference for future work — read it before touching any PLC-related code.
-
----
-
-## Network Map
-
-| IP | MAC | Device | Role |
-|----|-----|--------|------|
-| `192.168.1.2` | `00:0b:29:83:5c:52` | LS Electric FEnet (PLC CPU Ethernet) | Modbus TCP server for PLC M-memory |
-| `192.168.1.4` | `00:01:fc:a0:19:21` | Contec industrial device | Robot arm controller ("Agrobot Tree Planter") |
-| `192.168.1.6` | `00:07:46:51:aa:4e` | Unknown industrial device | Returns Modbus exception 2 (illegal address) for most registers |
-
-**Jetson:** `192.168.1.100/24` on `eno1`.
-
-> **VMware IP conflict warning:** The user's laptop LAN cable connects to the same switch.
-> A VMware VM on the laptop is configured to `192.168.1.2` (same as FEnet). When the
-> laptop's LAN cable is plugged in, the VM answers ARP for `.2` first and intercepts all
-> **FC03 (holding register)** requests, returning empty data. The Jetson never reaches the
-> real PLC until the VM is powered off or the laptop's LAN cable is unplugged. The VM does
-> NOT handle FC04 (input registers), so FC04 requests pass through to the real FEnet.
-> Confirmed by MAC OUI `00:0b:29` (exclusively VMware, Inc.).
+The Agrobot tree-planting robot uses an **LS Electric PLC** to control the auger and planter.
+The Jetson communicates with the PLC directly over **Modbus TCP** on the wired LAN.
 
 ---
 
-## FEnet Modbus Address Mapping
+## Network Setup
 
-Configured in XG5000 → Online → Standard Settings → FEnet → Driver Setting → Modbus Settings:
+| Device | IP | Role |
+|--------|----|------|
+| Jetson (this machine) | `192.168.1.100` on `eno1` | Dashboard / Modbus client |
+| PLC CPU Ethernet port | `192.168.1.2:502` | Modbus TCP server |
+| Robot arm controller | `192.168.1.4` | Contec, separate protocol |
 
-| Area | Base PLC Address | Modbus Function Code | Offset Formula |
-|------|-----------------|----------------------|----------------|
-| Word Read | `%MW1000` | **FC04** (input registers) | `reg = plc_addr - 1000` |
-| Word Write | `%MW5000` | **FC06/FC16** (write holding registers) | `reg = plc_addr - 5000` |
-| Bit Read | `%MX0` | FC02 (discrete inputs) | no offset |
-| Bit Write | `%MX1000` | FC05/FC15 (write coils) | `reg = plc_addr - 1000` |
-
-**Critical:** The FEnet exposes its read area via **FC04 (input registers)**, NOT FC03
-(holding registers). Using FC03 for reads returns 0 even when the PLC has live data.
-This was confirmed on 2026-06-17 by reading `%MW1410` (a live register that fluctuates
-between 7 and 8): FC03 returned 0 every time; FC04 returned the correct live value.
-
-**Read/write use the same underlying PLC M-memory.** So after writing `%MW5000` via
-FC06, you can confirm it by reading `%MW5000` via FC04 (reg = 5000 - 1000 = 4000).
-A matching readback means the write landed; a mismatch means the PLC ladder overwrote it.
+> **Laptop LAN cable warning:** If a Windows laptop is plugged into the same switch,
+> confirm no VMware VM is running with IP `192.168.1.2`. A running VM intercepts Modbus
+> requests and silently returns fake data. Power off the VM or unplug the laptop's LAN cable
+> before doing any PLC work. You can verify you're talking to the real PLC by checking
+> `arp -n 192.168.1.2` — the MAC should NOT start with `00:0b:29` (VMware OUI).
 
 ---
 
-## Connection Behavior
+## How Modbus Addressing Works on This PLC
 
-The FEnet drops the TCP connection periodically (observed `ConnectionResetError: [Errno 104]
-Connection reset by peer`). The FEnet is configured for 15 s idle timeout (3 connections max).
+The PLC's FEnet Ethernet module maps PLC memory to Modbus registers using fixed offsets:
 
-All Modbus calls must catch `ConnectionResetError`, reconnect, and retry once before
-reporting failure. This is now implemented in `plc_test.py` and must be added to
-`plc_client.py`.
+| Operation | Function Code | Formula | Example |
+|-----------|--------------|---------|---------|
+| **Read** a word | FC04 (input registers) | `modbus_reg = plc_addr − 1000` | `%MW5100` → FC04 reg **4100** |
+| **Write** a word | FC06 (single register write) | `modbus_reg = plc_addr − 5000` | `%MW5110` → FC06 reg **110** |
 
----
+**Important:** Reads use **FC04**, not FC03. FC03 returns 0 on this FEnet even when the
+PLC has live data — this is a known quirk of the XG5000 FEnet configuration.
 
-## Problem 1 — IP Conflict: VMware VM Intercepting FC03 Requests  *(root cause confirmed)*
-
-**What happened:** During early testing, all reads via FC03 returned 0 and all writes
-"succeeded" (no Modbus error) but never appeared in XG5000. A full scan of 6000 registers
-returned no live values. Setting a value in XG5000 (`%MW5170 = 12345`) and scanning for it
-from the Jetson found nothing.
-
-**Root cause:** A VMware VM on the laptop (MAC `00:0b:29:83:5c:52`) claimed `192.168.1.2`
-on the LAN. Since the laptop's LAN cable was plugged into the switch, the VM answered
-ARP for `.2` before the PLC FEnet could. The Jetson's entire session was talking to the
-VM's isolated Modbus register buffer, with zero connection to PLC memory.
-
-The VM handles FC03 (holding registers) — responding with 0 for reads and ACK for writes
-into a flat buffer. It does not handle FC04 (input registers), which is why switching to
-FC04 immediately started returning live PLC data once the function code was corrected.
-
-**Confirmed by:**
-- `arp -n 192.168.1.2` returned `00:0b:29:83:5c:52` (VMware OUI)
-- Write/readback at different offsets showed independent buffers (write @ reg 0, readback @ reg 4000 = 0)
-- Switching to FC04 at reg 410 returned 7/8 fluctuating values matching XG5000's `%MW1410`
-
-**Ongoing risk:** Every time the laptop's LAN cable is connected to the switch, this VM
-may reappear and intercept FC03 requests. Keep the VM powered off when doing PLC work,
-or remove it from the network by unplugging the LAN cable.
+After writing a register with FC06, you can read it back with FC04 to confirm the write
+landed. Both function codes access the same underlying PLC M-memory.
 
 ---
 
-## Problem 2 — All Code Was Using FC03 Instead of FC04 for Reads  *(fixed)*
+## AMR ↔ PLC Handshake Registers
 
-`plc_read.py`, `plc_test.py`, and `dashboard/plc_client.py` all used
-`read_holding_registers` (FC03) for every read. The FEnet serves reads via FC04.
+These are the only registers the dashboard reads and writes. All addresses are above the
+FEnet floors (%MW1000 read, %MW5000 write), so no PLC reconfiguration is needed.
 
-**Fixed in:** `plc_read.py` (2026-06-17), `plc_test.py` (2026-06-17),
-`dashboard/plc_client.py` (2026-06-18 — `_read()` changed to `read_input_registers`
-for `%MW` and `read_discrete_inputs` for `%MX`).
+### PLC → AMR: Status Registers (read-only, FC04)
+
+The PLC writes these. The dashboard reads them every 500 ms.
+
+#### `%MW5100` — Auger Status (FC04 reg 4100)
+
+| Bit | Decimal Value | Meaning |
+|-----|--------------|---------|
+| 0 | **1** | Sequence Start Handshake |
+| 1 | **2** | Auger Clear of Ground |
+| 2 | **4** | Auger Cycle Complete |
+
+Example: if you read `%MW5100 = 6`, bits 1 and 2 are set → auger is clear of ground AND cycle is complete.
+
+#### `%MW5101` — Planter Status (FC04 reg 4101)
+
+| Bit | Decimal Value | Meaning |
+|-----|--------------|---------|
+| 0 | **1** | Sequence Start Handshake |
+| 1 | **2** | Planter Clear of Ground |
+| 2 | **4** | Planter Cycle Complete |
 
 ---
 
-## Problem 3 — FEnet Address Offsets Were Wrong in All Code  *(fixed)*
+### AMR → PLC: Command Registers (read/write, FC06 write · FC04 readback)
 
-The original code assumed offset 0 (Modbus register N = PLC `%MWN`). The FEnet
-applies offsets: reads subtract 1000, writes subtract 5000.
+The dashboard writes these. The PLC reads them. After each write, the server reads back
+the register to confirm the value landed.
 
-**Corrected offset formulas:**
+#### `%MW5110` — Auger Command (FC06 reg 110, readback FC04 reg 4110)
+
+| Write Value | Meaning |
+|-------------|---------|
+| **2** | Bit 1 set — Auger Start Sequence active |
+| **0** | Idle (clear the command) |
+
+#### `%MW5111` — Planter Command (FC06 reg 111, readback FC04 reg 4111)
+
+| Write Value | Meaning |
+|-------------|---------|
+| **2** | Bit 1 set — Planter Start Sequence active |
+| **0** | Idle (clear the command) |
+
+#### `%MW5112` — AMR State (FC06 reg 112, readback FC04 reg 4112)
+
+| Write Value | Meaning |
+|-------------|---------|
+| **1** | Bit 0 set — AMR is Stationary |
+| **2** | Bit 1 set — AMR is Moving |
+| **0** | Unknown / not reporting |
+
+---
+
+## Tools
+
+Three tools are available. Use them in the order below depending on what you need.
+
+### 1. `plc_read.py` — Quick read-only spot check
+
+Connects to the PLC and reads a predefined set of registers. Use this to verify
+connectivity and see the current values of the handshake registers at a glance.
+
+```bash
+cd /home/jetson/dual/dual-robot-dashboard
+python3 plc_read.py
 ```
-Read  %MWx:  Modbus reg = x - 1000   (min x = 1000)
-Write %MWx:  Modbus reg = x - 5000   (min x = 5000)
+
+Output format:
+```
+%MW5100 = 4  (FC04 reg 4100)    # Auger Cycle Complete bit set
+%MW5101 = 0  (FC04 reg 4101)    # Planter idle
 ```
 
-**Fixed in:** `plc_read.py`, `plc_test.py`, `dashboard/plc_client.py` (2026-06-18).
-Module-level constants `_FENET_READ_WORD_BASE = 1000` / `_FENET_WRITE_WORD_BASE = 5000`
-added. The `_write()` path now logs a clear warning and returns `False` (rather than
-silently writing the wrong register) for any `%MW` address below 5000 — correct
-behaviour until Problem 4 is resolved.
-
-**Current correct register table:**
-
-| Symbol | PLC addr | Wrong reg (current) | Correct read reg (FC04) | Correct write reg (FC06) |
-|--------|----------|---------------------|------------------------|--------------------------|
-| `IND_MODE_STATUS` | `%MW1000` | 1000 | **0** | — |
-| `AUGER_MOTOR_VEL_TARGET` | `%MW2500` | 2500 | **1500** | — |
-| `AUGER_MOTOR_VEL_ACTUAL` | `%MW2501` | 2501 | **1501** | — |
-| `AUGER_STEP` | `%MW2701` | 2701 | **1701** | — |
-| `PLANTER_STEP` | `%MW2801` | 2801 | **1801** | — |
-| `HMI_PB_MachineCtrl` | `%MW5000` | 5000 | 4000 (readback) | **0** |
-| `HMI_PB_MachineCtrl2` | `%MW5001` | 5001 | 4001 (readback) | **1** |
-| `ROBOT_PB_CMD` | `%MW6200` | 6200 | 5200 (readback) | **1200** |
-| `AUGER_AMR_WORD` | `%MW100` | 100 | — | **impossible (see Problem 4)** |
-| `PLANTER_AMR_WORD` | `%MW101` | 101 | — | **impossible (see Problem 4)** |
+Values are always in **decimal**. This script is read-only — it never writes to the PLC.
 
 ---
 
-## Problem 4 — %MW100 / %MW101 Not Writable via Current FEnet Config  *(unresolved)*
+### 2. `plc_test.py` — Interactive read/write terminal
 
-`AMR_2_PLC[0]` (`%MW100`) and `AMR_2_PLC[1]` (`%MW101`) are the auger/planter
-handshake registers. The FEnet write area starts at `%MW5000`, so `%MW100` requires
-Modbus write register `100 - 5000 = -4900` — impossible.
+Use this for manual testing: read any register, write a value, and immediately get a
+readback confirmation. This is the lowest-level tool and the best way to verify that
+writes are reaching the PLC ladder.
 
-**Options for the PLC engineer:**
+```bash
+cd /home/jetson/dual/dual-robot-dashboard
+python3 plc_test.py
+```
 
-| Option | Change | Notes |
-|--------|--------|-------|
-| A (preferred) | Set FEnet Word Write Area to `%MW0` | All M-memory writable; write offset becomes 0 |
-| B | Move `AMR_2_PLC[]` to `%MW5002`/`%MW5003` | Ladder references must be updated too |
+You will see a prompt (`>`). Commands:
 
-Until one of these is done, auger/planter control via the dashboard cannot work.
+| Command | What it does | Example |
+|---------|-------------|---------|
+| `r <plc_addr>` | Read one word via FC04 | `r 5100` |
+| `<plc_addr> <value>` | Write one word via FC06, then read back | `5110 2` |
+| `q` | Quit | |
+
+All addresses are **PLC addresses** (the `%MW` number). The tool computes the
+Modbus register number for you and prints it in the output.
+
+**Example session — start the auger sequence:**
+```
+> r 5100
+  %MW5100 = 0  (FC04 reg 4100)          ← auger idle
+
+> 5110 2
+  wrote %MW5110 = 2  (FC06 write reg 110)
+  readback %MW5110 = 2  (FC04 read reg 4110)  ✓ confirmed   ← write landed
+
+> r 5100
+  %MW5100 = 1  (FC04 reg 4100)          ← PLC confirmed sequence start
+
+> 5110 0
+  wrote %MW5110 = 0  (FC06 write reg 110)
+  readback %MW5110 = 0  (FC04 read reg 4110)  ✓ confirmed   ← command cleared
+```
+
+**Example session — report AMR state:**
+```
+> 5112 2
+  wrote %MW5112 = 2  (FC06 write reg 112)
+  readback %MW5112 = 2  (FC04 read reg 4112)  ✓ confirmed   ← AMR Moving
+
+> 5112 1
+  wrote %MW5112 = 1  (FC06 write reg 112)
+  readback %MW5112 = 1  (FC04 read reg 4112)  ✓ confirmed   ← AMR Stationary
+```
+
+If you see `✗ mismatch`, the PLC ladder overwrote the register immediately after the
+write — this is expected if the PLC program has logic that clears the command bits.
 
 ---
 
-## Problem 5 — `plc_test.py` Rejected All Non-Binary Values  *(fixed)*
+### 3. `launch_plc2.sh` — Live web dashboard
 
-Original code had `if value not in (0, 1)` which blocked all machine commands
-(e.g. `START = 64`, `STOP = 128`, `ENABLE_AUGER = 2048`). Fixed to accept 0–65535.
+Starts a local web server (port 8768) with a browser HMI showing all handshake
+registers in real time and buttons to write command values. This is the primary
+operator interface.
+
+```bash
+cd /home/jetson/dual/dual-robot-dashboard
+./launch_plc2.sh
+```
+
+Then open a browser at:
+- **Local (on Jetson):** `http://localhost:8768`
+- **From another device on the network:** `http://192.168.1.100:8768`
+
+**Options:**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--port N` | 8768 | HTTP listen port |
+| `--plc-host H` | 192.168.1.2 | PLC Modbus TCP host |
+| `--plc-port N` | 502 | PLC Modbus TCP port |
+| `--headless` | off | Skip opening a browser (use when running remotely or as a service) |
+
+**Examples:**
+```bash
+./launch_plc2.sh                           # default settings, opens browser
+./launch_plc2.sh --headless                # serve only, no browser
+./launch_plc2.sh --plc-host 192.168.1.2   # explicit PLC address
+```
+
+**What the dashboard shows:**
+
+- **PLC → AMR panel (left):** Live LED indicators for each bit of `%MW5100` and `%MW5101`.
+  Green LED = bit is 1. Polled every 500 ms.
+- **AMR → PLC panel (right):** Buttons to write values to `%MW5110`, `%MW5111`, `%MW5112`.
+  The current register value is always read back and shown after each write.
+- **Event log (bottom):** Every poll change and every write is logged with timestamps and
+  the exact Modbus register numbers and decimal values used, matching `plc_test.py` format:
+  ```
+  14:23:01.123  wrote %MW5110 = 2  (FC06 reg 110)
+  14:23:01.134  readback %MW5110 = 2  (FC04 reg 4110)  ✓ confirmed
+  14:23:00.456  %MW5100 bit 1 (Clear of Ground): 0 → 1
+  ```
+
+The dashboard degrades gracefully if the PLC is unreachable — it shows "PLC offline"
+and keeps retrying in the background. It never crashes on a lost connection.
 
 ---
 
-## Problem 6 — Auger Jog Register Addresses Unknown  *(unresolved)*
+## Troubleshooting
 
-The PLC HMI (`dashboard/plc_hmi.html`) has fully-wired press-and-hold jog buttons
-(▲ Jog Up / ▼ Jog Down) with a 600 ms watchdog auto-stop. The server side
-(`dashboard/plc_hmi_serve.py`) accepts the jog REST calls but cannot write to the
-PLC because the `%MW` addresses for auger jog up/down have not been confirmed.
+**Dashboard shows "PLC offline" / `plc_test.py` says "CONNECT FAILED"**
+1. Check the Jetson has an address on `eno1`: `ip addr show eno1` should show `192.168.1.100/24`.
+2. Ping the PLC: `ping 192.168.1.2`. If it times out, check the LAN cable.
+3. Check for the VMware conflict: `arp -n 192.168.1.2`. MAC starting with `00:0b:29` = VM in the way — power it off.
 
-**To wire up:**
-1. PLC engineer identifies the auger jog registers (e.g., bits in `AMR_2_PLC` or a
-   dedicated jog word in the FEnet write area `%MW5000`+).
-2. Add `AUGER_JOG_UP` and `AUGER_JOG_DOWN` to `dashboard/plc_client._REG`.
-3. Add a `jog_auger(direction, active)` method to `PlcClient`:
-   - `active=True` → write the jog value to the register (sustained, not pulsed)
-   - `active=False` → write 0
-4. Call it from `plc_hmi_serve.py`'s `/api/hmi/auger/jog` handler.
+**Reads return 0 for everything**
+Almost always the VMware conflict. See above.
 
----
+**Write says `✓ confirmed` but PLC doesn't act on the command**
+The write reached the PLC M-memory (`%MW5110` etc.), but the PLC ladder logic gates
+actual motion on Auto mode + subsystem enabled + safety interlocks. Check XG5000 ladder
+monitor to confirm the PLC is in Auto mode and all enables are set.
 
-## What Has Been Fixed (as of 2026-06-18)
+**`✗ mismatch` on readback**
+The PLC ladder wrote a different value to the register between the FC06 write and the
+FC04 readback (~10 ms later). This is normal if the PLC program clears command bits
+after acknowledging them.
 
-| File | Changes |
-|------|---------|
-| `plc_read.py` | FC04 for reads; `READ_OFFSET = 1000`; rejects addresses below `%MW1000` |
-| `plc_test.py` | FC04 for reads; FC06 for writes; correct offsets; full 16-bit value range; readback now confirms write via FC04; reconnect-on-`ConnectionResetError` |
-| `dashboard/plc_client.py` | FC04 for `%MW` reads; FC02 for `%MX` reads; correct FEnet offsets in `_read()` and `_write()`; `_write()` warns + fails gracefully for out-of-range addresses |
-
----
-
-## What Still Needs to Be Done
-
-1. **PLC engineer:** Resolve Problem 4 (lower write area to `%MW0` or relocate `AMR_2_PLC`).
-2. **PLC engineer:** Define auger jog register addresses (Problem 6).
-3. **Verify on real hardware:** Run `plc_test.py` against physical PLC, write a value to
-   `%MW5000`+, confirm it appears in XG5000 at the correct `%MW` address.
-4. **Confirm bit layout:** Bench-verify the bit indices in `%MW5000`/`%MW5001` for machine
-   commands (`SET_AUTO`, `START`, `ENABLE_AUGER`, etc.) against XG5000 ladder monitor.
-5. **Wire jog:** Once jog registers confirmed, add to `plc_client._REG` and implement
-   `PlcClient.jog_auger()` (see Problem 6).
-6. **Add Planter & Machine Status pages** to the PLC HMI (`dashboard/plc_hmi.html`).
+**Connection drops mid-session**
+The FEnet closes idle TCP connections after ~15 seconds. All three tools reconnect
+automatically on the next operation — you don't need to restart anything.

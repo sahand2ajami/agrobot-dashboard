@@ -508,6 +508,24 @@ class PlcClient:
             }
         return self._op(fn)
 
+    def ping(self):
+        """Lightweight connectivity check — connect and read one register (FC04 reg 0 =
+        %MW1000). Returns {connected, latency_ms, host, port}. latency_ms is None when
+        unreachable. Callers should poll this every few seconds for a health indicator."""
+        t0 = time.perf_counter()
+        def fn():
+            res = self._client.read_input_registers(0, count=1)  # %MW1000, reg = 1000-1000 = 0
+            latency_ms = round((time.perf_counter() - t0) * 1000, 1)
+            if res.isError():
+                return {"success": False, "latency_ms": latency_ms, "message": "Modbus read error"}
+            return {"success": True, "latency_ms": latency_ms, "message": "OK"}
+        out = self._op(fn)
+        if not out.get("connected"):
+            out["latency_ms"] = None
+        out["host"] = self.host
+        out["port"] = self.port
+        return out
+
     def close(self):
         with self._lock:
             self._reset()

@@ -91,11 +91,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def _json(self, code, data):
         body = json.dumps(data).encode()
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def _html(self, filename):
         path = os.path.join(os.path.dirname(__file__), filename)
@@ -105,11 +108,14 @@ class Handler(BaseHTTPRequestHandler):
         except FileNotFoundError:
             self.send_error(404, f"{filename} not found")
             return
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def _body(self):
         length = int(self.headers.get("Content-Length", 0))
@@ -126,6 +132,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if path in ("/", "/index.html"):
             self._html("plc_hmi.html")
+
+        elif path == "/api/hmi/ping":
+            self._json(200, self.plc.ping())
 
         elif path == "/api/hmi/status":
             self._json(200, self.plc.get_machine_status())

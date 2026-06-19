@@ -776,6 +776,111 @@
     }
     .toast.show { opacity: 1; }
     .toast.err  { background: #da3633; }
+
+    /* ── Mobile / touch responsive ─────────────────────────────── */
+
+    /* Enlarge map overlay touch targets on any touch device */
+    @media (max-width: 900px) {
+      .map-ctrl-btn             { width: 44px; height: 44px; }
+      .zoom-group .map-ctrl-btn { width: 44px; height: 44px; }
+      .gnss-locate-btn          { width: 44px; height: 44px; }
+      .compass-btn              { width: 44px; }
+    }
+
+    /* Tablet / phone — single-column layout */
+    @media (max-width: 768px) {
+      /* Allow vertical page scroll */
+      body { overflow-y: auto; overflow-x: hidden; }
+
+      /* Compact header */
+      .dash   { grid-template-rows: 52px auto; height: auto; min-height: 100svh; }
+      .header { height: 52px; padding: 0 10px; gap: 8px; }
+      .logo-sub { display: none; }
+      .gear-btn { width: 44px; height: 44px; font-size: 28px; }
+
+      /* Stack left / right columns vertically */
+      .main { flex-direction: column; overflow: visible; height: auto; }
+
+      /* Left col: camera = 56.25 vw (16:9), controls auto-height */
+      .left-col {
+        width: 100%;
+        flex-shrink: 0;
+        grid-template-rows: 56.25vw auto;
+      }
+
+      /* Hide desktop column splitter */
+      .main-splitter { display: none; }
+
+      /* Right col: fixed-height map + telemetry */
+      .right-col   { flex: none; width: 100%; overflow: visible; }
+      .map-wrapper { height: 260px; flex: none; }
+
+      /* Controls: WASD + speed on row 1, action cluster full-width on row 2 */
+      .controls-area {
+        grid-template-columns: auto 1fr;
+        grid-template-rows: auto auto;
+        gap: 8px;
+        padding: 10px 12px;
+        align-items: start;
+      }
+      .action-cluster {
+        grid-column: 1 / -1;
+        border-left: none;
+        border-top: 1px solid #30363d;
+        padding-left: 0;
+        padding-top: 10px;
+      }
+      /* Action row buttons fill available width evenly */
+      .action-row > * { min-width: 60px; }
+
+      /* Telemetry strip — auto height, 3 columns */
+      .telem-strip {
+        height: auto;
+        min-height: 0;
+        padding: 10px 12px;
+        grid-template-columns: repeat(3, 1fr);
+        grid-template-rows: auto;
+      }
+      .tl-label { font-size: 12px; }
+      .tl-val   { font-size: 16px; }
+
+      /* Map overlay button positions inside shrunken map */
+      .zoom-group   { bottom: 90px; }
+      .compass-wrap { bottom: 180px; }
+      .locate-wrap  { bottom: 40px; }
+
+      /* Settings panel — full width, starts below compact header */
+      .settings-panel { top: 52px; width: 100%; max-width: 100%; }
+
+      /* Settings panel internals — bigger touch targets */
+      .sp-btn           { padding: 10px 8px; font-size: 13px; }
+      .sp-section-title { font-size: 14px; }
+      .sp-close         { width: 44px; height: 44px; }
+      .sp-status-label  { font-size: 14px; }
+      .sp-status-val    { font-size: 14px; }
+      .conn-label       { font-size: 14px; }
+
+      /* PLC subsystem rows stack vertically so enable/disable btns don't overflow */
+      .plc-sub-row { flex-direction: column; align-items: flex-start; gap: 8px; }
+      .plc-sub-row .sp-btn { padding: 8px 20px; }
+    }
+
+    /* Small phones (≤480 px) */
+    @media (max-width: 480px) {
+      .map-wrapper { height: 220px; }
+
+      /* 2-column telemetry on narrow screens */
+      .telem-strip { grid-template-columns: repeat(2, 1fr); }
+
+      /* Slightly smaller WASD keys to fit narrow screens */
+      .wasd      { grid-template-columns: repeat(3, 58px); grid-template-rows: repeat(2, 58px); }
+      .key       { width: 58px; height: 58px; font-size: 20px; }
+      .key-empty { width: 58px; height: 58px; }
+
+      /* Shorter action buttons to save vertical space */
+      .fwd-btn, .act-btn, .act-rec { height: 58px; font-size: 13px; }
+      .act-btn i { font-size: 18px; }
+    }
   </style>
 </head>
 <body>

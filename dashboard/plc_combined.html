@@ -1,0 +1,1979 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Agrobot AMR + PLC</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --teal:     #2ca5a5;
+  --teal-d:   #1f8686;
+  --teal-lt:  #e4f4f4;
+  --text:     #1a1a1a;
+  --muted:    #555;
+  --dim:      #888;
+  --bg:       #f0f0f0;
+  --panel:    #ffffff;
+  --border:   #ddd;
+  --green:    #16a34a;
+  --green-lt: #f0fdf4;
+  --green-bd: #86efac;
+  --red:      #dc2626;
+  --red-lt:   #fef2f2;
+  --red-bd:   #fca5a5;
+  --amber:    #b45309;
+  --amber-lt: #fffbeb;
+  --blue:     #2563eb;
+  --blue-lt:  #eff6ff;
+  --blue-bd:  #93c5fd;
+  --mono:     'Courier New', Courier, monospace;
+  --hdr:      56px;
+  --nav:      210px;
+  --key-sz:   64px;
+}
+
+html, body { height: 100%; -webkit-text-size-adjust: 100%; }
+
+body {
+  height: 100vh;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 20px; color: var(--text); background: var(--bg);
+}
+
+/* ── HEADER ──────────────────────────────────────────────────── */
+header {
+  height: var(--hdr); min-height: var(--hdr);
+  background: var(--teal);
+  display: flex; align-items: center;
+  padding: 0 16px; gap: 14px;
+  flex-shrink: 0;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.2); z-index: 50;
+}
+.logo { height: 34px; flex-shrink: 0; }
+.hdr-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.hdr-pill {
+  display: flex; align-items: center; gap: 7px;
+  padding: 5px 13px; border-radius: 4px;
+  background: rgba(255,255,255,0.15);
+  border: 1px solid rgba(255,255,255,0.3);
+  font-size: 14px; font-weight: 700; letter-spacing: 0.4px;
+  color: rgba(255,255,255,0.8); white-space: nowrap;
+}
+.hdr-led { width: 9px; height: 9px; border-radius: 50%; background: rgba(255,255,255,0.3); flex-shrink: 0; transition: all 0.3s; }
+.pill-moving  { background: rgba(74,222,128,0.2); border-color: rgba(74,222,128,0.5); color: #a7f3d0; }
+.pill-moving .hdr-led  { background: #4ade80; box-shadow: 0 0 7px #4ade80; }
+.pill-stopped { background: rgba(147,197,253,0.15); border-color: rgba(147,197,253,0.4); color: #bfdbfe; }
+.pill-stopped .hdr-led { background: #93c5fd; }
+.pill-plc-on  { color: #a7f3d0; border-color: rgba(74,222,128,0.5); }
+.pill-plc-on .hdr-led  { background: #4ade80; box-shadow: 0 0 7px #4ade80; }
+.pill-plc-off { color: #fca5a5; border-color: rgba(248,113,113,0.5); }
+.pill-plc-off .hdr-led { background: #f87171; }
+
+/* ── PAGE BODY ───────────────────────────────────────────────── */
+.page-body { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+
+/* ── SIDEBAR ─────────────────────────────────────────────────── */
+.sidebar {
+  width: var(--nav); min-width: var(--nav);
+  background: var(--panel); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  overflow-y: auto; overflow-x: hidden; flex-shrink: 0;
+}
+.sidebar::-webkit-scrollbar { width: 3px; }
+.sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+.nav-item {
+  display: block; padding: 13px 12px 13px 18px;
+  font-size: 19px; font-weight: 500; color: #1a6e6e;
+  cursor: pointer; border: none; background: none; width: 100%;
+  text-align: left; border-left: 4px solid transparent;
+  transition: background 0.12s, border-color 0.12s; flex-shrink: 0;
+}
+.nav-item:hover  { background: var(--teal-lt); }
+.nav-item.active { font-weight: 700; color: var(--text); background: var(--teal-lt); border-left-color: var(--teal); }
+.nav-divider { height: 1px; background: var(--border); flex-shrink: 0; }
+
+/* ── WASD BLOCK ──────────────────────────────────────────────── */
+.wasd-block {
+  padding: 12px 10px 10px;
+  border-top: 1px solid var(--border); background: #fafafa;
+  display: flex; flex-direction: column; align-items: center; gap: 9px; flex-shrink: 0;
+}
+
+/* 2-row WASD: row1=[_,W,_], row2=[A,S,D] */
+.wasd-grid {
+  display: grid;
+  grid-template-columns: repeat(3, var(--key-sz));
+  grid-template-rows: repeat(2, var(--key-sz));
+  gap: 5px;
+}
+.wk {
+  width: var(--key-sz); height: var(--key-sz);
+  border: 1.5px solid #ccc; border-radius: 8px;
+  background: var(--panel); color: var(--text);
+  font-size: 25px; font-weight: 700;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  user-select: none; -webkit-user-select: none; touch-action: none;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.08); transition: all 0.08s;
+}
+.wk:hover  { background: var(--teal-lt); border-color: var(--teal); }
+.wk.active { background: var(--teal); border-color: var(--teal-d); color: #fff; box-shadow: inset 0 2px 4px rgba(0,0,0,0.2); }
+
+.speed-row {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; width: 100%;
+}
+.sp-btn {
+  padding: 9px 0; border: 1.5px solid #ccc; border-radius: 6px;
+  background: var(--panel); font-size: 15px; font-weight: 700;
+  color: var(--muted); cursor: pointer; text-align: center; transition: all 0.1s;
+}
+.sp-btn:hover  { background: var(--teal-lt); border-color: var(--teal); color: var(--teal-d); }
+.sp-btn.active { background: var(--teal); border-color: var(--teal-d); color: #fff; }
+
+.vel-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; width: 100%; }
+.vel-cell { background: white; border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; text-align: center; }
+.vel-lbl { font-size: 12px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--dim); }
+.vel-num { font-family: var(--mono); font-size: 20px; font-weight: 700; color: var(--teal-d); }
+
+/* ── EXTRA CONTROLS (2m, REC, Det) ──────────────────────────── */
+.extra-controls {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; width: 100%; padding: 0 4px;
+}
+.ctrl-btn {
+  height: 46px; border: 1.5px solid #ccc; border-radius: 7px;
+  background: var(--panel); font-size: 14px; font-weight: 700; color: var(--muted);
+  cursor: pointer; text-align: center; transition: all 0.1s; line-height: 1.2;
+  display: flex; align-items: center; justify-content: center;
+}
+.ctrl-btn:hover   { background: var(--teal-lt); border-color: var(--teal); color: var(--teal-d); }
+.ctrl-btn.running { background: var(--amber-lt); border-color: var(--amber); color: var(--amber); }
+.ctrl-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* REC — slightly red default, solid red when recording */
+.ctrl-rec { border-color: #fca5a5; color: var(--red); background: #fff5f5; }
+.ctrl-rec:hover:not(.recording) { background: #fee2e2; border-color: #ef4444; }
+.ctrl-rec.recording { background: var(--red); border-color: #b91c1c; color: #fff; }
+
+/* Det — slightly blue default, solid blue when on */
+.ctrl-det { border-color: var(--blue-bd); color: var(--blue); background: var(--blue-lt); }
+.ctrl-det:hover:not(.on) { background: #dbeafe; border-color: #3b82f6; }
+.ctrl-det.on { background: var(--blue); border-color: #1e40af; color: #fff; }
+
+.fwd-lbl { font-size: 12px; text-align: center; color: var(--dim); min-height: 14px; padding: 1px 4px; }
+
+/* ── ACTUATOR BLOCK ──────────────────────────────────────────── */
+.act-block {
+  padding: 8px 8px 10px;
+  border-top: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 5px; flex-shrink: 0;
+}
+.act-btn {
+  width: 100%; padding: 10px 12px; border-radius: 6px;
+  border: 1.5px solid #ccc; background: var(--panel);
+  font-size: 16px; font-weight: 700; color: var(--muted);
+  cursor: pointer; display: flex; align-items: center; justify-content: space-between;
+  transition: all 0.12s;
+}
+.act-btn:hover   { background: var(--teal-lt); border-color: var(--teal); color: var(--teal-d); }
+.act-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.act-status {
+  font-size: 13px; font-weight: 700; padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--green-lt); color: var(--green); border: 1px solid var(--green-bd);
+}
+.act-status.cycle { background: var(--red-lt); color: var(--red); border-color: var(--red-bd); }
+
+/* ── CONTENT ─────────────────────────────────────────────────── */
+.content { flex: 1; min-width: 0; position: relative; overflow: hidden; }
+.view { display: none; position: absolute; inset: 0; flex-direction: column; overflow: hidden; }
+.view.active { display: flex; }
+
+/* ════ VIEW 1 — CAMERA ═══════════════════════════════════════ */
+#view-camera { background: #010409; }
+#camContent  { width: 100%; height: 100%; }
+
+.cam-split-label {
+  position: absolute; bottom: 8px; left: 8px; z-index: 20;
+  background: rgba(0,0,0,0.65); color: #ddd;
+  font-size: 12px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase;
+  padding: 3px 9px; border-radius: 3px; pointer-events: none;
+}
+.cam-err {
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 6px; color: #555;
+}
+.cam-err span { font-size: 13px; }
+
+.pip-wrap {
+  position: absolute; aspect-ratio: 16/9;
+  background: #010409; border: 2px solid #444c56; border-radius: 5px;
+  overflow: hidden; box-shadow: 0 4px 14px rgba(0,0,0,.7);
+  z-index: 50; cursor: pointer;
+  transition: border-color .15s, left .18s, right .18s, top .18s, bottom .18s;
+  user-select: none; -webkit-user-select: none;
+}
+.pip-wrap:hover { border-color: #58a6ff; }
+.pip-wrap.dragging { border-color: #388bfd; transition: border-color .15s; cursor: grabbing; }
+.pip-hover-overlay {
+  position: absolute; inset: 0;
+  background: rgba(0,0,0,0); display: flex;
+  flex-direction: column; align-items: center; justify-content: center;
+  gap: 5px; opacity: 0; transition: opacity .15s, background .15s;
+  z-index: 10; pointer-events: none; color: #fff; font-size: 22px;
+}
+.pip-hover-overlay span { font-size: 12px; font-weight: 700; letter-spacing: 0.5px; }
+.pip-wrap:hover .pip-hover-overlay { opacity: 1; background: rgba(0,0,0,.5); }
+.pip-wrap.dragging .pip-hover-overlay { opacity: 0; }
+
+.pip-zone-grid {
+  position: absolute; inset: 0; display: none;
+  grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr);
+  z-index: 100; pointer-events: none;
+}
+.pip-zone-grid.active { display: grid; }
+.pip-zone-cell { border: 1px solid rgba(255,255,255,.07); transition: background .1s, border-color .1s; }
+.pip-zone-cell.zone-active { background: rgba(56,139,253,.3); border-color: rgba(56,139,253,.7); }
+
+.det-bar {
+  position: absolute; bottom: 0; left: 0; right: 0; z-index: 30;
+  background: rgba(1,4,9,0.88); padding: 7px 16px;
+  display: flex; align-items: center; gap: 14px;
+  font-size: 15px; font-family: var(--mono);
+}
+
+/* ════ VIEW 2 — GPS ══════════════════════════════════════════ */
+#view-gps { flex-direction: row !important; }
+.map-wrap  { flex: 1; min-width: 0; position: relative; }
+#gnssMapEl { position: absolute; inset: 0; }
+.map-ctrls {
+  position: absolute; top: 12px; right: 12px; z-index: 500;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.map-btn {
+  width: 40px; height: 40px; background: #fff; border: 1px solid #bbb;
+  border-radius: 4px; font-size: 20px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.18);
+}
+.map-btn:hover { background: var(--teal-lt); border-color: var(--teal); }
+.gps-panel {
+  width: 270px; flex-shrink: 0; background: var(--panel);
+  border-left: 1px solid var(--border);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.gps-panel-hdr {
+  padding: 12px 16px; border-bottom: 1px solid var(--border);
+  background: #fafafa; display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+}
+.gps-panel-hdr h2 { font-size: 19px; font-weight: 700; }
+.gps-led { width: 13px; height: 13px; border-radius: 50%; background: #ddd; flex-shrink: 0; transition: all 0.3s; }
+.gps-led.fix    { background: var(--green); box-shadow: 0 0 7px rgba(22,163,74,.5); }
+.gps-led.signal { background: #f59e0b; }
+.gps-age { margin-left: auto; font-size: 14px; color: var(--dim); font-family: var(--mono); }
+.gps-rows { flex: 1; overflow-y: auto; padding: 6px 10px 12px; }
+.gps-row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: 8px 8px; border-radius: 4px; font-size: 16px;
+}
+.gps-row:nth-child(odd) { background: #f8f8f8; }
+.gps-key { font-weight: 600; color: var(--muted); text-transform: uppercase; font-size: 13px; letter-spacing: 0.5px; }
+.gps-val { font-family: var(--mono); font-weight: 700; color: var(--text); text-align: right; }
+.gps-sub { font-size: 13px; color: var(--dim); font-family: var(--mono); text-align: right; }
+.gps-hr  { height: 1px; background: var(--border); margin: 4px 8px; }
+
+/* ════ VIEW 3 — CONNECTIVITY ═════════════════════════════════ */
+#view-connectivity { overflow-y: auto; }
+.conn-body { padding: 20px; }
+.conn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+.cc {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  padding: 16px; display: flex; flex-direction: column; gap: 10px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06); min-height: 110px;
+}
+.cc-top  { display: flex; align-items: center; gap: 12px; }
+.cc-icon {
+  width: 36px; height: 36px; border-radius: 8px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; font-weight: 700; letter-spacing: 0.5px;
+}
+.cc-name { font-size: 17px; font-weight: 700; }
+.cc-badge {
+  margin-left: auto; font-size: 13px; font-weight: 700; letter-spacing: 1px;
+  text-transform: uppercase; padding: 3px 10px; border-radius: 4px;
+  min-width: 70px; text-align: center;
+}
+.bg-on  { background: var(--green-lt); color: var(--green);  border: 1px solid var(--green-bd); }
+.bg-off { background: var(--red-lt);   color: var(--red);    border: 1px solid var(--red-bd); }
+.bg-par { background: var(--amber-lt); color: var(--amber);  border: 1px solid #fcd34d; }
+.bg-unk { background: #f5f5f5;         color: var(--dim);    border: 1px solid #ddd; }
+.cc-detail { font-size: 14px; color: var(--muted); line-height: 1.5; font-family: var(--mono); }
+.cc-ts     { font-size: 13px; color: var(--dim); }
+.batt-bar-wrap { height: 10px; background: #eee; border-radius: 5px; overflow: hidden; margin-top: 2px; }
+.batt-bar      { height: 100%; border-radius: 5px; transition: width 0.5s, background 0.5s; }
+
+/* ════ VIEW 4 — PLC HANDSHAKE ════════════════════════════════ */
+#view-plc { overflow: hidden; }
+.plc-split {
+  flex: 1; min-height: 0;
+  display: grid; grid-template-columns: 1fr 1fr;
+  border-bottom: 2px solid var(--border); overflow: hidden;
+}
+.plc-col { display: flex; flex-direction: column; overflow: hidden; background: var(--panel); }
+.plc-col + .plc-col { border-left: 2px solid var(--border); }
+.plc-col-hdr {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 16px; border-bottom: 1px solid var(--border);
+  background: #fafafa; flex-shrink: 0;
+}
+.plc-col-hdr h2 { font-size: 18px; font-weight: 700; }
+.plc-hint { margin-left: auto; font-size: 13px; color: var(--dim); }
+.badge {
+  font-size: 12px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase;
+  padding: 4px 10px; border-radius: 4px; flex-shrink: 0;
+}
+.b-read  { background: var(--green-lt); color: #15803d; border: 1px solid var(--green-bd); }
+.b-write { background: var(--blue-lt);  color: #1e40af; border: 1px solid var(--blue-bd); }
+.plc-col-body { flex: 1; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.reg-card { border: 1px solid #ddd; border-radius: 7px; overflow: hidden; background: #fff; }
+.reg-hdr {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 7px;
+  padding: 8px 12px 6px; background: #fafafa; border-bottom: 1px solid #eee;
+}
+.reg-name { font-size: 14px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; }
+.reg-addr { font-family: var(--mono); font-size: 14px; color: var(--muted); }
+.reg-fc   { font-family: var(--mono); font-size: 12px; color: var(--dim); }
+.reg-cur  { margin-left: auto; font-family: var(--mono); font-size: 14px; font-weight: 700; color: var(--muted); }
+.bit-list { padding: 5px 12px 10px; display: flex; flex-direction: column; gap: 2px; }
+.bit-row  { display: flex; align-items: center; gap: 10px; padding: 7px; border-radius: 5px; }
+.bit-row:hover { background: #f5f5f5; }
+.bit-led { width: 16px; height: 16px; border-radius: 50%; border: 2px solid #ccc; background: #eee; flex-shrink: 0; transition: all 0.2s; }
+.bit-led.on { background: var(--green); border-color: var(--green); box-shadow: 0 0 7px rgba(22,163,74,.4); }
+.bit-lbl { flex: 1; font-size: 15px; color: var(--muted); }
+.bit-lbl.on { color: var(--text); font-weight: 600; }
+.bit-num {
+  width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
+  border-radius: 4px; background: #f5f5f5; border: 1px solid #ddd;
+  font-family: var(--mono); font-size: 14px; font-weight: 700; color: var(--dim); flex-shrink: 0;
+}
+.bit-num.on { background: var(--green-lt); border-color: var(--green-bd); color: var(--green); }
+.cmd-area { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+.cmd-btn {
+  width: 100%; padding: 12px; border-radius: 6px;
+  border: 1.5px solid var(--border); background: var(--panel);
+  font-size: 15px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase;
+  color: var(--muted); cursor: pointer; transition: all 0.12s;
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+}
+.cmd-btn:hover    { background: var(--teal-lt); border-color: var(--teal); color: var(--teal-d); }
+.cmd-btn.c-active { background: var(--green-lt); border-color: var(--green); color: var(--green); }
+.cmd-btn.c-state  { background: var(--blue-lt); border-color: var(--blue-bd); color: var(--blue); }
+.cmd-btn.c-clear  { font-size: 13px; padding: 9px; color: var(--dim); background: #fafafa; }
+.cmd-btn.c-clear:hover { color: var(--red); border-color: #fca5a5; background: var(--red-lt); }
+.state-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.auto-note  { font-size: 13px; color: #1e40af; background: var(--blue-lt); border-top: 1px solid var(--blue-bd); padding: 7px 12px; line-height: 1.5; }
+.cheatsheet { margin: 10px 12px 4px; background: #fffbeb; border: 1px solid #fde68a; border-radius: 7px; padding: 10px 14px; }
+.cheatsheet-title { font-size: 13px; font-weight: 700; color: #92400e; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 8px; }
+.cs-row { display: flex; align-items: baseline; gap: 8px; padding: 3px 0; border-bottom: 1px solid #fef3c7; font-size: 13px; line-height: 1.4; }
+.cs-row:last-child { border-bottom: none; }
+.cs-dir  { font-weight: 700; min-width: 50px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+.cs-dir.rd { color: #0891b2; }
+.cs-dir.wr { color: #16a34a; }
+.cs-reg  { font-family: var(--mono); font-weight: 700; color: #1e293b; min-width: 82px; }
+.cs-desc { color: #374151; flex: 1; }
+.cs-vals { font-family: var(--mono); font-size: 12px; color: #6b7280; white-space: nowrap; }
+.plc-log { flex-shrink: 0; height: 195px; display: flex; flex-direction: column; border-top: 2px solid var(--border); }
+.plc-log-hdr {
+  display: flex; align-items: center; gap: 10px; padding: 6px 16px;
+  border-bottom: 1px solid var(--border); background: #fafafa; flex-shrink: 0;
+}
+.plc-log-hdr h3 { font-size: 13px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); }
+.log-cnt   { font-family: var(--mono); font-size: 13px; color: var(--dim); }
+.log-clear { margin-left: auto; font-size: 13px; font-weight: 600; color: var(--dim); background: transparent; border: 1px solid var(--border); border-radius: 3px; padding: 3px 9px; cursor: pointer; }
+.log-clear:hover { color: var(--red); border-color: #fca5a5; }
+#plc-log-body { flex: 1; overflow-y: auto; padding: 3px 16px 6px; font-family: var(--mono); font-size: 14px; line-height: 1.8; }
+.le   { display: flex; gap: 14px; border-bottom: 1px solid #f5f5f5; align-items: baseline; }
+.le-ts  { color: var(--dim); flex-shrink: 0; }
+.le-msg { color: var(--muted); word-break: break-all; }
+.le.lc  .le-msg { color: var(--green); }
+.le.ld  .le-msg { color: var(--red); font-weight: 600; }
+.le.lw  .le-msg { color: var(--blue); }
+.le.lch .le-msg { color: var(--amber); font-weight: 600; }
+.le.le2 .le-msg { color: var(--red); font-weight: 600; }
+.le.la  .le-msg { color: #7c3aed; font-weight: 600; }
+.le.li  .le-msg { color: var(--dim); }
+
+/* ════ VIEW 5 — SETTINGS ═════════════════════════════════════ */
+#view-settings { overflow-y: auto; }
+.settings-body { max-width: 620px; margin: 0 auto; padding: 24px; }
+.settings-section {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  padding: 20px; margin-bottom: 16px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+}
+.settings-section h3 { font-size: 19px; font-weight: 700; margin-bottom: 18px; color: var(--teal-d); border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+.sl-row { margin-bottom: 18px; }
+.sl-label { display: flex; justify-content: space-between; align-items: baseline; font-size: 17px; font-weight: 600; color: var(--muted); margin-bottom: 7px; }
+.sl-val { font-family: var(--mono); color: var(--text); font-weight: 700; font-size: 18px; }
+input[type=range] { width: 100%; accent-color: var(--teal); height: 6px; cursor: pointer; }
+.sl-preview { font-size: 14px; color: var(--dim); margin-top: 5px; font-family: var(--mono); background: #f8f8f8; padding: 6px 10px; border-radius: 4px; }
+.apply-btn {
+  width: 100%; padding: 16px; background: var(--teal); color: #fff;
+  border: none; border-radius: 7px; font-size: 19px; font-weight: 700;
+  cursor: pointer; transition: background 0.1s; margin-top: 4px;
+}
+.apply-btn:hover { background: var(--teal-d); }
+.apply-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.apply-btn.applied { background: var(--green); }
+
+/* ════ VIEW 6 — LOGS ═════════════════════════════════════════ */
+#view-logs { overflow: hidden; }
+.logs-toolbar {
+  display: flex; align-items: center; gap: 8px; padding: 8px 16px;
+  border-bottom: 1px solid var(--border); background: #fafafa; flex-shrink: 0; flex-wrap: wrap;
+}
+.logs-toolbar h2 { font-size: 18px; font-weight: 700; margin-right: 4px; white-space: nowrap; }
+.log-filters { display: flex; gap: 4px; flex-wrap: wrap; }
+.log-filter-btn {
+  padding: 5px 13px; border: 1px solid var(--border); border-radius: 4px;
+  background: white; font-size: 15px; cursor: pointer; font-weight: 600; color: var(--muted);
+  transition: all 0.1s;
+}
+.log-filter-btn:hover { border-color: var(--teal); color: var(--teal-d); }
+.log-filter-btn.active { background: var(--teal); color: white; border-color: var(--teal-d); }
+#app-log-body {
+  flex: 1; overflow-y: auto; padding: 2px 0; font-family: var(--mono); font-size: 15px;
+}
+.al { display: flex; align-items: baseline; gap: 10px; padding: 7px 16px; border-bottom: 1px solid #f5f5f5; }
+.al:hover { background: #fafafa; }
+.al-ts  { color: var(--dim); flex-shrink: 0; font-size: 13px; min-width: 105px; }
+.al-cat { font-weight: 700; flex-shrink: 0; min-width: 120px; font-size: 15px; }
+.al-msg { color: var(--muted); flex: 1; word-break: break-word; font-size: 15px; }
+.al-hint { color: var(--dim); font-size: 13px; font-style: italic; flex-shrink: 0; text-align: right; max-width: 230px; }
+.al-info  .al-cat { color: var(--teal-d); }
+.al-ok    .al-cat { color: var(--green); }
+.al-warn  .al-cat { color: var(--amber); }
+.al-err   .al-cat { color: var(--red); }
+.al-err   .al-msg { color: var(--red); }
+.al-change .al-cat { color: #7c3aed; }
+.al-write  .al-cat { color: var(--blue); }
+.al-sys   .al-cat { color: var(--dim); }
+.log-cnt-badge {
+  margin-left: auto; font-family: var(--mono); font-size: 14px; color: var(--dim); white-space: nowrap;
+}
+
+/* ── TOAST ───────────────────────────────────────────────────── */
+.toast {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(60px);
+  background: #1a1a1a; color: #fff; padding: 10px 20px; border-radius: 6px;
+  font-size: 16px; font-weight: 600; z-index: 9999; opacity: 0;
+  transition: transform 0.2s, opacity 0.2s; pointer-events: none; white-space: nowrap;
+}
+.toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+.toast.err  { background: var(--red); }
+
+/* Hidden progress helpers */
+#speedVal, #speedBar { display: none; }
+
+/* ════ MOBILE ════════════════════════════════════════════════ */
+@media (max-width: 680px) {
+  body { font-size: 18px; }
+  :root { --key-sz: 62px; --hdr: 50px; }
+
+  .hdr-pill { padding: 4px 9px; font-size: 12px; }
+  .logo { height: 28px; }
+
+  .page-body { flex-direction: column; }
+  .sidebar {
+    width: 100%; min-width: 0; flex-direction: row;
+    border-right: none; border-bottom: 2px solid var(--border);
+    overflow-x: auto; overflow-y: hidden; flex-shrink: 0; height: auto;
+  }
+  .nav-divider { display: none; }
+  .nav-item {
+    padding: 13px 18px; border-left: none;
+    border-bottom: 4px solid transparent; white-space: nowrap; flex-shrink: 0;
+  }
+  .nav-item.active { border-left: none; border-bottom-color: var(--teal); background: var(--teal-lt); }
+
+  .wasd-block {
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 200;
+    margin-top: 0; background: var(--panel);
+    border-top: 2px solid var(--border);
+    flex-direction: row; padding: 8px 14px 12px; gap: 14px;
+    align-items: center; justify-content: center;
+    box-shadow: 0 -3px 10px rgba(0,0,0,0.1);
+  }
+  .extra-controls { display: none; }
+  .act-block { display: none; }
+  .view.active { padding-bottom: calc(2 * var(--key-sz) + 60px); overflow-y: auto; }
+
+  #view-gps { flex-direction: column !important; }
+  .gps-panel { width: 100%; border-left: none; border-top: 1px solid var(--border); height: 230px; }
+  .plc-split { grid-template-columns: 1fr; }
+  .plc-col + .plc-col { border-left: none; border-top: 2px solid var(--border); }
+  .settings-body { padding: 14px; }
+  .logs-toolbar { padding: 6px 10px; gap: 5px; }
+  .log-filter-btn { padding: 4px 8px; font-size: 13px; }
+  .al-hint { display: none; }
+}
+
+@media (min-width: 681px) and (max-width: 900px) {
+  :root { --nav: 185px; --key-sz: 58px; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <img class="logo" src="/logo/svg/white_transparent.svg" alt="Agrobot">
+  <div class="hdr-right">
+    <div class="hdr-pill" id="amr-pill">
+      <div class="hdr-led"></div>
+      <span id="amr-txt">AMR —</span>
+    </div>
+    <div class="hdr-pill" id="plc-pill">
+      <div class="hdr-led"></div>
+      <span id="plc-txt">PLC…</span>
+    </div>
+  </div>
+</header>
+
+<div class="page-body">
+
+  <nav class="sidebar">
+    <button class="nav-item active" onclick="switchView('camera')">Camera</button>
+    <div class="nav-divider"></div>
+    <button class="nav-item" onclick="switchView('gps')">GPS</button>
+    <div class="nav-divider"></div>
+    <button class="nav-item" onclick="switchView('connectivity')">Connectivity</button>
+    <div class="nav-divider"></div>
+    <button class="nav-item" onclick="switchView('plc')">PLC</button>
+    <div class="nav-divider"></div>
+    <button class="nav-item" onclick="switchView('settings')">Settings</button>
+    <div class="nav-divider"></div>
+    <button class="nav-item" onclick="switchView('logs')">Logs</button>
+    <div class="nav-divider"></div>
+
+    <!-- WASD block -->
+    <div class="wasd-block">
+      <div class="wasd-grid">
+        <!-- row 1: _, W, _ -->
+        <div></div>
+        <div class="wk" id="kw" onpointerdown="_kd('w')" onpointerup="_ku('w')" onpointerleave="_ku('w')" oncontextmenu="return false">W</div>
+        <div></div>
+        <!-- row 2: A, S, D -->
+        <div class="wk" id="ka" onpointerdown="_kd('a')" onpointerup="_ku('a')" onpointerleave="_ku('a')" oncontextmenu="return false">A</div>
+        <div class="wk" id="ks" onpointerdown="_kd('s')" onpointerup="_ku('s')" onpointerleave="_ku('s')" oncontextmenu="return false">S</div>
+        <div class="wk" id="kd" onpointerdown="_kd('d')" onpointerup="_ku('d')" onpointerleave="_ku('d')" oncontextmenu="return false">D</div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:7px;align-items:stretch;min-width:0;width:100%">
+        <div class="speed-row">
+          <button class="sp-btn" id="spSlow" onclick="setPreset(1)">Slow</button>
+          <button class="sp-btn active" id="spMed"  onclick="setPreset(2)">Med</button>
+          <button class="sp-btn" id="spFast" onclick="setPreset(4)">Fast</button>
+        </div>
+        <div class="vel-row">
+          <div class="vel-cell"><div class="vel-lbl">Lin m/s</div><div class="vel-num" id="velLin">0.00</div></div>
+          <div class="vel-cell"><div class="vel-lbl">Ang r/s</div><div class="vel-num" id="velAng">0.00</div></div>
+        </div>
+      </div>
+
+      <!-- Extra controls: 2m, REC, Det — uniform size -->
+      <div class="extra-controls">
+        <button class="ctrl-btn" id="fwd2mBtn" onclick="moveForward2m()">2m Fwd</button>
+        <button class="ctrl-btn ctrl-rec" id="trackRecBtn" onclick="toggleTrackRecord()"><span id="trackRecLabel">REC</span></button>
+        <button class="ctrl-btn ctrl-det" id="detBtn" onclick="toggleDetectionBtn()">Det</button>
+      </div>
+      <div class="fwd-lbl" id="fwd2mLabel"></div>
+    </div><!-- /wasd-block -->
+
+    <!-- Actuator buttons -->
+    <div class="act-block">
+      <button class="act-btn" id="augerBtn" onclick="toggleActuator('auger')">
+        <span>Auger</span>
+        <span class="act-status" id="auger-status">Idle</span>
+      </button>
+      <button class="act-btn" id="planterBtn" onclick="toggleActuator('planter')">
+        <span>Planter</span>
+        <span class="act-status" id="planter-status">Idle</span>
+      </button>
+      <button class="act-btn" id="bothBtn" onclick="toggleActuator('both')">
+        <span>Auger + Planter</span>
+        <span class="act-status" id="both-status">Idle</span>
+      </button>
+    </div>
+
+  </nav>
+
+  <main class="content">
+
+    <!-- CAMERA VIEW -->
+    <div id="view-camera" class="view active">
+      <div id="camContent" style="width:100%;height:100%"></div>
+    </div>
+
+    <!-- GPS VIEW -->
+    <div id="view-gps" class="view">
+      <div class="map-wrap">
+        <div id="gnssMapEl"></div>
+        <div class="map-ctrls">
+          <button class="map-btn" onclick="mapZoomIn()"  title="Zoom in">+</button>
+          <button class="map-btn" onclick="mapZoomOut()" title="Zoom out">−</button>
+          <button class="map-btn" onclick="mapLocate()"  title="Re-centre">&#9685;</button>
+        </div>
+      </div>
+      <div class="gps-panel">
+        <div class="gps-panel-hdr">
+          <div class="gps-led" id="gps-led"></div>
+          <h2>GPS / GNSS</h2>
+          <span class="gps-age" id="gpsAge">—</span>
+        </div>
+        <div class="gps-rows">
+          <div class="gps-row"><span class="gps-key">Status</span><span class="gps-val" id="gvFix">—</span></div>
+          <div class="gps-row"><span class="gps-key">Satellites</span><span class="gps-val" id="gvSats">—</span></div>
+          <div class="gps-row"><span class="gps-key">HDOP</span><span class="gps-val" id="gvHdop">—</span></div>
+          <div class="gps-hr"></div>
+          <div class="gps-row">
+            <span class="gps-key">Latitude</span>
+            <div style="text-align:right"><div class="gps-val" id="gvLat">—</div><div class="gps-sub" id="gvLatDms"></div></div>
+          </div>
+          <div class="gps-row">
+            <span class="gps-key">Longitude</span>
+            <div style="text-align:right"><div class="gps-val" id="gvLon">—</div><div class="gps-sub" id="gvLonDms"></div></div>
+          </div>
+          <div class="gps-row"><span class="gps-key">Altitude</span><span class="gps-val" id="gvAlt">—</span></div>
+          <div class="gps-hr"></div>
+          <div class="gps-row"><span class="gps-key">Speed</span><span class="gps-val" id="gvSpd">—</span></div>
+          <div class="gps-row"><span class="gps-key">Heading</span><span class="gps-val" id="gvHdg">—</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CONNECTIVITY VIEW -->
+    <div id="view-connectivity" class="view">
+      <div class="conn-body">
+        <div class="conn-grid">
+          <div class="cc">
+            <div class="cc-top"><div class="cc-icon" style="background:#fef3c7;color:#b45309">BAT</div><span class="cc-name">Chassis Battery</span><span class="cc-badge bg-unk" id="cc-bat-b">—</span></div>
+            <div class="cc-detail" id="cc-bat-d">Polling /api/chassis_battery</div>
+            <div class="batt-bar-wrap"><div class="batt-bar" id="cc-bat-bar" style="width:0%"></div></div>
+            <div class="cc-ts" id="cc-bat-t">—</div>
+          </div>
+          <div class="cc">
+            <div class="cc-top"><div class="cc-icon" style="background:#ede9fe;color:#6d28d9">PLC</div><span class="cc-name">PLC (Modbus TCP)</span><span class="cc-badge bg-unk" id="cc-plc-b">—</span></div>
+            <div class="cc-detail" id="cc-plc-d">%MW5100–5112 · 192.168.1.2:502</div>
+            <div class="cc-ts" id="cc-plc-t">—</div>
+          </div>
+          <div class="cc">
+            <div class="cc-top"><div class="cc-icon" style="background:#e4f4f4;color:#1f8686">CAM</div><span class="cc-name">Rear Camera</span><span class="cc-badge bg-unk" id="cc-cam-b">—</span></div>
+            <div class="cc-detail" id="cc-cam-d">RealSense D435 · /api/camera/stream</div>
+            <div class="cc-ts" id="cc-cam-t">—</div>
+          </div>
+          <div class="cc">
+            <div class="cc-top"><div class="cc-icon" style="background:#eff6ff;color:#1d4ed8">ZED</div><span class="cc-name">Front Camera (ZED 2i)</span><span class="cc-badge bg-unk" id="cc-zed-b">—</span></div>
+            <div class="cc-detail" id="cc-zed-d">ZED 2i wide-angle · /api/zed/stream</div>
+            <div class="cc-ts" id="cc-zed-t">—</div>
+          </div>
+          <div class="cc">
+            <div class="cc-top"><div class="cc-icon" style="background:#f0fdf4;color:#15803d">GPS</div><span class="cc-name">GPS / GNSS</span><span class="cc-badge bg-unk" id="cc-gps-b">—</span></div>
+            <div class="cc-detail" id="cc-gps-d">Columbus P-9 Race · /api/gnss</div>
+            <div class="cc-ts" id="cc-gps-t">—</div>
+          </div>
+          <div class="cc">
+            <div class="cc-top"><div class="cc-icon" style="background:#f5f3ff;color:#1d4ed8">WHL</div><span class="cc-name">Robot Base (Odometry)</span><span class="cc-badge bg-unk" id="cc-rob-b">—</span></div>
+            <div class="cc-detail" id="cc-rob-d">Wheel encoders · Modbus RTU · /api/wheel_odom</div>
+            <div class="cc-ts" id="cc-rob-t">—</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PLC HANDSHAKE VIEW -->
+    <div id="view-plc" class="view">
+      <div class="plc-split">
+        <div class="plc-col">
+          <div class="plc-col-hdr">
+            <span class="badge b-read">PLC → AMR</span>
+            <h2>Status</h2>
+            <span class="plc-hint">read · 500 ms</span>
+          </div>
+          <div class="plc-col-body" id="plc-status-body"></div>
+        </div>
+        <div class="plc-col">
+          <div class="plc-col-hdr">
+            <span class="badge b-write">AMR → PLC</span>
+            <h2>Commands</h2>
+            <span class="plc-hint">write on change</span>
+          </div>
+          <div class="plc-col-body" id="plc-cmd-body"></div>
+        </div>
+      </div>
+      <div class="cheatsheet">
+        <div class="cheatsheet-title">📋 Register Quick Reference</div>
+        <div class="cs-row">
+          <span class="cs-dir rd">READ</span>
+          <span class="cs-reg">%MW5100</span>
+          <span class="cs-desc">PLC tells AMR: Auger status</span>
+          <span class="cs-vals">bit 0 (1) = Seq start · bit 1 (2) = Clear of ground · bit 2 (4) = Cycle complete</span>
+        </div>
+        <div class="cs-row">
+          <span class="cs-dir rd">READ</span>
+          <span class="cs-reg">%MW5101</span>
+          <span class="cs-desc">PLC tells AMR: Planter status</span>
+          <span class="cs-vals">bit 0 (1) = Seq start · bit 1 (2) = Clear of ground · bit 2 (4) = Cycle complete</span>
+        </div>
+        <div class="cs-row">
+          <span class="cs-dir wr">WRITE</span>
+          <span class="cs-reg">%MW5110</span>
+          <span class="cs-desc">AMR tells PLC: Start/stop auger sequence</span>
+          <span class="cs-vals">bit 1 (2) = Start sequence · 0 = Idle</span>
+        </div>
+        <div class="cs-row">
+          <span class="cs-dir wr">WRITE</span>
+          <span class="cs-reg">%MW5111</span>
+          <span class="cs-desc">AMR tells PLC: Start/stop planter sequence</span>
+          <span class="cs-vals">bit 1 (2) = Start sequence · 0 = Idle</span>
+        </div>
+        <div class="cs-row">
+          <span class="cs-dir wr">WRITE</span>
+          <span class="cs-reg">%MW5112</span>
+          <span class="cs-desc">AMR tells PLC: Robot movement state (auto)</span>
+          <span class="cs-vals">bit 0 (1) = Stationary · bit 1 (2) = Moving</span>
+        </div>
+      </div>
+
+      <div class="plc-log">
+        <div class="plc-log-hdr">
+          <h3>Event Log</h3>
+          <span class="log-cnt" id="log-cnt"></span>
+          <button class="log-clear" onclick="_clearLog()">Clear</button>
+        </div>
+        <div id="plc-log-body"></div>
+      </div>
+    </div>
+
+    <!-- SETTINGS VIEW -->
+    <div id="view-settings" class="view">
+      <div class="settings-body">
+        <div class="settings-section">
+          <h3>Speed Controls</h3>
+
+          <div class="sl-row">
+            <div class="sl-label">
+              <span>Modbus Motor Speed</span>
+              <span class="sl-val" id="slModbusVal">750</span>
+            </div>
+            <input type="range" id="slModbus" min="0" max="32767" step="50" value="750" oninput="onModbusSlider(this.value)">
+            <div class="sl-preview">Normal: <span id="prevNormU">750</span> units (<span id="prevNormMs">0.25</span> m/s) &nbsp;·&nbsp; Fast: <span id="prevFastU">1125</span> &nbsp;·&nbsp; Slow: <span id="prevSlowU">375</span></div>
+          </div>
+
+          <div class="sl-row">
+            <div class="sl-label">
+              <span>Forward Speed (max)</span>
+              <span class="sl-val" id="slLinVal">1.00 m/s</span>
+            </div>
+            <input type="range" id="slLinear" min="0.1" max="10.0" step="0.05" value="1.0" oninput="onLinearSlider(this.value)">
+            <div class="sl-preview">Slow: <span id="prevSlow">0.25</span> &nbsp;·&nbsp; Normal: <span id="prevNorm">0.50</span> &nbsp;·&nbsp; Fast: <span id="prevFast">1.00</span> m/s</div>
+          </div>
+
+          <div class="sl-row">
+            <div class="sl-label">
+              <span>Turn Speed (max angular)</span>
+              <span class="sl-val" id="slAngVal">0.50 rad/s</span>
+            </div>
+            <input type="range" id="slAngular" min="0.1" max="3.0" step="0.05" value="0.5" oninput="onAngularSlider(this.value)">
+          </div>
+
+          <button class="apply-btn" id="applyBtn" onclick="applySettings()">Apply &amp; Update Robot</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- LOGS VIEW -->
+    <div id="view-logs" class="view">
+      <div class="logs-toolbar">
+        <h2>Event Logs</h2>
+        <div class="log-filters" id="logFilters">
+          <button class="log-filter-btn active" onclick="setLogFilter('')">All</button>
+          <button class="log-filter-btn" onclick="setLogFilter('Camera')">Camera</button>
+          <button class="log-filter-btn" onclick="setLogFilter('GPS')">GPS</button>
+          <button class="log-filter-btn" onclick="setLogFilter('PLC')">PLC</button>
+          <button class="log-filter-btn" onclick="setLogFilter('Robot')">Robot</button>
+          <button class="log-filter-btn" onclick="setLogFilter('Settings')">Settings</button>
+          <button class="log-filter-btn" onclick="setLogFilter('Connectivity')">Conn</button>
+        </div>
+        <span class="log-cnt-badge" id="appLogCnt"></span>
+        <button class="log-clear" onclick="_clearAppLog()" style="margin-left:4px">Clear</button>
+      </div>
+      <div id="app-log-body"></div>
+    </div>
+
+  </main>
+</div><!-- /page-body -->
+
+<div class="toast" id="toast"></div>
+<!-- Hidden progress helpers for moveForward2m -->
+<div id="speedVal"></div>
+<div id="speedBar"></div>
+
+<script>
+'use strict';
+
+// ── Config ──────────────────────────────────────────────────────
+const CFG = {
+  maxLinear:    0.5,
+  maxLinearBack: 0.5,
+  maxAngular:   0.5,
+  camStreamUrl: '/api/camera/stream',
+  zedStreamUrl: '/api/zed/stream',
+  detStreamUrl: '/api/detection/stream',
+  detDataUrl:   '/api/detection/data',
+  gnssApiUrl:   '/api/gnss',
+};
+const MODBUS_LINEAR_SCALE = 3000;
+const PULSE_PER_M   = 3211;
+const TARGET_PULSES = 2.0 * PULSE_PER_M;
+
+let _battRange = { minV: 42, maxV: 58 };
+
+fetch('/api/config').then(r => r.ok ? r.json() : {}).then(c => {
+  if (c.limits?.maxLinear  != null) { CFG.maxLinear = c.limits.maxLinear; CFG.maxLinearBack = c.limits.maxLinear; }
+  if (c.limits?.maxAngular != null) CFG.maxAngular = c.limits.maxAngular;
+  if (c.battery?.minV != null) _battRange.minV = c.battery.minV;
+  if (c.battery?.maxV != null) _battRange.maxV = c.battery.maxV;
+}).catch(() => {});
+
+// ── Helpers ─────────────────────────────────────────────────────
+const _g   = id => document.getElementById(id);
+const _set = (id, v) => { const e = _g(id); if (e) e.textContent = v; };
+
+function _fetchWithTimeout(url, opts, ms) {
+  const timeout = ms ?? 3000;
+  const c = new AbortController();
+  const t = setTimeout(() => c.abort(), timeout);
+  return fetch(url, { ...opts, signal: c.signal }).finally(() => clearTimeout(t));
+}
+
+const _post = (url, body) => fetch(url, {
+  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+});
+
+function showToast(msg, isErr) {
+  const t = _g('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (isErr ? ' err' : '');
+  clearTimeout(t._tid);
+  t._tid = setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+function publishStop() {
+  _post('/api/cmd_vel', { linear_x: 0, angular_z: 0 }).catch(() => {});
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GLOBAL EVENT LOG
+// ═══════════════════════════════════════════════════════════════
+const _appLog = [];
+const _MAX_APP_LOG = 600;
+let _appLogFilter = '';
+
+// level: 'info'|'ok'|'warn'|'err'|'change'|'write'|'sys'
+function addLog(category, level, msg, hint) {
+  const entry = { ts: _ts(), category, level, msg, hint: hint || '' };
+  _appLog.unshift(entry);
+  if (_appLog.length > _MAX_APP_LOG) _appLog.length = _MAX_APP_LOG;
+  _renderAppLog();
+}
+
+function _renderAppLog() {
+  const cnt = _g('appLogCnt');
+  const entries = _appLogFilter
+    ? _appLog.filter(e => e.category === _appLogFilter)
+    : _appLog;
+  if (cnt) cnt.textContent = _appLog.length + ' entries';
+  const el = _g('app-log-body');
+  if (!el || !_g('view-logs')?.classList.contains('active')) return;
+  el.innerHTML = entries.map(e =>
+    `<div class="al al-${e.level}">` +
+    `<span class="al-ts">${e.ts}</span>` +
+    `<span class="al-cat">[${e.category}]</span>` +
+    `<span class="al-msg">${e.msg}</span>` +
+    (e.hint ? `<span class="al-hint">${e.hint}</span>` : '') +
+    `</div>`
+  ).join('');
+}
+
+function setLogFilter(cat) {
+  _appLogFilter = cat;
+  _g('logFilters')?.querySelectorAll('.log-filter-btn').forEach(b => {
+    const matches = b.getAttribute('onclick')?.includes(`'${cat}'`) ||
+                    (!cat && b.getAttribute('onclick')?.includes("''"));
+    b.classList.toggle('active', matches);
+  });
+  _renderAppLog();
+}
+
+function _clearAppLog() {
+  _appLog.length = 0;
+  addLog('System', 'sys', 'Log cleared by user.');
+}
+
+// ─ State trackers for change-only logging ─────────────────────
+const _prevState = {
+  gnss: null,   // 'fixed'|'no_signal'|'disconnected'
+  plcConn: null, battery: null, camera: null, zed: null, robot: null,
+};
+
+function _updateChassisStatus() { /* no-op */ }
+
+// ── Navigation ──────────────────────────────────────────────────
+const VIEWS = ['camera','gps','connectivity','plc','settings','logs'];
+let _mapReady = false;
+
+function switchView(name) {
+  VIEWS.forEach(id => _g('view-' + id)?.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+  _g('view-' + name)?.classList.add('active');
+  document.querySelectorAll('.nav-item').forEach(b => {
+    if (b.getAttribute('onclick')?.includes("'" + name + "'")) b.classList.add('active');
+  });
+  if (name === 'gps') {
+    if (!_mapReady) { _initMap(); _mapReady = true; }
+    else setTimeout(() => _gnssMap?.invalidateSize(), 60);
+  }
+  if (name === 'settings') _loadSettingsPanel();
+  if (name === 'logs') _renderAppLog();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CAMERA — front full-screen + rear PiP + detection
+// ═══════════════════════════════════════════════════════════════
+let _camSwapped = false;
+let _pipH = 'center', _pipV = 'bottom';
+let _camDetOn  = false;
+let _detPollTimer = null;
+
+function _stopDetPoll() {
+  if (_detPollTimer) { clearInterval(_detPollTimer); _detPollTimer = null; }
+  const db = _g('detBar'); if (db) db.style.display = 'none';
+}
+
+function _startDetPoll() {
+  _stopDetPoll();
+  const db = _g('detBar'); if (db) db.style.display = 'flex';
+  async function poll() {
+    try {
+      const d = await _fetchWithTimeout(CFG.detDataUrl, { cache:'no-store' }).then(r => r.json());
+      const ce = _g('detCount'), de = _g('detDistances'), ae = _g('detAge');
+      if (ce) { ce.textContent = d.count === 1 ? '1 person' : `${d.count} persons`; ce.style.color = d.count > 0 ? '#f85149' : '#0ca678'; }
+      if (de) de.textContent = (d.detections||[]).filter(x=>x.distance_m!==null).map(x=>`${x.distance_m.toFixed(1)} m`).join(' · ');
+      if (ae) ae.textContent = ((Date.now()/1000 - d.ts).toFixed(1)) + 's ago';
+    } catch {
+      const ce = _g('detCount'); if (ce) { ce.textContent = 'detector offline'; ce.style.color = '#3d444d'; }
+    }
+  }
+  poll(); _detPollTimer = setInterval(poll, 500);
+}
+
+function _attachStream(imgId, errId, url, camLabel) {
+  const img = _g(imgId); if (!img) return;
+  const err = errId ? _g(errId) : null;
+  img.dataset.streamUrl = url;
+  img.dataset.lastFrame = Date.now();
+  let _firstLoad = true;
+  let noFrame = setTimeout(() => {
+    if (img.parentNode && err) err.style.display = 'flex';
+    if (camLabel) addLog('Camera', 'err', `${camLabel} camera not found after 6s`,
+      'Check USB cable. Verify /api/camera/stream or /api/zed/stream responds.');
+  }, 6000);
+  img.onload = () => {
+    clearTimeout(noFrame); img.dataset.lastFrame = Date.now();
+    if (err) err.style.display = 'none';
+    if (_firstLoad) {
+      _firstLoad = false;
+      if (camLabel) addLog('Camera', 'ok', `${camLabel} camera stream connected`, url);
+    }
+  };
+  img.onerror = () => {
+    clearTimeout(noFrame);
+    if (img.parentNode && err) err.style.display = 'flex';
+    if (camLabel) addLog('Camera', 'warn', `${camLabel} camera stream error — retrying in 3s`,
+      'If persistent: check RealSense/ZED USB & driver. Run serve.py to see errors.');
+    setTimeout(() => { if (img.parentNode) { img.dataset.lastFrame = Date.now(); img.src = url + '?_=' + Date.now(); } }, 3000);
+  };
+  img.src = url + '?_=' + Date.now();
+}
+
+setInterval(() => {
+  ['splitImgMain', 'splitImgPip'].forEach(imgId => {
+    const img = _g(imgId);
+    if (!img || !img.dataset.streamUrl) return;
+    if (Date.now() - parseInt(img.dataset.lastFrame || '0') > 12000) {
+      img.dataset.lastFrame = Date.now();
+      img.src = img.dataset.streamUrl + '?_=' + Date.now();
+    }
+  });
+}, 5000);
+
+function _applyCamStreams() {
+  const mainUrl = _camSwapped ? CFG.camStreamUrl : (_camDetOn ? CFG.detStreamUrl : CFG.zedStreamUrl);
+  const pipUrl  = _camSwapped ? (_camDetOn ? CFG.detStreamUrl : CFG.zedStreamUrl) : CFG.camStreamUrl;
+  const lm = _g('splitLabelMain'), lp = _g('splitLabelPip');
+  if (lm) lm.textContent = _camSwapped ? 'Rear'  : 'Front';
+  if (lp) lp.textContent = _camSwapped ? 'Front' : 'Rear';
+  const mainLbl = _camSwapped ? 'Rear'  : (_camDetOn ? 'Detection' : 'Front');
+  const pipLbl  = _camSwapped ? 'Front' : 'Rear';
+  _attachStream('splitImgMain', 'splitErrMain', mainUrl, mainLbl);
+  _attachStream('splitImgPip',  'splitErrPip',  pipUrl,  pipLbl);
+}
+
+function _applyPipZone() {
+  const pip = _g('pipWrap'), inner = _g('camInner');
+  if (!pip || !inner) return;
+  const pw = inner.clientWidth, ph = inner.clientHeight;
+  const pipW = Math.min(420, Math.round(pw * 0.40));
+  const pipH = Math.round(pipW * 9 / 16);
+  const gap = 14;
+  pip.style.width = pipW + 'px';
+  ['left','right','top','bottom'].forEach(p => pip.style[p] = '');
+  if      (_pipH === 'left')   pip.style.left  = gap + 'px';
+  else if (_pipH === 'center') pip.style.left  = Math.round((pw - pipW) / 2) + 'px';
+  else                         pip.style.right = gap + 'px';
+  if      (_pipV === 'top') pip.style.top    = gap + 'px';
+  else if (_pipV === 'mid') pip.style.top    = Math.round((ph - pipH) / 2) + 'px';
+  else                      pip.style.bottom = gap + 'px';
+}
+
+function _initPipInteraction() {
+  const pip = _g('pipWrap'), inner = _g('camInner'), grid = _g('pipZoneGrid');
+  if (!pip || !inner || !grid) return;
+  const HZONES = ['left','center','right'], VZONES = ['top','mid','bottom'];
+  let dragging = false, startX = 0, startY = 0;
+
+  function zoneOf(cx, cy) {
+    const r = inner.getBoundingClientRect();
+    const rx = (cx - r.left) / r.width, ry = (cy - r.top) / r.height;
+    return { h: rx < 1/3 ? 'left' : rx < 2/3 ? 'center' : 'right',
+             v: ry < 1/3 ? 'top'  : ry < 2/3 ? 'mid'    : 'bottom' };
+  }
+  function highlightZone(cx, cy) {
+    const z = zoneOf(cx, cy);
+    const col = HZONES.indexOf(z.h), row = VZONES.indexOf(z.v);
+    grid.querySelectorAll('.pip-zone-cell').forEach(cell =>
+      cell.classList.toggle('zone-active', +cell.dataset.col === col && +cell.dataset.row === row));
+  }
+  function clearGrid() {
+    grid.classList.remove('active');
+    grid.querySelectorAll('.pip-zone-cell').forEach(c => c.classList.remove('zone-active'));
+    pip.classList.remove('dragging');
+  }
+
+  pip.addEventListener('mousedown', e => {
+    startX = e.clientX; startY = e.clientY; dragging = false; e.preventDefault();
+    function onMove(e) {
+      if (!dragging && (Math.abs(e.clientX - startX) > 8 || Math.abs(e.clientY - startY) > 8))
+        { dragging = true; pip.classList.add('dragging'); grid.classList.add('active'); }
+      if (dragging) highlightZone(e.clientX, e.clientY);
+    }
+    function onUp(e) {
+      document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp);
+      const wasD = dragging; clearGrid(); dragging = false;
+      if (wasD) { const z = zoneOf(e.clientX, e.clientY); _pipH = z.h; _pipV = z.v; _applyPipZone(); }
+      else { _camSwapped = !_camSwapped; _loadCameras(_camDetOn); }
+    }
+    document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
+  });
+
+  pip.addEventListener('touchstart', e => {
+    const t = e.touches[0]; startX = t.clientX; startY = t.clientY; dragging = false; e.preventDefault();
+    function onMove(e) {
+      const t = e.touches[0];
+      if (!dragging && (Math.abs(t.clientX - startX) > 8 || Math.abs(t.clientY - startY) > 8))
+        { dragging = true; pip.classList.add('dragging'); grid.classList.add('active'); }
+      if (dragging) highlightZone(t.clientX, t.clientY);
+    }
+    function onEnd(e) {
+      pip.removeEventListener('touchmove', onMove); pip.removeEventListener('touchend', onEnd);
+      const wasD = dragging; clearGrid(); dragging = false;
+      if (wasD) { const t = e.changedTouches[0]; const z = zoneOf(t.clientX, t.clientY); _pipH = z.h; _pipV = z.v; _applyPipZone(); }
+      else { _camSwapped = !_camSwapped; _loadCameras(_camDetOn); }
+    }
+    pip.addEventListener('touchmove', onMove, { passive: false });
+    pip.addEventListener('touchend', onEnd);
+  }, { passive: false });
+}
+
+function _loadCameras(detOn) {
+  _stopDetPoll();
+  _camDetOn = detOn || false;
+  const c = _g('camContent'); if (!c) return;
+  const zoneCells = [0,1,2].flatMap(r => [0,1,2].map(col =>
+    `<div class="pip-zone-cell" data-row="${r}" data-col="${col}"></div>`
+  )).join('');
+  c.innerHTML = `
+    <div id="camInner" style="position:relative;width:100%;height:100%;background:#010409">
+      <img id="splitImgMain" style="width:100%;height:100%;object-fit:cover;display:block" alt="">
+      <div id="splitErrMain" class="cam-err" style="display:none;position:absolute;inset:0;background:rgba(1,4,9,.92)">
+        <span>Camera not found</span>
+      </div>
+      <span class="cam-split-label" style="left:auto;right:10px" id="splitLabelMain">Front</span>
+      <div id="pipZoneGrid" class="pip-zone-grid">${zoneCells}</div>
+      <div class="pip-wrap" id="pipWrap">
+        <img id="splitImgPip" style="width:100%;height:100%;object-fit:cover;display:block" alt="">
+        <div id="splitErrPip" class="cam-err" style="display:none;position:absolute;inset:0;background:rgba(1,4,9,.92)">
+          <span style="font-size:12px">Camera not found</span>
+        </div>
+        <span class="cam-split-label" id="splitLabelPip">Rear</span>
+        <div class="pip-hover-overlay">
+          <span>&#8644;</span>
+          <span>Swap</span>
+        </div>
+      </div>
+      <div class="det-bar" id="detBar" style="display:none">
+        <span id="detCount" style="font-weight:700">0 persons</span>
+        <span id="detDistances" style="color:#aaa"></span>
+        <span id="detAge" style="color:#666;margin-left:auto"></span>
+      </div>
+    </div>`;
+  _applyCamStreams();
+  _applyPipZone();
+  _initPipInteraction();
+  if (detOn) _startDetPoll();
+}
+
+function toggleDetectionBtn() {
+  const next = !_camDetOn;
+  _g('detBtn')?.classList.toggle('on', next);
+  addLog('Camera', next ? 'ok' : 'info',
+    next ? 'Object detection enabled — switching to detection stream' : 'Object detection disabled',
+    next ? 'Main feed → /api/detection/stream. Persons highlighted in real time.' : '');
+  _loadCameras(next);
+}
+
+window.addEventListener('resize', _applyPipZone);
+
+// ═══════════════════════════════════════════════════════════════
+// WASD DRIVING
+// ═══════════════════════════════════════════════════════════════
+const KMAP = { w:'kw', a:'ka', s:'ks', d:'kd' };
+const pressed = new Set();
+let linVel = 0, angVel = 0, speedMult = 2;
+const _kuT = {};
+
+function setPreset(m) {
+  speedMult = m;
+  ['spSlow','spMed','spFast'].forEach(id => _g(id)?.classList.remove('active'));
+  _g(m === 1 ? 'spSlow' : m === 4 ? 'spFast' : 'spMed')?.classList.add('active');
+}
+
+function _calcVel() {
+  const lin0 = CFG.maxLinear * (speedMult / 2);
+  const ang0 = CFG.maxAngular;
+  let lin = 0, ang = 0;
+  if (pressed.has('w')) lin  =  lin0;
+  if (pressed.has('s')) lin  = -lin0;
+  if (pressed.has('a')) ang  =  ang0;
+  if (pressed.has('d')) ang  = -ang0;
+  linVel = lin; angVel = ang;
+  _set('velLin', lin.toFixed(2));
+  _set('velAng', ang.toFixed(2));
+}
+
+function _kd(k) {
+  if (!pressed.has(k)) { pressed.add(k); _g(KMAP[k])?.classList.add('active'); _calcVel(); }
+}
+function _ku(k) {
+  if (_kuT[k]) clearTimeout(_kuT[k]);
+  _kuT[k] = setTimeout(() => {
+    delete _kuT[k]; pressed.delete(k);
+    _g(KMAP[k])?.classList.remove('active');
+    _calcVel();
+    if (!pressed.size) _post('/api/cmd_vel', { linear_x: 0, angular_z: 0 }).catch(() => {});
+  }, 120);
+}
+
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  const k = e.key.toLowerCase();
+  if (KMAP[k]) { e.preventDefault(); _kd(k); }
+  if (k === ' ') { e.preventDefault(); _cancelFwd(); }
+});
+document.addEventListener('keyup', e => { const k = e.key.toLowerCase(); if (KMAP[k]) _ku(k); });
+
+// 50 Hz drive loop
+setInterval(() => {
+  if (!pressed.size) return;
+  _post('/api/cmd_vel', { linear_x: linVel, angular_z: angVel }).catch(() => {});
+}, 50);
+
+// AMR badge
+setInterval(() => {
+  const moving = pressed.size > 0 && (Math.abs(linVel) > 0.01 || Math.abs(angVel) > 0.01);
+  const pill = _g('amr-pill'), txt = _g('amr-txt');
+  if (!pill) return;
+  pill.className = 'hdr-pill ' + (moving ? 'pill-moving' : 'pill-stopped');
+  if (txt) txt.textContent = moving ? 'AMR MOVING' : 'AMR IDLE';
+}, 200);
+
+// ═══════════════════════════════════════════════════════════════
+// FORWARD 2 m
+// ═══════════════════════════════════════════════════════════════
+let _fwdInterval = null;
+
+function _updateFwd2mLabel() {
+  const lbl = _g('fwd2mLabel'); if (lbl && !_fwdInterval) lbl.textContent = '';
+}
+
+async function moveForward2m() {
+  if (_fwdInterval) return;
+  const speed = CFG.maxLinear;
+  const btn = _g('fwd2mBtn'), lbl = _g('fwd2mLabel');
+  _fwdInterval = true;
+  if (btn) { btn.disabled = true; btn.classList.add('running'); }
+  if (lbl) lbl.textContent = '0.00 / 2.00 m';
+  addLog('Robot', 'info', `Auto-forward 2m started — speed ${speed.toFixed(2)} m/s`,
+    'Server controls stop. Press Space to cancel.');
+
+  let _dispStartL = null, _dispStartR = null;
+  const _dispInterval = setInterval(async () => {
+    try {
+      const o = await _fetchWithTimeout('/api/wheel_odom', { cache:'no-store' }).then(r => r.json());
+      if (_dispStartL === null) { _dispStartL = o.left; _dispStartR = o.right; }
+      const traveled = ((o.left - _dispStartL) + (o.right - _dispStartR)) / 2;
+      const pct = Math.min(traveled / TARGET_PULSES, 1);
+      if (lbl) lbl.textContent = (pct * 2).toFixed(2) + ' / 2.00 m';
+    } catch {}
+  }, 200);
+
+  let msg = '';
+  try {
+    const res = await _fetchWithTimeout('/api/fwd2m', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ speed }),
+    }, 35000);
+    const data = await res.json();
+    msg = data.done    ? `Done (${data.traveled_m} m)`
+        : data.aborted ? 'Cancelled'
+        : 'Timeout';
+    if (data.done) addLog('Robot', 'ok', `Auto-forward complete — ${data.traveled_m} m traveled`);
+    else if (data.aborted) addLog('Robot', 'warn', 'Auto-forward cancelled by user');
+    else addLog('Robot', 'warn', 'Auto-forward timed out before reaching 2m',
+      'Check wheel odometry: /api/wheel_odom. Robot base must be online.');
+  } catch (e) {
+    msg = 'Error';
+    addLog('Robot', 'err', 'Auto-forward request failed: ' + (e.message || 'unknown'),
+      'Ensure serve.py is running and /api/fwd2m is reachable.');
+  }
+  finally {
+    clearInterval(_dispInterval);
+    _fwdInterval = null;
+    if (btn) { btn.disabled = false; btn.classList.remove('running'); }
+    if (lbl) lbl.textContent = msg;
+    setTimeout(_updateFwd2mLabel, 2000);
+  }
+}
+
+function _cancelFwd() {
+  if (!_fwdInterval) return;
+  publishStop();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TRACK RECORDING
+// ═══════════════════════════════════════════════════════════════
+let _trackRecording = false;
+let _trackPoints = [], _trackStartedAt = null;
+let _trackClearTimer = null, _trackPolyline = null;
+let _plantCount = 0;
+
+function _redrawTrackPolyline() {
+  if (!_gnssMap || _trackPoints.length < 2) return;
+  const lls = _trackPoints.map(p => [p.lat, p.lon]);
+  if (!_trackPolyline) {
+    _trackPolyline = L.polyline(lls, { color:'#39ff14', weight:3, opacity:0.9 }).addTo(_gnssMap);
+  } else {
+    _trackPolyline.setLatLngs(lls);
+  }
+}
+
+function toggleTrackRecord() {
+  const btn = _g('trackRecBtn'), lbl = _g('trackRecLabel');
+  if (!_trackRecording) {
+    if (_trackClearTimer) { clearTimeout(_trackClearTimer); _trackClearTimer = null; }
+    _trackRecording = true; _trackPoints = []; _trackStartedAt = new Date().toISOString();
+    if (btn) btn.classList.add('recording');
+    if (lbl) lbl.textContent = 'STOP';
+    addLog('GPS', 'ok', 'Track recording started',
+      'GPS points accumulate every ~1m. Green polyline drawn on map.');
+    if (_gnssLastLatlng && _gnssMap) _gnssMap.setView(_gnssLastLatlng, Math.max(_gnssMap.getZoom(), 19));
+    fetch('/api/record/start', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ started_at: _trackStartedAt }),
+    }).catch(() => {});
+  } else {
+    _trackRecording = false;
+    if (btn) btn.classList.remove('recording');
+    if (lbl) lbl.textContent = 'REC';
+    const endedAt = new Date().toISOString();
+    addLog('GPS', 'info', `Track recording stopped — ${_trackPoints.length} points captured`,
+      'Track saved to logs/. Check /api/track/save response for filename.');
+    fetch('/api/record/stop', { method:'POST' }).catch(() => {});
+    if (_trackPoints.length > 0) {
+      fetch('/api/track/save', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ points:_trackPoints, started_at:_trackStartedAt, ended_at:endedAt }),
+      }).catch(() => {});
+    }
+    _trackClearTimer = setTimeout(() => {
+      _trackClearTimer = null;
+      if (_trackPolyline) { _gnssMap?.removeLayer(_trackPolyline); _trackPolyline = null; }
+      _trackPoints = [];
+    }, 2000);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GPS / MAP
+// ═══════════════════════════════════════════════════════════════
+let _gnssMap = null, _gnssMarker = null, _gnssAcc = null;
+let _gnssLastLatlng = null, _gnssHasFix = false, _gnssLastData = null;
+
+function _initMap() {
+  const el = _g('gnssMapEl'); if (!el || _gnssMap) return;
+  _gnssMap = L.map(el, { zoomControl: false }).setView([0, 0], 3);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 22, attribution: '© OpenStreetMap contributors',
+  }).addTo(_gnssMap);
+}
+
+function _dotIcon(fix) {
+  const c = fix ? '#16a34a' : '#f59e0b';
+  return L.divIcon({
+    className: '',
+    html: `<div style="width:14px;height:14px;border-radius:50%;background:${c};border:2.5px solid #fff;box-shadow:0 0 5px rgba(0,0,0,.35)"></div>`,
+    iconAnchor: [7, 7],
+  });
+}
+
+function _dms(v, lat) {
+  if (v == null) return '';
+  const h = lat ? (v >= 0 ? 'N' : 'S') : (v >= 0 ? 'E' : 'W');
+  const a = Math.abs(v), d = Math.floor(a), mf = (a - d) * 60, m = Math.floor(mf);
+  return `${d}°${String(m).padStart(2,'0')}'${((mf-m)*60).toFixed(2).padStart(5,'0')}"${h}`;
+}
+
+async function _pollGnss() {
+  try {
+    const r = await _fetchWithTimeout('/api/gnss');
+    const d = r.ok ? await r.json() : { gps_state: 'disconnected' };
+    _gnssLastData = d;
+    const st = d.gps_state || (d.has_fix ? 'fixed' : d.connected ? 'no_signal' : 'disconnected');
+    const led = _g('gps-led');
+    if (st === 'fixed')          { if (led) led.className = 'gps-led fix';    _set('gvFix', `Fix (type ${d.fix ?? '?'})`); }
+    else if (st === 'no_signal') { if (led) led.className = 'gps-led signal'; _set('gvFix', 'Connected — no fix'); }
+    else                         { if (led) led.className = 'gps-led';         _set('gvFix', 'Disconnected'); }
+    if (st !== _prevState.gnss) {
+      if (st === 'fixed')
+        addLog('GPS', 'ok', `Fix acquired — ${d.sats ?? '?'} sats, HDOP ${d.hdop?.toFixed(2) ?? '?'}`,
+          'Position is reliable. Track recording and plant logging active.');
+      else if (st === 'no_signal')
+        addLog('GPS', 'warn', 'GPS connected but no fix', 'Outdoors? Wait 30–60s. Check antenna orientation.');
+      else
+        addLog('GPS', 'err', 'GPS receiver disconnected',
+          'Check USB cable to Columbus P-9 Race. Run gnss_p9_read.py to diagnose.');
+      _prevState.gnss = st;
+    }
+    _set('gvSats', d.sats ?? '—');
+    _set('gvHdop', d.hdop != null ? d.hdop.toFixed(2) : '—');
+    _gnssHasFix = st === 'fixed' && d.lat != null;
+    if (d.lat != null) {
+      _set('gvLat', d.lat.toFixed(7)); _set('gvLon', d.lon.toFixed(7));
+      _set('gvLatDms', _dms(d.lat, true)); _set('gvLonDms', _dms(d.lon, false));
+      _set('gvAlt', d.alt != null ? d.alt.toFixed(1) + ' m' : '—');
+      _set('gvSpd', d.speed_kmh != null ? d.speed_kmh.toFixed(1) + ' km/h' : '—');
+      _set('gvHdg', d.heading   != null ? d.heading.toFixed(1) + '°' : '—');
+      if (d.ts) {
+        try { _set('gpsAge', Math.round((Date.now() - new Date(d.ts).getTime()) / 1000) + 's ago'); } catch {}
+      }
+      const ll = [d.lat, d.lon];
+      _gnssLastLatlng = ll;
+      if (_gnssMap) {
+        const fix = !!d.has_fix;
+        if (!_gnssMarker) {
+          _gnssMarker = L.marker(ll, { icon: _dotIcon(fix) }).addTo(_gnssMap);
+          _gnssMap.setView(ll, fix ? 18 : 15);
+        } else { _gnssMarker.setLatLng(ll).setIcon(_dotIcon(fix)); }
+        const r2 = d.hdop ? Math.max(d.hdop * 5, 3) : 5;
+        if (!_gnssAcc) _gnssAcc = L.circle(ll, { radius: r2, color: fix ? '#16a34a' : '#f59e0b', fillOpacity: 0.1, weight: 1 }).addTo(_gnssMap);
+        else _gnssAcc.setLatLng(ll).setRadius(r2);
+        _gnssMap.panTo(ll, { animate: true, duration: 0.3, noMoveStart: true });
+      }
+      // Track recording: accumulate points
+      if (_trackRecording) {
+        const hasCoords = Math.abs(d.lat) > 0.0001 || Math.abs(d.lon) > 0.0001;
+        if (hasCoords) {
+          const last = _trackPoints[_trackPoints.length - 1];
+          const MIN_DEG = 0.000009;
+          if (!last || Math.abs(d.lat - last.lat) > MIN_DEG || Math.abs(d.lon - last.lon) > MIN_DEG) {
+            _trackPoints.push({ ts: new Date().toISOString(), lat: d.lat, lon: d.lon, alt: d.alt,
+                                sats: d.sats, hdop: d.hdop, fix: d.fix });
+            _redrawTrackPolyline();
+          }
+        }
+      }
+    }
+  } catch {}
+}
+
+function mapZoomIn()  { _gnssMap?.zoomIn(); }
+function mapZoomOut() { _gnssMap?.zoomOut(); }
+function mapLocate()  { if (_gnssLastLatlng && _gnssMap) _gnssMap.setView(_gnssLastLatlng, Math.max(_gnssMap.getZoom(), 18)); }
+
+// ═══════════════════════════════════════════════════════════════
+// CONNECTIVITY
+// ═══════════════════════════════════════════════════════════════
+function _ccSet(id, cls, label, detail) {
+  const b = _g('cc-' + id + '-b');
+  if (b) { b.className = 'cc-badge ' + cls; b.textContent = label; }
+  const d = _g('cc-' + id + '-d'); if (d && detail != null) d.textContent = detail;
+  const t = _g('cc-' + id + '-t'); if (t) t.textContent = new Date().toLocaleTimeString();
+}
+
+async function _pollConn() {
+  try {
+    const d = await _fetchWithTimeout('/api/chassis_battery', {}, 2000).then(r => r.json());
+    const v = d.voltage_v;
+    if (d.connected && v > 0) {
+      const mn = _battRange.minV, mx = _battRange.maxV;
+      const pct = Math.round(Math.max(0, Math.min(100, (v - mn) / (mx - mn) * 100)));
+      const cls = pct >= 30 ? 'bg-on' : pct >= 15 ? 'bg-par' : 'bg-off';
+      _ccSet('bat', cls, pct + '%', `${v.toFixed(1)} V  (range ${mn}–${mx} V)`);
+      const bar = _g('cc-bat-bar');
+      if (bar) { bar.style.width = pct + '%'; bar.style.background = pct >= 30 ? '#16a34a' : pct >= 15 ? '#d97706' : '#dc2626'; }
+    } else {
+      _ccSet('bat', 'bg-unk', 'No data', `voltage: ${v != null ? v.toFixed(1) + ' V' : '—'}`);
+      const bar = _g('cc-bat-bar'); if (bar) bar.style.width = '0%';
+    }
+  } catch { _ccSet('bat', 'bg-unk', 'Error', 'Request failed'); }
+
+  try {
+    const d = await _fetchWithTimeout('/api/amr/ping', {}, 2000).then(r => r.json());
+    const st = d.connected ? 'online' : 'offline';
+    _ccSet('plc', d.connected ? 'bg-on' : 'bg-off',
+      d.connected ? 'Online' : 'Offline',
+      d.connected ? `%MW5100–5112 reachable · ${d.latency_ms} ms` : (d.message || 'Unreachable'));
+    if (st !== _prevState.plcConn) {
+      if (d.connected) addLog('Connectivity', 'ok', `PLC (Modbus TCP) online — ${d.latency_ms} ms`, '192.168.1.2:502');
+      else addLog('Connectivity', 'err', `PLC offline: ${d.message || 'no response'}`,
+        'Check LAN cable eno1. Verify arp -n 192.168.1.2 (not 00:0b:29 / VMware).');
+      _prevState.plcConn = st;
+    }
+  } catch { _ccSet('plc', 'bg-off', 'Offline', 'Request failed'); }
+
+  try {
+    const d = await _fetchWithTimeout('/api/camera/status', {}, 2000).then(r => r.json());
+    const st = d.connected && d.has_frame ? 'online' : d.has_frame ? 'stale' : 'offline';
+    _ccSet('cam', st === 'online' ? 'bg-on' : st === 'stale' ? 'bg-par' : 'bg-off',
+      st === 'online' ? 'Online' : st === 'stale' ? 'Stale' : 'Offline',
+      st === 'online' ? `${d.frames_received} frames received` : (d.last_error || 'No frames'));
+    if (st !== _prevState.camera) {
+      if (st === 'online') addLog('Camera', 'ok', `Rear camera (RealSense) online — ${d.frames_received} frames`);
+      else if (st === 'offline') addLog('Camera', 'err', `Rear camera offline: ${d.last_error || 'no frames'}`,
+        'Check RealSense USB 3.x cable. Try: rs-enumerate-devices');
+      _prevState.camera = st;
+    }
+  } catch { _ccSet('cam', 'bg-off', 'Offline', 'Request failed'); }
+
+  try {
+    const d = await _fetchWithTimeout('/api/zed/status', {}, 2000).then(r => r.json());
+    const st = d.connected && d.has_frame ? 'online' : 'offline';
+    _ccSet('zed', st === 'online' ? 'bg-on' : 'bg-off',
+      st === 'online' ? 'Online' : 'Offline',
+      st === 'online' ? `${d.frames_received} frames` : (d.last_error || 'ZED not available'));
+    if (st !== _prevState.zed) {
+      if (st === 'online') addLog('Camera', 'ok', `Front camera (ZED 2i) online — ${d.frames_received} frames`);
+      else addLog('Camera', 'warn', `Front camera (ZED 2i) offline: ${d.last_error || 'no frames'}`,
+        'Check ZED USB 3.x. Verify ZED SDK installed. Try: ZED_Explorer');
+      _prevState.zed = st;
+    }
+  } catch { _ccSet('zed', 'bg-off', 'Offline', 'Not available'); }
+
+  try {
+    const d = await _fetchWithTimeout('/api/gnss', {}, 2000).then(r => r.ok ? r.json() : { gps_state: 'disconnected' });
+    const st = d.gps_state || 'disconnected';
+    _ccSet('gps',
+      st === 'fixed' ? 'bg-on' : st === 'no_signal' ? 'bg-par' : 'bg-off',
+      st === 'fixed' ? 'Fixed' : st === 'no_signal' ? 'No fix' : 'Offline',
+      st === 'fixed' ? `${d.lat?.toFixed(5)}, ${d.lon?.toFixed(5)} · ${d.sats} sats` : 'No position fix');
+  } catch { _ccSet('gps', 'bg-off', 'Offline', 'Request failed'); }
+
+  try {
+    const d = await _fetchWithTimeout('/api/wheel_odom', {}, 2000).then(r => r.json());
+    const st = d.connected ? 'online' : 'offline';
+    _ccSet('rob', d.connected ? 'bg-on' : 'bg-off',
+      d.connected ? 'Online' : 'Offline',
+      d.connected ? `L: ${d.left}  R: ${d.right} · mileage: ${((d.mileage||0)/1000).toFixed(1)} km` : 'No odometry messages');
+    if (st !== _prevState.robot) {
+      if (d.connected) addLog('Robot', 'ok', `Robot base (Modbus RTU) online — L:${d.left} R:${d.right}`,
+        'Odometry active. Mileage accumulating.');
+      else addLog('Robot', 'err', 'Robot base offline — no odometry',
+        'Check /dev/ttyUSB0. Run robot_base_node. Verify Modbus RTU at 38400 baud.');
+      _prevState.robot = st;
+    }
+  } catch { _ccSet('rob', 'bg-off', 'Offline', 'Request failed'); }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SETTINGS
+// ═══════════════════════════════════════════════════════════════
+let _modbusMasterDragging = false;
+
+function onModbusSlider(val) {
+  _modbusMasterDragging = true;
+  const units = parseInt(val, 10);
+  _set('slModbusVal', units.toLocaleString());
+  _set('prevNormU', units.toLocaleString());
+  _set('prevFastU', Math.round(units * 1.5).toLocaleString());
+  _set('prevSlowU', Math.round(units * 0.5).toLocaleString());
+  const normalMs = units / MODBUS_LINEAR_SCALE;
+  _set('prevNormMs', normalMs.toFixed(2));
+  CFG.maxLinear = normalMs;
+  CFG.maxLinearBack = normalMs;
+  const linVal = Math.min(10.0, Math.max(0.1, normalMs * 4));
+  const slLinear = _g('slLinear');
+  if (slLinear) { slLinear.value = linVal; onLinearSlider(linVal); }
+  _modbusMasterDragging = false;
+}
+
+function onLinearSlider(val) {
+  const v = parseFloat(val);
+  _set('slLinVal', v.toFixed(2) + ' m/s');
+  _set('prevSlow', (v / 4).toFixed(2));
+  _set('prevNorm', (v / 2).toFixed(2));
+  _set('prevFast', v.toFixed(2));
+  if (!_modbusMasterDragging) {
+    const normalUnits = Math.round(v / 4 * MODBUS_LINEAR_SCALE);
+    const clamped = Math.min(32767, Math.max(0, normalUnits));
+    const slModbus = _g('slModbus');
+    if (slModbus) slModbus.value = clamped;
+    _set('slModbusVal', clamped.toLocaleString());
+    _set('prevNormU', clamped.toLocaleString());
+    _set('prevFastU', Math.round(clamped * 1.5).toLocaleString());
+    _set('prevSlowU', Math.round(clamped * 0.5).toLocaleString());
+    _set('prevNormMs', (clamped / MODBUS_LINEAR_SCALE).toFixed(2));
+  }
+}
+
+function onAngularSlider(val) {
+  _set('slAngVal', parseFloat(val).toFixed(2) + ' rad/s');
+}
+
+function _loadSettingsPanel() {
+  _fetchWithTimeout('/api/settings', { cache: 'no-store' })
+    .then(r => r.ok ? r.json() : null)
+    .then(d => {
+      if (!d) return;
+      addLog('Settings', 'info',
+        `Settings loaded — maxLinear: ${(d.maxLinear??'?')}, maxAngular: ${(d.maxAngular??'?')}, modbusSpeed: ${(d.modbusSpeed??'?')}`);
+
+      const ang = d.maxAngular ?? 0.5;
+      const slAng = _g('slAngular'); if (slAng) slAng.value = ang;
+      onAngularSlider(ang);
+      const units = d.modbusSpeed ?? Math.round((d.maxLinear ?? 2.0) / 4 * MODBUS_LINEAR_SCALE);
+      const slMod = _g('slModbus'); if (slMod) slMod.value = units;
+      onModbusSlider(units);
+    })
+    .catch(() => {
+      const liveUnits = Math.round(CFG.maxLinear * MODBUS_LINEAR_SCALE);
+      const slMod = _g('slModbus'); if (slMod) slMod.value = liveUnits;
+      onModbusSlider(liveUnits);
+    });
+}
+
+function applySettings() {
+  const maxLin = parseFloat(_g('slLinear')?.value ?? 1.0);
+  const maxAng = parseFloat(_g('slAngular')?.value ?? 0.5);
+  CFG.maxLinear = maxLin / 4;
+  CFG.maxLinearBack = maxLin / 4;
+  CFG.maxAngular = maxAng;
+  const btn = _g('applyBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Applying…'; }
+  _fetchWithTimeout('/api/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ maxLinear: maxLin, maxAngular: maxAng,
+                           modbusSpeed: parseInt(_g('slModbus')?.value ?? 750, 10) }),
+  })
+    .then(r => r.ok ? r.json() : Promise.reject(new Error('Server rejected')))
+    .then(() => {
+      if (btn) { btn.classList.add('applied'); btn.textContent = 'Applied'; }
+      showToast('Settings applied');
+      const lin  = parseFloat(_g('slLinear')?.value ?? 1.0);
+      const ang  = parseFloat(_g('slAngular')?.value ?? 0.5);
+      const mbus = parseInt(_g('slModbus')?.value ?? 750, 10);
+      addLog('Settings', 'ok',
+        `Settings applied — maxLinear: ${lin.toFixed(2)} m/s, maxAngular: ${ang.toFixed(2)} rad/s, modbusSpeed: ${mbus}`,
+        'Values POSTed to /api/settings and saved server-side.');
+    })
+    .catch(e => {
+      showToast('Failed — ' + (e.message || 'unknown'), true);
+      addLog('Settings', 'err', 'Settings apply failed: ' + (e.message || 'unknown'),
+        '/api/settings returned error. Check serve.py logs.');
+    })
+    .finally(() => {
+      setTimeout(() => {
+        if (btn) { btn.disabled = false; btn.classList.remove('applied'); btn.textContent = 'Apply & Update Robot'; }
+      }, 1800);
+    });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ACTUATOR PLC (Auger / Planter / Both)
+// ═══════════════════════════════════════════════════════════════
+let _plcMachStatus = { connected: false };
+let _plcMachPollTimer = null;
+let _plcSeqPollTimer = null, _plcSeqDeadline = 0;
+let _augerWasInCycle = false, _planterWasInCycle = false;
+let _plantMarkers = [];
+
+async function _plcPost(path, command) {
+  try {
+    const r = await _fetchWithTimeout(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command }),
+    }, 3000);
+    return await r.json();
+  } catch {
+    return { connected: false, success: false, message: 'request failed' };
+  }
+}
+
+function _plcToast(resp, okMsg) {
+  if (!resp || resp.connected === false) { showToast('PLC gateway offline', true); return false; }
+  if (resp.success === false)            { showToast(resp.message || 'PLC command failed', true); return false; }
+  showToast(okMsg || resp.message || 'OK');
+  return true;
+}
+
+function toggleActuator(which) {
+  if (which === 'auger') {
+    const cmd = _plcMachStatus.auger_in_cycle ? 'STOP' : 'START';
+    addLog('PLC', 'write', `Auger ${cmd} command sent → /api/plc/auger`,
+      cmd === 'START' ? 'Writes %MW5110=2. PLC must be in Auto mode.' : 'Writes %MW5110=0.');
+    _plcPost('/api/plc/auger', cmd).then(r => {
+      if (r.success) addLog('PLC', 'ok', `Auger ${cmd} acknowledged by PLC`);
+      if (_plcToast(r, cmd === 'START' ? 'Auger starting…' : 'Stopping auger…')) _startPlcSeqPoll();
+    });
+    return;
+  }
+  if (which === 'planter') {
+    addLog('PLC', 'write', 'Planter START command sent → /api/plc/planter',
+      'Writes %MW5000 START bit. PLC must be in Auto mode + Planter enabled.');
+    _plcPost('/api/plc/planter', 'START').then(r => {
+      if (r.success) addLog('PLC', 'ok', 'Planter START acknowledged by PLC');
+      if (_plcToast(r, 'Planter starting…')) _startPlcSeqPoll();
+    });
+    return;
+  }
+  if (which === 'both') {
+    addLog('PLC', 'write', 'Auger + Planter START command sent → /api/plc/both',
+      'Triggers both sequences simultaneously. Check %MW5100 and %MW5101.');
+    _plcPost('/api/plc/both', 'START').then(r => {
+      if (r.success) addLog('PLC', 'ok', 'Auger + Planter START acknowledged by PLC');
+      if (_plcToast(r, 'Auger + Planter starting…')) _startPlcSeqPoll();
+    });
+  }
+}
+
+async function _pollPlcMachStatus() {
+  let d;
+  try { d = await _fetchWithTimeout('/api/plc/status', { cache: 'no-store' }, 2500).then(r => r.json()); }
+  catch { d = { connected: false }; }
+  _plcMachStatus = d;
+  _updateActuatorUI(d);
+}
+
+function _updateActuatorUI(d) {
+  const online = d && d.connected !== false;
+  const augerCycle   = online && !!d.auger_in_cycle;
+  const planterCycle = online && !!d.planter_in_cycle;
+
+  const aBtn = _g('augerBtn'), aSt = _g('auger-status');
+  if (aBtn) aBtn.disabled = !online;
+  if (aSt) { aSt.textContent = augerCycle ? 'In Cycle' : 'Idle'; aSt.className = 'act-status' + (augerCycle ? ' cycle' : ''); }
+
+  const pBtn = _g('planterBtn'), pSt = _g('planter-status');
+  if (pBtn) pBtn.disabled = !online;
+  if (pSt) { pSt.textContent = planterCycle ? 'In Cycle' : 'Idle'; pSt.className = 'act-status' + (planterCycle ? ' cycle' : ''); }
+
+  const bBtn = _g('bothBtn'), bSt = _g('both-status');
+  if (bBtn) bBtn.disabled = !online;
+  const bothCycle = augerCycle || planterCycle;
+  if (bSt) { bSt.textContent = bothCycle ? 'In Cycle' : 'Idle'; bSt.className = 'act-status' + (bothCycle ? ' cycle' : ''); }
+}
+
+function _startPlcSeqPoll() {
+  _plcSeqDeadline = Date.now() + 8000;
+  if (_plcSeqPollTimer) return;
+  _plcSeqPollTimer = setInterval(_pollPlcSequence, 500);
+  _pollPlcSequence();
+}
+function _stopPlcSeqPoll() {
+  if (_plcSeqPollTimer) { clearInterval(_plcSeqPollTimer); _plcSeqPollTimer = null; }
+}
+async function _pollPlcSequence() {
+  let d;
+  try { d = await _fetchWithTimeout('/api/plc/sequence', { cache: 'no-store' }, 2500).then(r => r.json()); }
+  catch { return; }
+  if (d.connected === false) { _stopPlcSeqPoll(); return; }
+
+  if (_augerWasInCycle && !d.auger_in_cycle) {
+    showToast('Auger complete');
+    addLog('PLC', 'ok', 'Auger cycle complete — %MW5100 bit 2 cleared', 'Auger retracted. Ready for next cycle.');
+  }
+  if (_planterWasInCycle && !d.planter_in_cycle) {
+    showToast('Planter complete');
+    addLog('PLC', 'ok', `Planter cycle complete — seedling #${_plantCount + 1} planted`,
+      'Check GPS view for red dot marker at planting location.');
+    _plantCount++;
+    if (_gnssHasFix && _gnssLastLatlng && _gnssMap) {
+      const [lat, lon] = _gnssLastLatlng;
+      const icon = L.divIcon({
+        className: '',
+        html: '<div style="width:14px;height:14px;border-radius:50%;background:#da3633;border:2px solid #fff;box-shadow:0 1px 6px rgba(0,0,0,.6)"></div>',
+        iconSize: [14,14], iconAnchor: [7,7],
+      });
+      const marker = L.marker([lat, lon], { icon })
+        .bindTooltip(`#${_plantCount}`, { permanent: false, direction: 'top', offset: [0, -10] })
+        .addTo(_gnssMap);
+      _plantMarkers.push(marker);
+      fetch('/api/plant', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ts: new Date().toISOString(), count: _plantCount, lat, lon }),
+      }).catch(() => {});
+    }
+  }
+  _augerWasInCycle   = !!d.auger_in_cycle;
+  _planterWasInCycle = !!d.planter_in_cycle;
+  _plcMachStatus = d;
+  _updateActuatorUI(d);
+
+  if (d.auger_in_cycle || d.planter_in_cycle) _plcSeqDeadline = Date.now() + 4000;
+  else if (Date.now() > _plcSeqDeadline)      _stopPlcSeqPoll();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PLC HANDSHAKE (AMR ↔ PLC registers %MW5100–5112)
+// ═══════════════════════════════════════════════════════════════
+const RD = 1000, WR = 5000;
+
+const STATUS_REGS = [
+  { key:'mw5100', addr:5100, label:'Auger Status',
+    bits:[{bit:0,label:'Sequence Start Handshake'},{bit:1,label:'Clear of Ground'},{bit:2,label:'Cycle Complete'}] },
+  { key:'mw5101', addr:5101, label:'Planter Status',
+    bits:[{bit:0,label:'Sequence Start Handshake'},{bit:1,label:'Clear of Ground'},{bit:2,label:'Cycle Complete'}] },
+];
+const CMD_REGS = [
+  { key:'mw5110', reg:5110, label:'Auger Command', type:'toggle', mask:2,
+    onLabel:'ACTIVE — Auger Start Set', offLabel:'Set Auger Start Sequence' },
+  { key:'mw5111', reg:5111, label:'Planter Command', type:'toggle', mask:2,
+    onLabel:'ACTIVE — Planter Start Set', offLabel:'Set Planter Start Sequence' },
+  { key:'mw5112', reg:5112, label:'AMR State', type:'state',
+    states:[{bit:0,value:1,label:'Stationary'},{bit:1,value:2,label:'Moving'}] },
+];
+
+let _cur = {}, _prev = {}, _plcConn = null, _logBuf = [];
+
+function _buildPlcUI() {
+  const sb = _g('plc-status-body'), cb = _g('plc-cmd-body');
+  if (!sb || !cb) return;
+
+  STATUS_REGS.forEach(r => {
+    const card = document.createElement('div'); card.className = 'reg-card';
+    card.innerHTML =
+      `<div class="reg-hdr"><span class="reg-name">${r.label}</span><span class="reg-addr">%MW${r.addr}</span><span class="reg-cur" id="sv-${r.key}">—</span></div>
+      <div class="bit-list">${r.bits.map(b =>
+        `<div class="bit-row"><div class="bit-led" id="led-${r.key}-${b.bit}"></div><span class="bit-lbl" id="lbl-${r.key}-${b.bit}">${b.label}</span><span style="font-family:var(--mono);font-size:13px;color:var(--dim)">bit ${b.bit}</span><div class="bit-num" id="bdg-${r.key}-${b.bit}">0</div></div>`
+      ).join('')}</div>`;
+    sb.appendChild(card);
+  });
+
+  CMD_REGS.forEach(r => {
+    const card = document.createElement('div'); card.className = 'reg-card';
+    let inner = `<div class="reg-hdr"><span class="reg-name">${r.label}</span><span class="reg-addr">%MW${r.reg}</span><span class="reg-cur" id="cv-${r.key}">—</span></div>`;
+    if (r.type === 'toggle') {
+      inner += `<div class="cmd-area"><button class="cmd-btn" id="cb-${r.key}" onclick="_toggle(${r.reg},'${r.key}',${r.mask})">▶  ${r.offLabel}</button></div>`;
+    } else {
+      inner +=
+        `<div class="cmd-area"><div class="state-grid">${r.states.map(s =>
+          `<button class="cmd-btn" id="cb-${r.key}-${s.bit}" onclick="_setCmd(${r.reg},'${r.key}',${s.value})">${s.label}</button>`
+        ).join('')}</div><button class="cmd-btn c-clear" onclick="_setCmd(${r.reg},'${r.key}',0)">Clear</button></div>
+        <div class="auto-note">Auto-managed — the server updates this register automatically from WASD keyboard activity.</div>`;
+    }
+    card.innerHTML = inner; cb.appendChild(card);
+  });
+}
+
+function _fmtV(v) { return v != null ? `${v} (0x${v.toString(16).toUpperCase().padStart(4,'0')})` : '—'; }
+
+function _applyStatus(data) {
+  STATUS_REGS.forEach(r => {
+    const v = data[r.key]; _set('sv-'+r.key, _fmtV(v));
+    r.bits.forEach(b => {
+      const on = v != null ? !!((v >> b.bit) & 1) : null;
+      const led = _g(`led-${r.key}-${b.bit}`), lbl = _g(`lbl-${r.key}-${b.bit}`), bdg = _g(`bdg-${r.key}-${b.bit}`);
+      if (led) led.className = 'bit-led' + (on ? ' on' : '');
+      if (lbl) lbl.className = 'bit-lbl' + (on ? ' on' : '');
+      if (bdg) { bdg.textContent = on != null ? (on?'1':'0') : '—'; bdg.className = 'bit-num'+(on?' on':''); }
+    });
+  });
+}
+
+function _applyCmds(data) {
+  CMD_REGS.forEach(r => {
+    const v = data[r.key]; _set('cv-'+r.key, _fmtV(v));
+    if (r.type === 'toggle') {
+      const on = v != null && !!(v & r.mask);
+      const btn = _g('cb-'+r.key);
+      if (btn) { btn.className = 'cmd-btn'+(on?' c-active':''); btn.textContent = on?'■  '+r.onLabel:'▶  '+r.offLabel; }
+    } else {
+      r.states.forEach(s => { const btn = _g(`cb-${r.key}-${s.bit}`); if (btn) btn.className = 'cmd-btn'+(v===s.value?' c-state':''); });
+    }
+  });
+}
+
+function _setPlcPill(on, text) {
+  const p = _g('plc-pill'); if (!p) return;
+  p.className = 'hdr-pill '+(on?'pill-plc-on':'pill-plc-off');
+  _set('plc-txt', text);
+}
+
+function _ts() {
+  const n = new Date();
+  return n.toTimeString().slice(0,8)+'.'+String(n.getMilliseconds()).padStart(3,'0');
+}
+const _PLC_TYPE_MAP = { lc:'ok', ld:'err', lw:'write', lch:'change', le2:'err', la:'change', li:'sys', linfo:'info' };
+
+function _addLog(type, msg) {
+  _logBuf.unshift({ ts: _ts(), type, msg });
+  if (_logBuf.length > 300) _logBuf.length = 300;
+  const el = _g('plc-log-body'); if (!el) return;
+  el.innerHTML = _logBuf.map(e =>
+    `<div class="le ${e.type}"><span class="le-ts">${e.ts}</span><span class="le-msg">${e.msg}</span></div>`
+  ).join('');
+  _set('log-cnt', _logBuf.length ? _logBuf.length+' entries' : '');
+  // pipe to global Logs tab
+  addLog('PLC', _PLC_TYPE_MAP[type] || 'info', msg);
+}
+function _clearLog() { _logBuf = []; _addLog('li', 'Log cleared.'); }
+
+async function _doWrite(reg, value) {
+  try {
+    const d = await _post('/api/amr/write', { reg, value }).then(r => r.json());
+    if (d.success) {
+      _addLog('lw', `wrote %MW${reg} = ${value}  (FC06 reg ${reg-WR})`);
+      if (d.readback != null) _addLog('lw', `readback %MW${reg} = ${d.readback}  (FC04 reg ${reg-RD})  ${d.confirmed?'✓ confirmed':'✗ mismatch'}`);
+    } else { _addLog('le2', `FAILED write %MW${reg} = ${value}: ${d.message}`); }
+    return d;
+  } catch (e) { _addLog('le2', 'Write error: '+e.message); return null; }
+}
+
+async function _toggle(reg, key, mask) {
+  const cur = _cur[key] ?? 0, nv = (cur & mask) ? (cur & ~mask) : (cur | mask);
+  const d = await _doWrite(reg, nv & 0xFFFF);
+  if (d?.success) { _cur[key] = d.readback ?? nv; _applyCmds(_cur); }
+}
+async function _setCmd(reg, key, value) {
+  const d = await _doWrite(reg, value);
+  if (d?.success) { _cur[key] = d.readback ?? value; _applyCmds(_cur); }
+}
+
+async function _pollPlc() {
+  let data;
+  try { data = await _fetchWithTimeout('/api/amr/poll', {}, 2000).then(r => r.json()); }
+  catch {
+    if (_plcConn !== false) { _setPlcPill(false, 'PLC offline'); _addLog('ld', 'Server unreachable'); _plcConn = false; }
+    return;
+  }
+  if (_plcConn !== data.connected) {
+    if (data.connected) {
+      _setPlcPill(true, `PLC · ${data.latency_ms} ms`);
+      _addLog('lc', `Connected → ${data.host}:${data.port}  (${data.latency_ms} ms)`);
+    } else {
+      _setPlcPill(false, 'PLC offline');
+      _addLog('ld', `PLC offline · ${data.error||'no response'}`);
+    }
+    _plcConn = data.connected;
+  } else if (data.connected) {
+    _set('plc-txt', `PLC · ${data.latency_ms} ms`);
+  }
+  if (data.connected) {
+    STATUS_REGS.forEach(r => {
+      const nv = data[r.key], ov = _prev[r.key];
+      if (nv != null && ov != null && nv !== ov) {
+        r.bits.forEach(b => {
+          const nb = (nv >> b.bit) & 1, ob = (ov >> b.bit) & 1;
+          if (nb !== ob) _addLog('lch', `%MW${r.addr} bit${b.bit} (${r.bits[b.bit]?.label ?? b.bit}): ${ob}→${nb}`);
+        });
+      }
+    });
+    if (data.mw5112 != null && _prev.mw5112 != null && data.mw5112 !== _prev.mw5112) {
+      _addLog('la', `%MW5112: ${_prev.mw5112}→${data.mw5112}  AMR ${data.mw5112===2?'MOVING':'STATIONARY'}`);
+    }
+  }
+  Object.assign(_prev, data); _cur = { ..._cur, ...data };
+  _applyStatus(data); _applyCmds(data);
+}
+
+// ── Init ─────────────────────────────────────────────────────────
+_buildPlcUI();
+_loadCameras(false);
+
+addLog('System', 'sys', 'Dashboard ready — Agrobot AMR + PLC', 'Port 8769. Connecting to all subsystems…');
+addLog('System', 'sys', 'AMR state auto-write active: Moving=2, Stationary=1 → %MW5112',
+  'Derived from WASD velocity. No manual action needed.');
+addLog('System', 'sys', 'Polling: PLC 500ms · GPS 1s · Connectivity 5s · Actuators 2s');
+
+_addLog('li', 'Dashboard ready.');
+_addLog('li', '%MW5112 auto-managed: Moving=2, Stationary=1.');
+
+setInterval(_pollPlc,           500);
+setInterval(_pollGnss,         1000);
+setInterval(_pollConn,         5000);
+setInterval(_pollPlcMachStatus, 2000);
+
+// Battery polling with log-on-change
+let _prevBattPct = null;
+setInterval(async () => {
+  try {
+    const d = await _fetchWithTimeout('/api/chassis_battery', {}, 2000).then(r => r.json());
+    if (d.connected && d.voltage_v > 0) {
+      const mn = _battRange.minV, mx = _battRange.maxV;
+      const pct = Math.round(Math.max(0, Math.min(100, (d.voltage_v - mn) / (mx - mn) * 100)));
+      if (_prevBattPct !== null && Math.abs(pct - _prevBattPct) >= 5) {
+        const lvl = pct >= 30 ? 'ok' : pct >= 15 ? 'warn' : 'err';
+        addLog('Connectivity', lvl, `Battery ${pct}% — ${d.voltage_v.toFixed(1)} V`,
+          pct < 15 ? 'CRITICAL: return to base immediately.' : pct < 30 ? 'Low battery — charge soon.' : '');
+      }
+      _prevBattPct = pct;
+    }
+  } catch {}
+}, 10000);
+
+_pollPlc();
+_pollGnss();
+_pollConn();
+_pollPlcMachStatus();
+</script>
+</body>
+</html>

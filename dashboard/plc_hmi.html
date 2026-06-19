@@ -85,13 +85,16 @@ html, body {
   background: var(--panel);
   border: 1px solid var(--border);
   color: var(--text);
-  padding: 6px 14px;
-  font-size: 12px;
+  padding: 10px 16px;
+  min-height: 44px;
+  font-size: 13px;
   font-weight: 700;
   letter-spacing: 1px;
   text-transform: uppercase;
   cursor: pointer;
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
 }
 .btn-back:hover { background: #f0f0f0; border-color: #aaa; }
 
@@ -101,6 +104,64 @@ html, body {
   letter-spacing: 3px;
   text-transform: uppercase;
   color: #666;
+}
+
+/* ── CONNECTION CARD ─────────────────────────────────────────── */
+#conn-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  padding: 14px 16px;
+  margin: 0 auto 20px;
+  max-width: 700px;
+}
+
+#cc-dot {
+  font-size: 24px;
+  color: var(--amber);
+  flex-shrink: 0;
+  transition: color 0.3s;
+  line-height: 1;
+}
+
+#cc-body { flex: 1; min-width: 0; }
+
+#cc-status {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--amber);
+}
+
+#cc-detail {
+  font-size: 10px;
+  color: var(--dim);
+  letter-spacing: 0.5px;
+  margin-top: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#cc-latency {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--dim);
+  min-width: 72px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+#cc-latency-unit {
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--dim);
+  text-align: right;
 }
 
 /* ── MAIN NAV GRID ───────────────────────────────────────────── */
@@ -347,13 +408,39 @@ html, body {
 .jog-btn.held .jog-arrow { animation: pulse 0.5s infinite; }
 
 /* ── RESPONSIVE ─────────────────────────────────────────────── */
-@media (max-width: 520px) {
+
+/* Tablet portrait */
+@media (max-width: 768px) {
   .data-grid { grid-template-columns: repeat(2, 1fr); }
-  .status-strip .si { min-width: 70px; }
-  .dc-value { font-size: 22px; }
+  .si-label  { font-size: 11px; }
+  .dc-label  { font-size: 11px; }
+  .dc-unit   { font-size: 11px; }
+  .nav-btn   { padding: 28px 16px; }
+  #hdr-title { font-size: 12px; letter-spacing: 2px; }
 }
+
+/* Phone */
+@media (max-width: 520px) {
+  .data-grid  { grid-template-columns: repeat(2, 1fr); }
+  .status-strip .si { min-width: 70px; }
+  .dc-value   { font-size: 22px; }
+  .si-label   { font-size: 11px; }
+  .dc-label   { font-size: 11px; }
+  .dc-unit    { font-size: 11px; }
+
+  /* Jog buttons — slightly shorter on small phones */
+  .jog-btn    { height: 110px; }
+
+  /* Header text fits narrow screens */
+  #hdr-title  { font-size: 11px; letter-spacing: 2px; }
+  #hdr-plc    { font-size: 10px; letter-spacing: 1px; }
+  #plc-dot    { font-size: 14px; }
+}
+
+/* Very small phones */
 @media (max-width: 360px) {
-  .data-grid { grid-template-columns: 1fr 1fr; }
+  .data-grid  { grid-template-columns: 1fr 1fr; }
+  .jog-btn    { height: 100px; }
 }
 </style>
 </head>
@@ -371,6 +458,20 @@ html, body {
 <!-- ── MAIN PAGE ───────────────────────────────────────────────── -->
 <div id="page-main" class="page active">
   <div class="page-title">System HMI</div>
+
+  <!-- Connection status card -->
+  <div id="conn-card">
+    <span id="cc-dot">●</span>
+    <div id="cc-body">
+      <div id="cc-status">Connecting…</div>
+      <div id="cc-detail">—</div>
+    </div>
+    <div>
+      <div id="cc-latency">—</div>
+      <div id="cc-latency-unit">ping</div>
+    </div>
+  </div>
+
   <div class="nav-grid">
 
     <button class="nav-btn" onclick="goTo('page-auger')">
@@ -511,10 +612,50 @@ function goTo(pageId) {
   else                         _stopAuger();
 }
 
-// ── PLC status dot ──────────────────────────────────────────────────────────
-function _setPlcDot(connected) {
-  document.getElementById('plc-dot').style.color  = connected ? '#00d44a' : '#ff3333';
-  document.getElementById('plc-label').textContent = connected ? 'PLC ONLINE' : 'PLC OFFLINE';
+// ── PLC connection state ─────────────────────────────────────────────────────
+let _lastPingOk  = null;   // Date of last successful ping
+let _plcAddress  = '—';    // updated from first ping response
+
+function _setPlcDot(connected, latencyMs) {
+  // Header dot
+  document.getElementById('plc-dot').style.color   = connected ? '#00d44a' : '#ff3333';
+  document.getElementById('plc-label').textContent  = connected ? 'PLC ONLINE' : 'PLC OFFLINE';
+
+  // Main-page connection card
+  const ccDot  = document.getElementById('cc-dot');
+  const ccStat = document.getElementById('cc-status');
+  const ccDet  = document.getElementById('cc-detail');
+  const ccLat  = document.getElementById('cc-latency');
+  const ccUnit = document.getElementById('cc-latency-unit');
+  if (!ccDot) return;
+
+  if (connected) {
+    _lastPingOk = new Date();
+    ccDot.style.color  = '#00d44a';
+    ccStat.style.color = 'var(--green)';
+    ccStat.textContent = 'PLC Online';
+    ccDet.textContent  = _plcAddress;
+  } else {
+    ccDot.style.color  = '#ff3333';
+    ccStat.style.color = 'var(--red)';
+    ccStat.textContent = 'PLC Offline';
+    const ago = _lastPingOk
+      ? 'Last seen ' + _lastPingOk.toLocaleTimeString()
+      : 'Never connected';
+    ccDet.textContent = _plcAddress + ' · ' + ago;
+  }
+
+  if (latencyMs != null) {
+    ccLat.textContent  = latencyMs;
+    ccUnit.textContent = 'ms ping';
+    if      (latencyMs <  50) { ccLat.style.color = 'var(--green)'; }
+    else if (latencyMs < 200) { ccLat.style.color = 'var(--amber)'; }
+    else                      { ccLat.style.color = 'var(--red)';   }
+  } else if (!connected) {
+    ccLat.textContent  = '—';
+    ccLat.style.color  = 'var(--dim)';
+    ccUnit.textContent = 'ping';
+  }
 }
 
 // ── Status indicators ───────────────────────────────────────────────────────
@@ -548,7 +689,7 @@ function _fetchAuger() {
   fetch('/api/hmi/auger/status')
     .then(r => r.json())
     .then(d => {
-      _setPlcDot(d.connected !== false);
+      _setPlcDot(d.connected !== false, null);
 
       _setIndicator('si-running', d.running,         'green');
       _setIndicator('si-fwd',     d.fwd_direction,   'blue');
@@ -569,7 +710,7 @@ function _fetchAuger() {
       document.getElementById('dv-step').textContent =
         step !== undefined && step !== null ? step : '—';
     })
-    .catch(() => _setPlcDot(false));
+    .catch(() => _setPlcDot(false, null));
 }
 
 // ── Jog press-and-hold ──────────────────────────────────────────────────────
@@ -626,17 +767,18 @@ function _stopJog(direction) {
   btn.addEventListener('lostpointercapture', () => _stopJog(dir));
 });
 
-// ── Main-page status poll ───────────────────────────────────────────────────
-function _pollMainStatus() {
-  if (_currentPage === 'page-main') {
-    fetch('/api/hmi/status')
-      .then(r => r.json())
-      .then(d => _setPlcDot(d.connected !== false))
-      .catch(() => _setPlcDot(false));
-  }
+// ── Ping health poll (runs on all pages, every 2 s) ─────────────────────────
+function _pingOnce() {
+  fetch('/api/hmi/ping')
+    .then(r => r.json())
+    .then(d => {
+      if (d.host) _plcAddress = d.host + ':' + d.port;
+      _setPlcDot(d.connected, d.latency_ms);
+    })
+    .catch(() => _setPlcDot(false, null));
 }
-setInterval(_pollMainStatus, 3000);
-_pollMainStatus();
+setInterval(_pingOnce, 2000);
+_pingOnce();
 </script>
 </body>
 </html>
