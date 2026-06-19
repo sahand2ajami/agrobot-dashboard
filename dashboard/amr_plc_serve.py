@@ -11,8 +11,8 @@ Register layout
                             bit 2 Cycle Complete
 
   AMR → PLC  (write via FC06 — what we tell the PLC):
-    %MW5110  Auger command  bit 1 Auger Start Sequence   (value 2 = active)
-    %MW5111  Planter cmd    bit 1 Planter Start Sequence (value 2 = active)
+    %MW5110  Auger command  bit 0 Auger Start Sequence   (value 1 = active)
+    %MW5111  Planter cmd    bit 0 Planter Start Sequence (value 1 = active)
     %MW5112  AMR state      bit 0 Stationary (value 1)
                             bit 1 Moving     (value 2)
 

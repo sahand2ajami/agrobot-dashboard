@@ -76,14 +76,14 @@ the register to confirm the value landed.
 
 | Write Value | Meaning |
 |-------------|---------|
-| **2** | Bit 1 set — Auger Start Sequence active |
+| **1** | Bit 0 set — Auger Start Sequence active |
 | **0** | Idle (clear the command) |
 
 #### `%MW5111` — Planter Command (FC06 reg 111, readback FC04 reg 4111)
 
 | Write Value | Meaning |
 |-------------|---------|
-| **2** | Bit 1 set — Planter Start Sequence active |
+| **1** | Bit 0 set — Planter Start Sequence active |
 | **0** | Idle (clear the command) |
 
 #### `%MW5112` — AMR State (FC06 reg 112, readback FC04 reg 4112)
@@ -136,7 +136,7 @@ You will see a prompt (`>`). Commands:
 | Command | What it does | Example |
 |---------|-------------|---------|
 | `r <plc_addr>` | Read one word via FC04 | `r 5100` |
-| `<plc_addr> <value>` | Write one word via FC06, then read back | `5110 2` |
+| `<plc_addr> <value>` | Write one word via FC06, then read back | `5110 1` |
 | `q` | Quit | |
 
 All addresses are **PLC addresses** (the `%MW` number). The tool computes the
@@ -147,9 +147,9 @@ Modbus register number for you and prints it in the output.
 > r 5100
   %MW5100 = 0  (FC04 reg 4100)          ← auger idle
 
-> 5110 2
-  wrote %MW5110 = 2  (FC06 write reg 110)
-  readback %MW5110 = 2  (FC04 read reg 4110)  ✓ confirmed   ← write landed
+> 5110 1
+  wrote %MW5110 = 1  (FC06 write reg 110)
+  readback %MW5110 = 1  (FC04 read reg 4110)  ✓ confirmed   ← write landed
 
 > r 5100
   %MW5100 = 1  (FC04 reg 4100)          ← PLC confirmed sequence start
@@ -215,8 +215,8 @@ Then open a browser at:
 - **Event log (bottom):** Every poll change and every write is logged with timestamps and
   the exact Modbus register numbers and decimal values used, matching `plc_test.py` format:
   ```
-  14:23:01.123  wrote %MW5110 = 2  (FC06 reg 110)
-  14:23:01.134  readback %MW5110 = 2  (FC04 reg 4110)  ✓ confirmed
+  14:23:01.123  wrote %MW5110 = 1  (FC06 reg 110)
+  14:23:01.134  readback %MW5110 = 1  (FC04 reg 4110)  ✓ confirmed
   14:23:00.456  %MW5100 bit 1 (Clear of Ground): 0 → 1
   ```
 

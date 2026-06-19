@@ -487,13 +487,13 @@ const PLC_STATUS = [
 const AMR_CMDS = [
   {
     reg: 5110, key: 'mw5110', addr: '%MW5110', label: 'AUGER COMMAND',
-    type: 'toggle', bit: 1, mask: 2,
+    type: 'toggle', bit: 0, mask: 1,
     onLabel:  'ACTIVE — AUGER START SET',
     offLabel: 'SET AUGER START SEQUENCE',
   },
   {
     reg: 5111, key: 'mw5111', addr: '%MW5111', label: 'PLANTER COMMAND',
-    type: 'toggle', bit: 1, mask: 2,
+    type: 'toggle', bit: 0, mask: 1,
     onLabel:  'ACTIVE — PLANTER START SET',
     offLabel: 'SET PLANTER START SEQUENCE',
   },

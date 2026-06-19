@@ -734,13 +734,13 @@ input[type=range] { width: 100%; accent-color: var(--teal); height: 6px; cursor:
           <span class="cs-dir wr">WRITE</span>
           <span class="cs-reg">%MW5110</span>
           <span class="cs-desc">AMR tells PLC: Start/stop auger sequence</span>
-          <span class="cs-vals">bit 1 (2) = Start sequence · 0 = Idle</span>
+          <span class="cs-vals">bit 0 (1) = Start sequence · 0 = Idle</span>
         </div>
         <div class="cs-row">
           <span class="cs-dir wr">WRITE</span>
           <span class="cs-reg">%MW5111</span>
           <span class="cs-desc">AMR tells PLC: Start/stop planter sequence</span>
-          <span class="cs-vals">bit 1 (2) = Start sequence · 0 = Idle</span>
+          <span class="cs-vals">bit 0 (1) = Start sequence · 0 = Idle</span>
         </div>
         <div class="cs-row">
           <span class="cs-dir wr">WRITE</span>
@@ -1669,7 +1669,7 @@ function toggleActuator(which) {
   if (which === 'auger') {
     const cmd = _plcMachStatus.auger_in_cycle ? 'STOP' : 'START';
     addLog('PLC', 'write', `Auger ${cmd} command sent → /api/plc/auger`,
-      cmd === 'START' ? 'Writes %MW5110=2. PLC must be in Auto mode.' : 'Writes %MW5110=0.');
+      cmd === 'START' ? 'Writes %MW5110=1. PLC must be in Auto mode.' : 'Writes %MW5110=0.');
     _plcPost('/api/plc/auger', cmd).then(r => {
       if (r.success) addLog('PLC', 'ok', `Auger ${cmd} acknowledged by PLC`);
       if (_plcToast(r, cmd === 'START' ? 'Auger starting…' : 'Stopping auger…')) _startPlcSeqPoll();
@@ -1784,9 +1784,9 @@ const STATUS_REGS = [
     bits:[{bit:0,label:'Sequence Start Handshake'},{bit:1,label:'Clear of Ground'},{bit:2,label:'Cycle Complete'}] },
 ];
 const CMD_REGS = [
-  { key:'mw5110', reg:5110, label:'Auger Command', type:'toggle', mask:2,
+  { key:'mw5110', reg:5110, label:'Auger Command', type:'toggle', mask:1,
     onLabel:'ACTIVE — Auger Start Set', offLabel:'Set Auger Start Sequence' },
-  { key:'mw5111', reg:5111, label:'Planter Command', type:'toggle', mask:2,
+  { key:'mw5111', reg:5111, label:'Planter Command', type:'toggle', mask:1,
     onLabel:'ACTIVE — Planter Start Set', offLabel:'Set Planter Start Sequence' },
   { key:'mw5112', reg:5112, label:'AMR State', type:'state',
     states:[{bit:0,value:1,label:'Stationary'},{bit:1,value:2,label:'Moving'}] },
