@@ -7,34 +7,45 @@
 <title>Agrobot AMR + PLC</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --teal:     #2ca5a5;
-  --teal-d:   #1f8686;
-  --teal-lt:  #e4f4f4;
-  --text:     #1a1a1a;
-  --muted:    #555;
-  --dim:      #888;
-  --bg:       #f0f0f0;
+  /* ── Agrobot brand palette (agrobot) ──────────────
+     primary #0C483C forest green · dark #152227 · cream #F4EFE9 ·
+     accent green #009E69 · coral #DB4C5D · Inter typeface          */
+  --teal:     #0C483C;   /* primary — header, active states, primary buttons */
+  --teal-d:   #063228;   /* darker forest — hover / pressed */
+  --teal-lt:  #e7f1ec;   /* pale green tint — hover backgrounds */
+  --text:     #152227;   /* brand dark — body text */
+  --muted:    #4a5a55;
+  --dim:      #7d8b86;
+  --bg:       #f4efe9;   /* brand cream — page background */
   --panel:    #ffffff;
-  --border:   #ddd;
-  --green:    #16a34a;
-  --green-lt: #f0fdf4;
-  --green-bd: #86efac;
+  --border:   #e3ddd2;   /* warm border to match the cream surface */
+  --green:    #009e69;   /* brand bright green — LEDs / OK / running */
+  --green-lt: #e6f6ef;
+  --green-bd: #8fdcbf;
   --red:      #dc2626;
   --red-lt:   #fef2f2;
   --red-bd:   #fca5a5;
+  --pink:     #db4c5d;   /* brand coral accent */
+  --pink-d:   #c43a4b;
   --amber:    #b45309;
   --amber-lt: #fffbeb;
   --blue:     #2563eb;
   --blue-lt:  #eff6ff;
   --blue-bd:  #93c5fd;
   --mono:     'Courier New', Courier, monospace;
-  --hdr:      56px;
-  --nav:      210px;
-  --key-sz:   64px;
+  /* Structural sizes are fluid: they hit these maxima at ≥~1280px (so a full-screen
+     Jetson is unchanged) and scale DOWN on smaller laptop/Mac windows so nothing
+     overflows or overlaps. */
+  --hdr:      clamp(48px, 5.5vh, 56px);
+  --nav:      clamp(168px, 16.5vw, 210px);
+  --key-sz:   clamp(44px, 6.4vh, 64px);
 }
 
 html, body { height: 100%; -webkit-text-size-adjust: 100%; }
@@ -43,8 +54,9 @@ body {
   height: 100vh;
   display: flex; flex-direction: column;
   overflow: hidden;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
-  font-size: 20px; color: var(--text); background: var(--bg);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  /* Fluid base: 20px on large displays (≥~1250px → Jetson unchanged), smaller on Mac windows. */
+  font-size: clamp(15px, 1.6vw, 20px); color: var(--text); background: var(--bg);
 }
 
 /* ── HEADER ──────────────────────────────────────────────────── */
@@ -56,16 +68,17 @@ header {
   flex-shrink: 0;
   box-shadow: 0 2px 6px rgba(0,0,0,0.2); z-index: 50;
 }
-.logo { height: 34px; flex-shrink: 0; }
-.hdr-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.logo { height: clamp(26px, 3.4vh, 34px); flex-shrink: 0; min-width: 0; }
+.hdr-right { margin-left: auto; display: flex; align-items: center; gap: 8px; min-width: 0; flex-shrink: 1; }
 .hdr-pill {
   display: flex; align-items: center; gap: 7px;
-  padding: 5px 13px; border-radius: 4px;
+  padding: 5px clamp(8px, 1vw, 13px); border-radius: 4px;
   background: rgba(255,255,255,0.15);
   border: 1px solid rgba(255,255,255,0.3);
-  font-size: 14px; font-weight: 700; letter-spacing: 0.4px;
-  color: rgba(255,255,255,0.8); white-space: nowrap;
+  font-size: clamp(11px, 1.1vw, 14px); font-weight: 700; letter-spacing: 0.4px;
+  color: rgba(255,255,255,0.8); white-space: nowrap; min-width: 0;
 }
+.hdr-pill span { overflow: hidden; text-overflow: ellipsis; }
 .hdr-led { width: 9px; height: 9px; border-radius: 50%; background: rgba(255,255,255,0.3); flex-shrink: 0; transition: all 0.3s; }
 .pill-moving  { background: rgba(74,222,128,0.2); border-color: rgba(74,222,128,0.5); color: #a7f3d0; }
 .pill-moving .hdr-led  { background: #4ade80; box-shadow: 0 0 7px #4ade80; }
@@ -90,10 +103,11 @@ header {
 .sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
 .nav-item {
-  display: block; padding: 13px 12px 13px 18px;
-  font-size: 19px; font-weight: 500; color: #1a6e6e;
+  display: block; padding: clamp(10px, 1.4vh, 13px) 12px clamp(10px, 1.4vh, 13px) 18px;
+  font-size: clamp(15px, 1.5vw, 19px); font-weight: 500; color: #1a6e6e;
   cursor: pointer; border: none; background: none; width: 100%;
-  text-align: left; border-left: 4px solid transparent;
+  text-align: left; border-left: 4px solid transparent; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
   transition: background 0.12s, border-color 0.12s; flex-shrink: 0;
 }
 .nav-item:hover  { background: var(--teal-lt); }
@@ -118,7 +132,7 @@ header {
   width: var(--key-sz); height: var(--key-sz);
   border: 1.5px solid #ccc; border-radius: 8px;
   background: var(--panel); color: var(--text);
-  font-size: 25px; font-weight: 700;
+  font-size: calc(var(--key-sz) * 0.4); font-weight: 700;
   cursor: pointer; display: flex; align-items: center; justify-content: center;
   user-select: none; -webkit-user-select: none; touch-action: none;
   box-shadow: 0 2px 4px rgba(0,0,0,0.08); transition: all 0.08s;
@@ -177,18 +191,26 @@ header {
 .act-btn {
   width: 100%; padding: 10px 12px; border-radius: 6px;
   border: 1.5px solid #ccc; background: var(--panel);
-  font-size: 16px; font-weight: 700; color: var(--muted);
+  font-size: clamp(13px, 1.3vw, 16px); font-weight: 700; color: var(--muted);
   cursor: pointer; display: flex; align-items: center; justify-content: space-between;
-  transition: all 0.12s;
+  gap: 8px; transition: all 0.12s;
 }
+.act-btn > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.act-btn .act-status { flex-shrink: 0; }
 .act-btn:hover   { background: var(--teal-lt); border-color: var(--teal); color: var(--teal-d); }
 .act-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+/* Running: the handshake command bit (%MW5110/5111) is set — pressed/engaged look. */
+.act-btn.active {
+  background: var(--teal); border-color: var(--teal-d); color: #fff;
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.25);
+}
+.act-btn.active:hover { background: var(--teal-d); color: #fff; }
 .act-status {
   font-size: 13px; font-weight: 700; padding: 2px 8px;
   border-radius: 10px;
   background: var(--green-lt); color: var(--green); border: 1px solid var(--green-bd);
 }
-.act-status.cycle { background: var(--red-lt); color: var(--red); border-color: var(--red-bd); }
+.act-status.cycle { background: var(--pink); color: #fff; border-color: var(--pink-d); }
 
 /* ── CONTENT ─────────────────────────────────────────────────── */
 .content { flex: 1; min-width: 0; position: relative; overflow: hidden; }
@@ -291,19 +313,27 @@ header {
 /* ════ VIEW 3 — CONNECTIVITY ═════════════════════════════════ */
 #view-connectivity { overflow-y: auto; }
 .conn-body { padding: 20px; }
-.conn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+/* Equal-width columns + equal-height rows so every card matches. */
+.conn-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-auto-rows: 1fr; align-items: stretch; gap: 16px;
+}
 .cc {
   background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
-  padding: 16px; display: flex; flex-direction: column; gap: 10px;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.06); min-height: 110px;
+  padding: 16px; display: flex; flex-direction: column; gap: 10px; height: 100%;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06); min-height: 128px;
 }
-.cc-top  { display: flex; align-items: center; gap: 12px; }
+.cc-detail { flex: 1; }                 /* fills the card so the timestamp sits at the bottom */
+.cc-ts     { margin-top: auto; }        /* pin timestamp to the bottom edge → uniform rows */
+.cc-top  { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .cc-icon {
   width: 36px; height: 36px; border-radius: 8px; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
   font-size: 14px; font-weight: 700; letter-spacing: 0.5px;
 }
-.cc-name { font-size: 17px; font-weight: 700; }
+.cc-name { font-size: clamp(14px, 1.4vw, 17px); font-weight: 700; flex: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cc-badge {
   margin-left: auto; font-size: 13px; font-weight: 700; letter-spacing: 1px;
   text-transform: uppercase; padding: 3px 10px; border-radius: 4px;
@@ -376,6 +406,8 @@ header {
 .cmd-btn.c-state  { background: var(--blue-lt); border-color: var(--blue-bd); color: var(--blue); }
 .cmd-btn.c-clear  { font-size: 13px; padding: 9px; color: var(--dim); background: #fafafa; }
 .cmd-btn.c-clear:hover { color: var(--red); border-color: #fca5a5; background: var(--red-lt); }
+.cmd-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.cmd-btn:disabled:hover { background: var(--panel); border-color: var(--border); color: var(--muted); }
 .state-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
 .auto-note  { font-size: 13px; color: #1e40af; background: var(--blue-lt); border-top: 1px solid var(--blue-bd); padding: 7px 12px; line-height: 1.5; }
 .cheatsheet { margin: 10px 12px 4px; background: #fffbeb; border: 1px solid #fde68a; border-radius: 7px; padding: 10px 14px; }
@@ -450,12 +482,17 @@ input[type=range] { width: 100%; accent-color: var(--teal); height: 6px; cursor:
 #app-log-body {
   flex: 1; overflow-y: auto; padding: 2px 0; font-family: var(--mono); font-size: 15px;
 }
-.al { display: flex; align-items: baseline; gap: 10px; padding: 7px 16px; border-bottom: 1px solid #f5f5f5; }
-.al:hover { background: #fafafa; }
-.al-ts  { color: var(--dim); flex-shrink: 0; font-size: 13px; min-width: 105px; }
-.al-cat { font-weight: 700; flex-shrink: 0; min-width: 120px; font-size: 15px; }
-.al-msg { color: var(--muted); flex: 1; word-break: break-word; font-size: 15px; }
-.al-hint { color: var(--dim); font-size: 13px; font-style: italic; flex-shrink: 0; text-align: right; max-width: 230px; }
+.al { display: flex; flex-direction: column; gap: 3px; padding: 8px 16px; border-bottom: 1px solid #f0ece4; }
+.al:hover { background: #faf7f2; }
+.al-row { display: flex; align-items: baseline; gap: 10px; }
+.al-ts  { color: var(--dim); flex-shrink: 0; font-size: 13px; min-width: 96px; font-family: var(--mono); }
+.al-cat { font-weight: 700; flex-shrink: 0; min-width: 104px; font-size: clamp(13px, 1.1vw, 15px); }
+.al-msg { color: var(--text); flex: 1; min-width: 0; word-break: break-word; font-size: clamp(13px, 1.1vw, 15px); }
+/* Debug instruction on its own line, indented under the message. */
+.al-hint { color: var(--muted); font-size: 13px; line-height: 1.5; margin: 1px 0 1px 106px;
+  padding: 5px 10px; background: #faf7f2; border-left: 3px solid var(--border); border-radius: 0 4px 4px 0; }
+.al-err .al-hint, .al-warn .al-hint { background: var(--amber-lt); border-left-color: var(--amber); color: #8a4a08; }
+.al-err .al-hint::before, .al-warn .al-hint::before { content: '🔧 '; }
 .al-info  .al-cat { color: var(--teal-d); }
 .al-ok    .al-cat { color: var(--green); }
 .al-warn  .al-cat { color: var(--amber); }
@@ -521,7 +558,7 @@ input[type=range] { width: 100%; accent-color: var(--teal); height: 6px; cursor:
   .settings-body { padding: 14px; }
   .logs-toolbar { padding: 6px 10px; gap: 5px; }
   .log-filter-btn { padding: 4px 8px; font-size: 13px; }
-  .al-hint { display: none; }
+  .al-hint { margin-left: 0; }   /* keep debug instructions visible, full-width on small screens */
 }
 
 @media (min-width: 681px) and (max-width: 900px) {
@@ -548,17 +585,17 @@ input[type=range] { width: 100%; accent-color: var(--teal); height: 6px; cursor:
 <div class="page-body">
 
   <nav class="sidebar">
-    <button class="nav-item active" onclick="switchView('camera')">Camera</button>
+    <button class="nav-item active" onclick="switchView('camera')">Cameras</button>
     <div class="nav-divider"></div>
     <button class="nav-item" onclick="switchView('gps')">GPS</button>
     <div class="nav-divider"></div>
-    <button class="nav-item" onclick="switchView('connectivity')">Connectivity</button>
-    <div class="nav-divider"></div>
     <button class="nav-item" onclick="switchView('plc')">PLC</button>
+    <div class="nav-divider"></div>
+    <button class="nav-item" onclick="switchView('connectivity')">Connectivity</button>
     <div class="nav-divider"></div>
     <button class="nav-item" onclick="switchView('settings')">Settings</button>
     <div class="nav-divider"></div>
-    <button class="nav-item" onclick="switchView('logs')">Logs</button>
+    <button class="nav-item" onclick="switchView('logs')">Event Logs</button>
     <div class="nav-divider"></div>
 
     <!-- WASD block -->
@@ -662,13 +699,7 @@ input[type=range] { width: 100%; accent-color: var(--teal); height: 6px; cursor:
       <div class="conn-body">
         <div class="conn-grid">
           <div class="cc">
-            <div class="cc-top"><div class="cc-icon" style="background:#fef3c7;color:#b45309">BAT</div><span class="cc-name">Chassis Battery</span><span class="cc-badge bg-unk" id="cc-bat-b">—</span></div>
-            <div class="cc-detail" id="cc-bat-d">Polling /api/chassis_battery</div>
-            <div class="batt-bar-wrap"><div class="batt-bar" id="cc-bat-bar" style="width:0%"></div></div>
-            <div class="cc-ts" id="cc-bat-t">—</div>
-          </div>
-          <div class="cc">
-            <div class="cc-top"><div class="cc-icon" style="background:#ede9fe;color:#6d28d9">PLC</div><span class="cc-name">PLC (Modbus TCP)</span><span class="cc-badge bg-unk" id="cc-plc-b">—</span></div>
+            <div class="cc-top"><div class="cc-icon" style="background:var(--teal-lt);color:var(--teal)">PLC</div><span class="cc-name">PLC (Modbus TCP)</span><span class="cc-badge bg-unk" id="cc-plc-b">—</span></div>
             <div class="cc-detail" id="cc-plc-d">%MW5100–5112 · 192.168.1.2:502</div>
             <div class="cc-ts" id="cc-plc-t">—</div>
           </div>
@@ -688,7 +719,7 @@ input[type=range] { width: 100%; accent-color: var(--teal); height: 6px; cursor:
             <div class="cc-ts" id="cc-gps-t">—</div>
           </div>
           <div class="cc">
-            <div class="cc-top"><div class="cc-icon" style="background:#f5f3ff;color:#1d4ed8">WHL</div><span class="cc-name">Robot Base (Odometry)</span><span class="cc-badge bg-unk" id="cc-rob-b">—</span></div>
+            <div class="cc-top"><div class="cc-icon" style="background:#f5f3ff;color:#1d4ed8">CHS</div><span class="cc-name">Chassis (Robot Base)</span><span class="cc-badge bg-unk" id="cc-rob-b">—</span></div>
             <div class="cc-detail" id="cc-rob-d">Wheel encoders · Modbus RTU · /api/wheel_odom</div>
             <div class="cc-ts" id="cc-rob-t">—</div>
           </div>
@@ -806,7 +837,7 @@ input[type=range] { width: 100%; accent-color: var(--teal); height: 6px; cursor:
           <button class="log-filter-btn" onclick="setLogFilter('Camera')">Camera</button>
           <button class="log-filter-btn" onclick="setLogFilter('GPS')">GPS</button>
           <button class="log-filter-btn" onclick="setLogFilter('PLC')">PLC</button>
-          <button class="log-filter-btn" onclick="setLogFilter('Robot')">Robot</button>
+          <button class="log-filter-btn" onclick="setLogFilter('Chassis')">Chassis</button>
           <button class="log-filter-btn" onclick="setLogFilter('Settings')">Settings</button>
           <button class="log-filter-btn" onclick="setLogFilter('Connectivity')">Conn</button>
         </div>
@@ -903,10 +934,12 @@ function _renderAppLog() {
   if (!el || !_g('view-logs')?.classList.contains('active')) return;
   el.innerHTML = entries.map(e =>
     `<div class="al al-${e.level}">` +
-    `<span class="al-ts">${e.ts}</span>` +
-    `<span class="al-cat">[${e.category}]</span>` +
-    `<span class="al-msg">${e.msg}</span>` +
-    (e.hint ? `<span class="al-hint">${e.hint}</span>` : '') +
+      `<div class="al-row">` +
+        `<span class="al-ts">${e.ts}</span>` +
+        `<span class="al-cat">[${e.category}]</span>` +
+        `<span class="al-msg">${e.msg}</span>` +
+      `</div>` +
+      (e.hint ? `<div class="al-hint">${e.hint}</div>` : '') +
     `</div>`
   ).join('');
 }
@@ -1448,23 +1481,19 @@ function _ccSet(id, cls, label, detail) {
   const t = _g('cc-' + id + '-t'); if (t) t.textContent = new Date().toLocaleTimeString();
 }
 
+// Each subsystem is pinged independently (its own try/catch). They run one after
+// another — NOT all at once — so the connectivity sweep never opens a burst of
+// sockets that would exhaust the browser's per-host connection limit and starve
+// the 500 ms PLC heartbeat (that caused the "Server unreachable" flapping).
 async function _pollConn() {
-  try {
-    const d = await _fetchWithTimeout('/api/chassis_battery', {}, 2000).then(r => r.json());
-    const v = d.voltage_v;
-    if (d.connected && v > 0) {
-      const mn = _battRange.minV, mx = _battRange.maxV;
-      const pct = Math.round(Math.max(0, Math.min(100, (v - mn) / (mx - mn) * 100)));
-      const cls = pct >= 30 ? 'bg-on' : pct >= 15 ? 'bg-par' : 'bg-off';
-      _ccSet('bat', cls, pct + '%', `${v.toFixed(1)} V  (range ${mn}–${mx} V)`);
-      const bar = _g('cc-bat-bar');
-      if (bar) { bar.style.width = pct + '%'; bar.style.background = pct >= 30 ? '#16a34a' : pct >= 15 ? '#d97706' : '#dc2626'; }
-    } else {
-      _ccSet('bat', 'bg-unk', 'No data', `voltage: ${v != null ? v.toFixed(1) + ' V' : '—'}`);
-      const bar = _g('cc-bat-bar'); if (bar) bar.style.width = '0%';
-    }
-  } catch { _ccSet('bat', 'bg-unk', 'Error', 'Request failed'); }
+  await _connPlc();
+  await _connCam();
+  await _connZed();
+  await _connGps();
+  await _connChassis();
+}
 
+async function _connPlc() {
   try {
     const d = await _fetchWithTimeout('/api/amr/ping', {}, 2000).then(r => r.json());
     const st = d.connected ? 'online' : 'offline';
@@ -1472,50 +1501,81 @@ async function _pollConn() {
       d.connected ? 'Online' : 'Offline',
       d.connected ? `%MW5100–5112 reachable · ${d.latency_ms} ms` : (d.message || 'Unreachable'));
     if (st !== _prevState.plcConn) {
-      if (d.connected) addLog('Connectivity', 'ok', `PLC (Modbus TCP) online — ${d.latency_ms} ms`, '192.168.1.2:502');
-      else addLog('Connectivity', 'err', `PLC offline: ${d.message || 'no response'}`,
-        'Check LAN cable eno1. Verify arp -n 192.168.1.2 (not 00:0b:29 / VMware).');
+      if (d.connected) addLog('Connectivity', 'ok',
+        `PLC link UP — Modbus TCP 192.168.1.2:502 responding in ${d.latency_ms} ms; handshake registers %MW5100–5112 readable.`,
+        'Auger / Planter controls are now live.');
+      else addLog('Connectivity', 'err',
+        `PLC link DOWN — no Modbus-TCP response from 192.168.1.2:502 (${d.message || 'timeout'}). Auger/Planter controls are disabled.`,
+        'Fix: 1) Check the LAN cable into the Jetson eno1 port and the PLC switch. 2) ping 192.168.1.2 from the Jetson. 3) arp -n 192.168.1.2 — the MAC must be the LS PLC, not a 00:0b:29 VMware adapter. 4) Confirm the PLC CPU Modbus-TCP server is enabled on port 502 (the FEnet card at .1 does NOT serve 502).');
       _prevState.plcConn = st;
     }
-  } catch { _ccSet('plc', 'bg-off', 'Offline', 'Request failed'); }
+  } catch { _ccSet('plc', 'bg-off', 'Offline', 'Dashboard request failed'); }
+}
 
+async function _connCam() {
   try {
     const d = await _fetchWithTimeout('/api/camera/status', {}, 2000).then(r => r.json());
     const st = d.connected && d.has_frame ? 'online' : d.has_frame ? 'stale' : 'offline';
     _ccSet('cam', st === 'online' ? 'bg-on' : st === 'stale' ? 'bg-par' : 'bg-off',
       st === 'online' ? 'Online' : st === 'stale' ? 'Stale' : 'Offline',
-      st === 'online' ? `${d.frames_received} frames received` : (d.last_error || 'No frames'));
+      st === 'online' ? `${d.frames_received} frames received` : (d.last_error || 'No frames received'));
     if (st !== _prevState.camera) {
-      if (st === 'online') addLog('Camera', 'ok', `Rear camera (RealSense) online — ${d.frames_received} frames`);
-      else if (st === 'offline') addLog('Camera', 'err', `Rear camera offline: ${d.last_error || 'no frames'}`,
-        'Check RealSense USB 3.x cable. Try: rs-enumerate-devices');
+      if (st === 'online') addLog('Camera', 'ok',
+        `Rear camera (RealSense D435) streaming — ${d.frames_received} frames received.`);
+      else if (st === 'stale') addLog('Camera', 'warn',
+        `Rear camera (RealSense) STALE — frames stopped arriving (last error: ${d.last_error || 'none'}).`,
+        'Fix: the camera connected but the stream froze. Re-seat the USB-3 cable, then restart the camera node.');
+      else addLog('Camera', 'err',
+        `Rear camera (RealSense D435) OFFLINE — ${d.last_error || 'no frames'}.`,
+        'Fix: 1) Re-seat the RealSense USB-3 cable (must be a blue USB-3 port). 2) Run rs-enumerate-devices to confirm the Jetson sees it. 3) Power-cycle the camera if it still does not appear.');
       _prevState.camera = st;
     }
-  } catch { _ccSet('cam', 'bg-off', 'Offline', 'Request failed'); }
+  } catch { _ccSet('cam', 'bg-off', 'Offline', 'Dashboard request failed'); }
+}
 
+async function _connZed() {
   try {
     const d = await _fetchWithTimeout('/api/zed/status', {}, 2000).then(r => r.json());
     const st = d.connected && d.has_frame ? 'online' : 'offline';
     _ccSet('zed', st === 'online' ? 'bg-on' : 'bg-off',
       st === 'online' ? 'Online' : 'Offline',
-      st === 'online' ? `${d.frames_received} frames` : (d.last_error || 'ZED not available'));
+      st === 'online' ? `${d.frames_received} frames received` : (d.last_error || 'ZED not available'));
     if (st !== _prevState.zed) {
-      if (st === 'online') addLog('Camera', 'ok', `Front camera (ZED 2i) online — ${d.frames_received} frames`);
-      else addLog('Camera', 'warn', `Front camera (ZED 2i) offline: ${d.last_error || 'no frames'}`,
-        'Check ZED USB 3.x. Verify ZED SDK installed. Try: ZED_Explorer');
+      if (st === 'online') addLog('Camera', 'ok',
+        `Front camera (ZED 2i) streaming — ${d.frames_received} frames received.`);
+      else addLog('Camera', 'warn',
+        `Front camera (ZED 2i) OFFLINE — ${d.last_error || 'no frames'}.`,
+        'Fix: 1) Re-seat the ZED USB-3 cable. 2) Confirm the ZED SDK is installed (run ZED_Explorer). 3) Person-detection needs the ZED feed — it stays off until this recovers.');
       _prevState.zed = st;
     }
   } catch { _ccSet('zed', 'bg-off', 'Offline', 'Not available'); }
+}
 
+async function _connGps() {
   try {
     const d = await _fetchWithTimeout('/api/gnss', {}, 2000).then(r => r.ok ? r.json() : { gps_state: 'disconnected' });
     const st = d.gps_state || 'disconnected';
     _ccSet('gps',
       st === 'fixed' ? 'bg-on' : st === 'no_signal' ? 'bg-par' : 'bg-off',
       st === 'fixed' ? 'Fixed' : st === 'no_signal' ? 'No fix' : 'Offline',
-      st === 'fixed' ? `${d.lat?.toFixed(5)}, ${d.lon?.toFixed(5)} · ${d.sats} sats` : 'No position fix');
-  } catch { _ccSet('gps', 'bg-off', 'Offline', 'Request failed'); }
+      st === 'fixed' ? `${d.lat?.toFixed(5)}, ${d.lon?.toFixed(5)} · ${d.sats} sats` :
+      st === 'no_signal' ? 'Receiver connected, searching for satellites' : 'Receiver not detected');
+    if (st !== _prevState.gnss) {
+      if (st === 'fixed') addLog('GPS', 'ok',
+        `GPS fix acquired — ${d.lat?.toFixed(5)}, ${d.lon?.toFixed(5)} on ${d.sats} satellites.`,
+        'Planting locations will now be tagged with real coordinates.');
+      else if (st === 'no_signal') addLog('GPS', 'warn',
+        'GPS receiver connected but has NO satellite fix yet.',
+        'Fix: move the robot to open sky and wait 30–90 s for the first fix; concrete/indoor environments block GNSS.');
+      else addLog('GPS', 'err',
+        'GPS receiver OFFLINE — the Columbus P-9 is not detected.',
+        'Fix: 1) Re-seat the GPS USB cable. 2) Confirm /tmp/gnss_coords.json is updating (the gnss_p9_read.py reader must be running). 3) Check the USB serial port was auto-detected.');
+      _prevState.gnss = st;
+    }
+  } catch { _ccSet('gps', 'bg-off', 'Offline', 'Dashboard request failed'); }
+}
 
+async function _connChassis() {
   try {
     const d = await _fetchWithTimeout('/api/wheel_odom', {}, 2000).then(r => r.json());
     const st = d.connected ? 'online' : 'offline';
@@ -1523,13 +1583,15 @@ async function _pollConn() {
       d.connected ? 'Online' : 'Offline',
       d.connected ? `L: ${d.left}  R: ${d.right} · mileage: ${((d.mileage||0)/1000).toFixed(1)} km` : 'No odometry messages');
     if (st !== _prevState.robot) {
-      if (d.connected) addLog('Robot', 'ok', `Robot base (Modbus RTU) online — L:${d.left} R:${d.right}`,
-        'Odometry active. Mileage accumulating.');
-      else addLog('Robot', 'err', 'Robot base offline — no odometry',
-        'Check /dev/ttyUSB0. Run robot_base_node. Verify Modbus RTU at 38400 baud.');
+      if (d.connected) addLog('Chassis', 'ok',
+        `Chassis (robot base) link UP — Modbus RTU odometry flowing (L:${d.left} R:${d.right}).`,
+        'Drive commands and wheel mileage are active.');
+      else addLog('Chassis', 'err',
+        'Chassis (robot base) link DOWN — no wheel-odometry messages. Driving will not work.',
+        'Fix: 1) Check the /dev/ttyUSB0 serial cable to the chassis controller. 2) Confirm robot_base_node is running. 3) Verify Modbus RTU at 38400 baud, 8N1, slave id 1.');
       _prevState.robot = st;
     }
-  } catch { _ccSet('rob', 'bg-off', 'Offline', 'Request failed'); }
+  } catch { _ccSet('rob', 'bg-off', 'Offline', 'Dashboard request failed'); }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1637,139 +1699,108 @@ function applySettings() {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// ACTUATOR PLC (Auger / Planter / Both)
+// ACTUATOR HANDSHAKE (Auger / Planter / Both)
+//
+// The sidebar buttons and the PLC-tab "Command" toggles drive the SAME
+// AMR↔PLC handshake registers and share one state:
+//   • Activate auger   → set %MW5110 bit 0   (AMR→PLC "start sequence")
+//   • Activate planter → set %MW5111 bit 0
+//   • Done → the PLC sets the "Cycle Complete" status bit
+//     (%MW5100 bit 2 / %MW5101 bit 2); we then auto-clear the command
+//     register so the button releases and is ready for the next press.
+// Everything is driven from the 500 ms _pollPlc() loop (the single source
+// of truth for the %MW5100–5112 block), so the two UIs never disagree.
 // ═══════════════════════════════════════════════════════════════
-let _plcMachStatus = { connected: false };
-let _plcMachPollTimer = null;
-let _plcSeqPollTimer = null, _plcSeqDeadline = 0;
-let _augerWasInCycle = false, _planterWasInCycle = false;
 let _plantMarkers = [];
+let _augerCompletePrev = false, _planterCompletePrev = false;
 
-async function _plcPost(path, command) {
-  try {
-    const r = await _fetchWithTimeout(path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ command }),
-    }, 3000);
-    return await r.json();
-  } catch {
-    return { connected: false, success: false, message: 'request failed' };
-  }
-}
-
-function _plcToast(resp, okMsg) {
-  if (!resp || resp.connected === false) { showToast('PLC gateway offline', true); return false; }
-  if (resp.success === false)            { showToast(resp.message || 'PLC command failed', true); return false; }
-  showToast(okMsg || resp.message || 'OK');
-  return true;
-}
-
+// Sidebar buttons → toggle the same handshake command registers as the PLC tab.
 function toggleActuator(which) {
-  if (which === 'auger') {
-    const cmd = _plcMachStatus.auger_in_cycle ? 'STOP' : 'START';
-    addLog('PLC', 'write', `Auger ${cmd} command sent → /api/plc/auger`,
-      cmd === 'START' ? 'Writes %MW5110=1. PLC must be in Auto mode.' : 'Writes %MW5110=0.');
-    _plcPost('/api/plc/auger', cmd).then(r => {
-      if (r.success) addLog('PLC', 'ok', `Auger ${cmd} acknowledged by PLC`);
-      if (_plcToast(r, cmd === 'START' ? 'Auger starting…' : 'Stopping auger…')) _startPlcSeqPoll();
-    });
-    return;
-  }
-  if (which === 'planter') {
-    addLog('PLC', 'write', 'Planter START command sent → /api/plc/planter',
-      'Writes %MW5000 START bit. PLC must be in Auto mode + Planter enabled.');
-    _plcPost('/api/plc/planter', 'START').then(r => {
-      if (r.success) addLog('PLC', 'ok', 'Planter START acknowledged by PLC');
-      if (_plcToast(r, 'Planter starting…')) _startPlcSeqPoll();
-    });
-    return;
-  }
+  if (_plcConn !== true) { showToast('PLC offline', true); return; }
+  if (which === 'auger')   { _toggle(5110, 'mw5110', 1); return; }
+  if (which === 'planter') { _toggle(5111, 'mw5111', 1); return; }
   if (which === 'both') {
-    addLog('PLC', 'write', 'Auger + Planter START command sent → /api/plc/both',
-      'Triggers both sequences simultaneously. Check %MW5100 and %MW5101.');
-    _plcPost('/api/plc/both', 'START').then(r => {
-      if (r.success) addLog('PLC', 'ok', 'Auger + Planter START acknowledged by PLC');
-      if (_plcToast(r, 'Auger + Planter starting…')) _startPlcSeqPoll();
-    });
+    // If either command is active, clear both; otherwise start both together.
+    const anyOn = ((_cur.mw5110 ?? 0) & 1) || ((_cur.mw5111 ?? 0) & 1);
+    const target = anyOn ? 0 : 1;
+    _setCmd(5110, 'mw5110', target);
+    _setCmd(5111, 'mw5111', target);
   }
 }
 
-async function _pollPlcMachStatus() {
-  let d;
-  try { d = await _fetchWithTimeout('/api/plc/status', { cache: 'no-store' }, 2500).then(r => r.json()); }
-  catch { d = { connected: false }; }
-  _plcMachStatus = d;
-  _updateActuatorUI(d);
+// Mirror the live command-bit state onto the three sidebar buttons.
+function _syncActuatorButtons() {
+  const online = _plcConn === true;
+  const aOn = online && !!((_cur.mw5110 ?? 0) & 1);
+  const pOn = online && !!((_cur.mw5111 ?? 0) & 1);
+  _setActBtn('augerBtn',   'auger-status',   online, aOn);
+  _setActBtn('planterBtn', 'planter-status', online, pOn);
+  _setActBtn('bothBtn',    'both-status',    online, aOn || pOn);
+}
+function _setActBtn(btnId, statusId, online, on) {
+  const btn = _g(btnId), st = _g(statusId);
+  if (btn) { btn.disabled = !online; btn.classList.toggle('active', on); }
+  if (st) {
+    st.textContent = !online ? 'Offline' : (on ? 'Running' : 'Idle');
+    st.className = 'act-status' + (online && on ? ' cycle' : '');
+  }
 }
 
-function _updateActuatorUI(d) {
-  const online = d && d.connected !== false;
-  const augerCycle   = online && !!d.auger_in_cycle;
-  const planterCycle = online && !!d.planter_in_cycle;
+// Auto-release on the Cycle-Complete handshake bit. Called every poll from
+// _pollPlc() with the freshly-read handshake registers.
+function _checkActuatorCompletion(data) {
+  if (data.connected === false) { _augerCompletePrev = _planterCompletePrev = false; return; }
 
-  const aBtn = _g('augerBtn'), aSt = _g('auger-status');
-  if (aBtn) aBtn.disabled = !online;
-  if (aSt) { aSt.textContent = augerCycle ? 'In Cycle' : 'Idle'; aSt.className = 'act-status' + (augerCycle ? ' cycle' : ''); }
+  const augerComplete   = data.mw5100 != null ? !!((data.mw5100 >> 2) & 1) : false;
+  const planterComplete = data.mw5101 != null ? !!((data.mw5101 >> 2) & 1) : false;
+  const augerCmd   = !!(((data.mw5110 ?? _cur.mw5110) ?? 0) & 1);
+  const planterCmd = !!(((data.mw5111 ?? _cur.mw5111) ?? 0) & 1);
 
-  const pBtn = _g('planterBtn'), pSt = _g('planter-status');
-  if (pBtn) pBtn.disabled = !online;
-  if (pSt) { pSt.textContent = planterCycle ? 'In Cycle' : 'Idle'; pSt.className = 'act-status' + (planterCycle ? ' cycle' : ''); }
-
-  const bBtn = _g('bothBtn'), bSt = _g('both-status');
-  if (bBtn) bBtn.disabled = !online;
-  const bothCycle = augerCycle || planterCycle;
-  if (bSt) { bSt.textContent = bothCycle ? 'In Cycle' : 'Idle'; bSt.className = 'act-status' + (bothCycle ? ' cycle' : ''); }
-}
-
-function _startPlcSeqPoll() {
-  _plcSeqDeadline = Date.now() + 8000;
-  if (_plcSeqPollTimer) return;
-  _plcSeqPollTimer = setInterval(_pollPlcSequence, 500);
-  _pollPlcSequence();
-}
-function _stopPlcSeqPoll() {
-  if (_plcSeqPollTimer) { clearInterval(_plcSeqPollTimer); _plcSeqPollTimer = null; }
-}
-async function _pollPlcSequence() {
-  let d;
-  try { d = await _fetchWithTimeout('/api/plc/sequence', { cache: 'no-store' }, 2500).then(r => r.json()); }
-  catch { return; }
-  if (d.connected === false) { _stopPlcSeqPoll(); return; }
-
-  if (_augerWasInCycle && !d.auger_in_cycle) {
+  // Rising edge of "Cycle Complete" while our start command is still set → done.
+  if (augerCmd && augerComplete && !_augerCompletePrev) {
+    _clearActuator(5110, 'mw5110');
     showToast('Auger complete');
-    addLog('PLC', 'ok', 'Auger cycle complete — %MW5100 bit 2 cleared', 'Auger retracted. Ready for next cycle.');
+    _addLog('lc', 'Auger cycle complete (%MW5100 bit 2) — %MW5110 auto-cleared');
+    addLog('PLC', 'ok', 'Auger cycle complete — command released, ready for next press');
   }
-  if (_planterWasInCycle && !d.planter_in_cycle) {
+  if (planterCmd && planterComplete && !_planterCompletePrev) {
+    _clearActuator(5111, 'mw5111');
     showToast('Planter complete');
-    addLog('PLC', 'ok', `Planter cycle complete — seedling #${_plantCount + 1} planted`,
-      'Check GPS view for red dot marker at planting location.');
-    _plantCount++;
-    if (_gnssHasFix && _gnssLastLatlng && _gnssMap) {
-      const [lat, lon] = _gnssLastLatlng;
-      const icon = L.divIcon({
-        className: '',
-        html: '<div style="width:14px;height:14px;border-radius:50%;background:#da3633;border:2px solid #fff;box-shadow:0 1px 6px rgba(0,0,0,.6)"></div>',
-        iconSize: [14,14], iconAnchor: [7,7],
-      });
-      const marker = L.marker([lat, lon], { icon })
-        .bindTooltip(`#${_plantCount}`, { permanent: false, direction: 'top', offset: [0, -10] })
-        .addTo(_gnssMap);
-      _plantMarkers.push(marker);
-      fetch('/api/plant', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ts: new Date().toISOString(), count: _plantCount, lat, lon }),
-      }).catch(() => {});
-    }
+    _addLog('lc', 'Planter cycle complete (%MW5101 bit 2) — %MW5111 auto-cleared');
+    _logPlant();
   }
-  _augerWasInCycle   = !!d.auger_in_cycle;
-  _planterWasInCycle = !!d.planter_in_cycle;
-  _plcMachStatus = d;
-  _updateActuatorUI(d);
+  _augerCompletePrev   = augerComplete;
+  _planterCompletePrev = planterComplete;
+}
 
-  if (d.auger_in_cycle || d.planter_in_cycle) _plcSeqDeadline = Date.now() + 4000;
-  else if (Date.now() > _plcSeqDeadline)      _stopPlcSeqPoll();
+// Clear a handshake command register (release the button) and refresh both UIs.
+function _clearActuator(reg, key) {
+  _doWrite(reg, 0).then(d => {
+    if (d?.success) { _cur[key] = d.readback ?? 0; _applyCmds(_cur); _syncActuatorButtons(); }
+  });
+}
+
+// Planter finished a cycle → count it and drop a marker at the current GPS fix.
+function _logPlant() {
+  addLog('PLC', 'ok', `Planter cycle complete — seedling #${_plantCount + 1} planted`,
+    'Check GPS view for the red dot marker at the planting location.');
+  _plantCount++;
+  if (_gnssHasFix && _gnssLastLatlng && _gnssMap) {
+    const [lat, lon] = _gnssLastLatlng;
+    const icon = L.divIcon({
+      className: '',
+      html: '<div style="width:14px;height:14px;border-radius:50%;background:#da3633;border:2px solid #fff;box-shadow:0 1px 6px rgba(0,0,0,.6)"></div>',
+      iconSize: [14,14], iconAnchor: [7,7],
+    });
+    const marker = L.marker([lat, lon], { icon })
+      .bindTooltip(`#${_plantCount}`, { permanent: false, direction: 'top', offset: [0, -10] })
+      .addTo(_gnssMap);
+    _plantMarkers.push(marker);
+    fetch('/api/plant', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ts: new Date().toISOString(), count: _plantCount, lat, lon }),
+    }).catch(() => {});
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1840,14 +1871,19 @@ function _applyStatus(data) {
 }
 
 function _applyCmds(data) {
+  // Command buttons write to the PLC — gate them all on the live connection so they
+  // can't be pressed while the PLC is offline (the 500 ms poll is the heartbeat).
+  const online = _plcConn === true;
+  document.querySelectorAll('#plc-cmd-body .cmd-btn').forEach(b => { b.disabled = !online; });
+
   CMD_REGS.forEach(r => {
     const v = data[r.key]; _set('cv-'+r.key, _fmtV(v));
     if (r.type === 'toggle') {
-      const on = v != null && !!(v & r.mask);
+      const on = online && v != null && !!(v & r.mask);
       const btn = _g('cb-'+r.key);
       if (btn) { btn.className = 'cmd-btn'+(on?' c-active':''); btn.textContent = on?'■  '+r.onLabel:'▶  '+r.offLabel; }
     } else {
-      r.states.forEach(s => { const btn = _g(`cb-${r.key}-${s.bit}`); if (btn) btn.className = 'cmd-btn'+(v===s.value?' c-state':''); });
+      r.states.forEach(s => { const btn = _g(`cb-${r.key}-${s.bit}`); if (btn) btn.className = 'cmd-btn'+(online && v===s.value?' c-state':''); });
     }
   });
 }
@@ -1891,11 +1927,11 @@ async function _doWrite(reg, value) {
 async function _toggle(reg, key, mask) {
   const cur = _cur[key] ?? 0, nv = (cur & mask) ? (cur & ~mask) : (cur | mask);
   const d = await _doWrite(reg, nv & 0xFFFF);
-  if (d?.success) { _cur[key] = d.readback ?? nv; _applyCmds(_cur); }
+  if (d?.success) { _cur[key] = d.readback ?? nv; _applyCmds(_cur); _syncActuatorButtons(); }
 }
 async function _setCmd(reg, key, value) {
   const d = await _doWrite(reg, value);
-  if (d?.success) { _cur[key] = d.readback ?? value; _applyCmds(_cur); }
+  if (d?.success) { _cur[key] = d.readback ?? value; _applyCmds(_cur); _syncActuatorButtons(); }
 }
 
 async function _pollPlc() {
@@ -1903,6 +1939,8 @@ async function _pollPlc() {
   try { data = await _fetchWithTimeout('/api/amr/poll', {}, 2000).then(r => r.json()); }
   catch {
     if (_plcConn !== false) { _setPlcPill(false, 'PLC offline'); _addLog('ld', 'Server unreachable'); _plcConn = false; }
+    _applyCmds(_cur);        // disable PLC-tab command buttons (reads _plcConn=false)
+    _syncActuatorButtons();  // disable sidebar actuator buttons
     return;
   }
   if (_plcConn !== data.connected) {
@@ -1933,24 +1971,29 @@ async function _pollPlc() {
   }
   Object.assign(_prev, data); _cur = { ..._cur, ...data };
   _applyStatus(data); _applyCmds(data);
+  _checkActuatorCompletion(data);
+  _syncActuatorButtons();
 }
 
 // ── Init ─────────────────────────────────────────────────────────
 _buildPlcUI();
+_applyCmds({});   // start with command buttons disabled until a poll confirms the PLC link
 _loadCameras(false);
 
 addLog('System', 'sys', 'Dashboard ready — Agrobot AMR + PLC', 'Port 8769. Connecting to all subsystems…');
 addLog('System', 'sys', 'AMR state auto-write active: Moving=2, Stationary=1 → %MW5112',
   'Derived from WASD velocity. No manual action needed.');
-addLog('System', 'sys', 'Polling: PLC 500ms · GPS 1s · Connectivity 5s · Actuators 2s');
+addLog('System', 'sys', 'Polling: PLC 500ms · GPS 1s · Connectivity 5s');
 
 _addLog('li', 'Dashboard ready.');
 _addLog('li', '%MW5112 auto-managed: Moving=2, Stationary=1.');
+_addLog('li', 'Auger/Planter buttons drive %MW5110/5111; auto-release on Cycle Complete (%MW5100/5101 bit 2).');
+
+_syncActuatorButtons();
 
 setInterval(_pollPlc,           500);
 setInterval(_pollGnss,         1000);
 setInterval(_pollConn,         5000);
-setInterval(_pollPlcMachStatus, 2000);
 
 // Battery polling with log-on-change
 let _prevBattPct = null;
@@ -1973,7 +2016,6 @@ setInterval(async () => {
 _pollPlc();
 _pollGnss();
 _pollConn();
-_pollPlcMachStatus();
 </script>
 </body>
 </html>

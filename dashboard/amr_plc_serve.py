@@ -59,18 +59,28 @@ WRITABLE = {5110, 5111, 5112}
 class ModbusHelper:
     """Thread-safe Modbus TCP client.  pymodbus is lazily imported."""
 
-    def __init__(self, host, port, timeout=2.0):
+    # Short connect timeout + retry backoff so an unreachable PLC reports "offline"
+    # almost instantly instead of blocking each poll for the full TCP timeout. A long
+    # block made /api/amr/poll exceed the browser's fetch timeout → false "Server
+    # unreachable" flapping whenever the PLC was down/unplugged.
+    CONNECT_BACKOFF = 3.0   # seconds to wait between connect attempts after a failure
+
+    def __init__(self, host, port, timeout=1.0):
         self.host    = host
         self.port    = int(port)
         self.timeout = float(timeout)
         self._lock   = threading.Lock()
         self._client = None
         self._import_error = None
+        self._next_try = 0.0   # monotonic time; skip connect attempts until then
 
     def _ensure(self):
         if self._client is not None:
             return self._client
         if self._import_error:
+            return None
+        # Between retries, report unreachable instantly (no blocking connect).
+        if time.monotonic() < self._next_try:
             return None
         try:
             from pymodbus.client import ModbusTcpClient
@@ -84,6 +94,7 @@ class ModbusHelper:
                 c.close()
             except Exception:
                 pass
+            self._next_try = time.monotonic() + self.CONNECT_BACKOFF
             return None
         self._client = c
         log.info("Modbus connected → %s:%d", self.host, self.port)
