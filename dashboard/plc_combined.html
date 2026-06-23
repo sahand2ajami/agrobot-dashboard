@@ -212,6 +212,18 @@ header {
 }
 .act-status.cycle { background: var(--pink); color: #fff; border-color: var(--pink-d); }
 
+/* ── SIDEBAR BATTERY ─────────────────────────────────────────── */
+.sidebar-batt {
+  margin-top: auto; padding: 10px 12px 12px;
+  border-top: 1px solid var(--border); flex-shrink: 0;
+}
+.sb-batt-lbl { font-size: 12px; font-weight: 700; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; }
+.sb-batt-row { display: flex; align-items: center; gap: 8px; }
+.sb-batt-pct { font-size: 20px; font-weight: 700; color: var(--text); min-width: 46px; }
+.sb-batt-bar-wrap { flex: 1; height: 8px; background: #e0e0e0; border-radius: 4px; overflow: hidden; }
+.sb-batt-bar { height: 100%; border-radius: 4px; width: 0%; transition: width 0.6s, background 0.6s; }
+.sb-batt-v { font-size: 12px; color: var(--dim); margin-top: 3px; }
+
 /* ── CONTENT ─────────────────────────────────────────────────── */
 .content { flex: 1; min-width: 0; position: relative; overflow: hidden; }
 .view { display: none; position: absolute; inset: 0; flex-direction: column; overflow: hidden; }
@@ -646,6 +658,16 @@ input[type=range] { width: 100%; accent-color: var(--teal); height: 6px; cursor:
         <span>Auger + Planter</span>
         <span class="act-status" id="both-status">Idle</span>
       </button>
+    </div>
+
+    <!-- Battery gauge (pinned to sidebar bottom) -->
+    <div class="sidebar-batt" data-chassis-feature="battery" id="sidebarBatt">
+      <div class="sb-batt-lbl">Battery</div>
+      <div class="sb-batt-row">
+        <div class="sb-batt-pct" id="sbBattPct">—</div>
+        <div class="sb-batt-bar-wrap"><div class="sb-batt-bar" id="sbBattBar"></div></div>
+      </div>
+      <div class="sb-batt-v" id="sbBattV"></div>
     </div>
 
   </nav>
@@ -1995,22 +2017,43 @@ setInterval(_pollPlc,           500);
 setInterval(_pollGnss,         1000);
 setInterval(_pollConn,         5000);
 
-// Battery polling with log-on-change
+// Battery polling with log-on-change + sidebar gauge update
 let _prevBattPct = null;
+function _updateSidebarBatt(pct, voltageV) {
+  const pctEl = document.getElementById('sbBattPct');
+  const barEl = document.getElementById('sbBattBar');
+  const vEl   = document.getElementById('sbBattV');
+  if (!pctEl) return;
+  if (pct == null) {
+    pctEl.textContent = '—'; pctEl.style.color = '';
+    barEl.style.width = '0%'; barEl.style.background = '';
+    vEl.textContent = 'No signal';
+    return;
+  }
+  const color = pct >= 50 ? '#16a34a' : pct >= 20 ? '#d97706' : '#dc2626';
+  pctEl.textContent = pct + '%';
+  pctEl.style.color = color;
+  barEl.style.width = pct + '%';
+  barEl.style.background = color;
+  vEl.textContent = voltageV != null ? voltageV.toFixed(1) + ' V' : '';
+}
 setInterval(async () => {
   try {
     const d = await _fetchWithTimeout('/api/chassis_battery', {}, 2000).then(r => r.json());
     if (d.connected && d.voltage_v > 0) {
       const mn = _battRange.minV, mx = _battRange.maxV;
       const pct = Math.round(Math.max(0, Math.min(100, (d.voltage_v - mn) / (mx - mn) * 100)));
+      _updateSidebarBatt(pct, d.voltage_v);
       if (_prevBattPct !== null && Math.abs(pct - _prevBattPct) >= 5) {
         const lvl = pct >= 30 ? 'ok' : pct >= 15 ? 'warn' : 'err';
         addLog('Connectivity', lvl, `Battery ${pct}% — ${d.voltage_v.toFixed(1)} V`,
           pct < 15 ? 'CRITICAL: return to base immediately.' : pct < 30 ? 'Low battery — charge soon.' : '');
       }
       _prevBattPct = pct;
+    } else {
+      _updateSidebarBatt(null, null);
     }
-  } catch {}
+  } catch { _updateSidebarBatt(null, null); }
 }, 10000);
 
 _pollPlc();
