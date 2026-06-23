@@ -329,7 +329,7 @@ def resolve_rear_camera(cli_value=None, chassis=None):
     val = str(val).strip().lower()
     if val in ("none", "off", "disabled", "disable", "no"):
         return "none"
-    return val if val in ("realsense", "webcam") else "realsense"
+    return val if val in ("realsense", "webcam", "zed") else "realsense"
 
 
 def load(name):

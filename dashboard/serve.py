@@ -1262,7 +1262,14 @@ def _start_zed_rear_thread():
                 init_params.camera_resolution = sl.RESOLUTION.HD720
                 init_params.camera_fps        = 30
                 init_params.depth_mode        = sl.DEPTH_MODE.NONE
-                init_params.input.set_from_camera_index(ZED_REAR_INDEX)
+                # Select the second camera (pyzed 4.x API; 3.x uses camera_linux_id)
+                try:
+                    init_params.input.set_from_camera_index(ZED_REAR_INDEX)
+                except AttributeError:
+                    try:
+                        init_params.camera_linux_id = ZED_REAR_INDEX
+                    except AttributeError:
+                        pass
                 err = zed.open(init_params)
                 if err == sl.ERROR_CODE.SUCCESS:
                     image_mat = sl.Mat()
@@ -1607,15 +1614,19 @@ def _start_zed_thread():
                 init_params.camera_resolution = sl.RESOLUTION.HD720
                 init_params.camera_fps        = 30
                 # PERFORMANCE depth enables distance readout in YOLO detection.
-                init_params.depth_mode        = sl.DEPTH_MODE.PERFORMANCE
-                init_params.coordinate_units  = sl.UNIT.METER
-                init_params.input.set_from_camera_index(ZED_FRONT_INDEX)
+                init_params.depth_mode = sl.DEPTH_MODE.PERFORMANCE
+                try:
+                    init_params.coordinate_units = sl.UNIT.METER
+                except AttributeError:
+                    pass
+                # Front camera is always the default (index 0); don't call
+                # set_from_camera_index here — it doesn't exist in pyzed 3.x
+                # and would crash the retry loop on that SDK version.
 
                 err = zed.open(init_params)
                 if err == sl.ERROR_CODE.SUCCESS:
                     image_mat = sl.Mat()
-                    log.info("[zed] ZED 2i front (index %d) SDK opened — color+depth active",
-                             ZED_FRONT_INDEX)
+                    log.info("[zed] ZED 2i front SDK opened — color+depth active")
                     delay = ZED_SDK_OPEN_RETRY_DELAY
                     _capture_loop_sdk(zed, image_mat)   # returns if the camera is lost
                     # capture loop exited (camera unplugged) — release and re-open below
