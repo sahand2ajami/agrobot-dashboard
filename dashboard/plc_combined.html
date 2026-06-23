@@ -1028,15 +1028,21 @@ function _startDetPoll() {
   const db = _g('detBar'); if (db) db.style.display = 'flex';
   async function poll() {
     try {
-      const dataUrl = (_camSwapped && CFG.rearDetDataUrl) ? CFG.rearDetDataUrl : CFG.detDataUrl;
-      const r = await _fetchWithTimeout(dataUrl, { cache:'no-store' });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const d = await r.json();
-      if (typeof d.count === 'undefined') throw new Error('bad shape');
+      // Poll both cameras simultaneously — detection runs on both regardless of swap.
+      const [r1, r2] = await Promise.all([
+        _fetchWithTimeout(CFG.detDataUrl,     { cache:'no-store' }),
+        _fetchWithTimeout(CFG.rearDetDataUrl, { cache:'no-store' }),
+      ]);
+      if (!r1.ok || !r2.ok) throw new Error(`HTTP ${r1.status}/${r2.status}`);
+      const [d1, d2] = await Promise.all([r1.json(), r2.json()]);
+      if (typeof d1.count === 'undefined' || typeof d2.count === 'undefined') throw new Error('bad shape');
+      const total = (d1.count || 0) + (d2.count || 0);
       const ce = _g('detCount'), de = _g('detDistances'), ae = _g('detAge');
-      if (ce) { ce.textContent = d.count === 1 ? '1 person' : `${d.count} persons`; ce.style.color = d.count > 0 ? '#f85149' : '#0ca678'; }
-      if (de) de.textContent = (d.detections||[]).filter(x=>x.distance_m!=null).map(x=>`${x.distance_m.toFixed(1)} m`).join(' · ');
-      if (ae) ae.textContent = d.ts ? ((Date.now()/1000 - d.ts).toFixed(1)) + 's ago' : '';
+      if (ce) { ce.textContent = total === 1 ? '1 person' : `${total} persons`; ce.style.color = total > 0 ? '#f85149' : '#0ca678'; }
+      const allDets = [...(d1.detections||[]), ...(d2.detections||[])];
+      if (de) de.textContent = allDets.filter(x=>x.distance_m!=null).map(x=>`${x.distance_m.toFixed(1)} m`).join(' · ');
+      const ts = Math.max(d1.ts || 0, d2.ts || 0);
+      if (ae) ae.textContent = ts ? ((Date.now()/1000 - ts).toFixed(1)) + 's ago' : '';
     } catch (err) {
       const ce = _g('detCount'), de = _g('detDistances'), ae = _g('detAge');
       if (ce) { ce.textContent = 'detector offline'; ce.style.color = '#3d444d'; }
