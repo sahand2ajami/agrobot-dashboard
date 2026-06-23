@@ -1015,11 +1015,15 @@ function switchView(name) {
 // ═══════════════════════════════════════════════════════════════
 let _camSwapped = false;
 let _pipH = 'center', _pipV = 'bottom';
-let _camDetOn  = false;
-let _detPollTimer = null;
+let _camDetOn      = false;
+let _detPollTimer  = null;
+let _detInFlight   = false;   // guard: skip interval tick if previous fetch is pending
+let _detFailCount  = 0;       // consecutive failures before showing "offline"
 
 function _stopDetPoll() {
   if (_detPollTimer) { clearInterval(_detPollTimer); _detPollTimer = null; }
+  _detInFlight  = false;
+  _detFailCount = 0;
   const db = _g('detBar'); if (db) db.style.display = 'none';
 }
 
@@ -1027,27 +1031,39 @@ function _startDetPoll() {
   _stopDetPoll();
   const db = _g('detBar'); if (db) db.style.display = 'flex';
   async function poll() {
+    if (_detInFlight) return;   // previous fetch still pending — skip this tick
+    _detInFlight = true;
     try {
       // Poll both cameras simultaneously — detection runs on both regardless of swap.
+      // 1500 ms timeout: shorter than 3× the 500 ms interval to prevent fetch pile-up.
       const [r1, r2] = await Promise.all([
-        _fetchWithTimeout(CFG.detDataUrl,     { cache:'no-store' }),
-        _fetchWithTimeout(CFG.rearDetDataUrl, { cache:'no-store' }),
+        _fetchWithTimeout(CFG.detDataUrl,     { cache:'no-store' }, 1500),
+        _fetchWithTimeout(CFG.rearDetDataUrl, { cache:'no-store' }, 1500),
       ]);
-      if (!r1.ok || !r2.ok) throw new Error(`HTTP ${r1.status}/${r2.status}`);
-      const [d1, d2] = await Promise.all([r1.json(), r2.json()]);
-      if (typeof d1.count === 'undefined' || typeof d2.count === 'undefined') throw new Error('bad shape');
-      const total = (d1.count || 0) + (d2.count || 0);
+      // Parse each response independently — a single bad response doesn't kill both.
+      const d1 = r1.ok ? await r1.json().catch(() => null) : null;
+      const d2 = r2.ok ? await r2.json().catch(() => null) : null;
+      if (!d1 && !d2) throw new Error(`HTTP ${r1.status}/${r2.status}`);
+      _detFailCount = 0;
+      const total = (d1?.count || 0) + (d2?.count || 0);
       const ce = _g('detCount'), de = _g('detDistances'), ae = _g('detAge');
       if (ce) { ce.textContent = total === 1 ? '1 person' : `${total} persons`; ce.style.color = total > 0 ? '#f85149' : '#0ca678'; }
-      const allDets = [...(d1.detections||[]), ...(d2.detections||[])];
+      const allDets = [...(d1?.detections||[]), ...(d2?.detections||[])];
       if (de) de.textContent = allDets.filter(x=>x.distance_m!=null).map(x=>`${x.distance_m.toFixed(1)} m`).join(' · ');
-      const ts = Math.max(d1.ts || 0, d2.ts || 0);
+      const ts = Math.max(d1?.ts || 0, d2?.ts || 0);
       if (ae) ae.textContent = ts ? ((Date.now()/1000 - ts).toFixed(1)) + 's ago' : '';
     } catch (err) {
-      const ce = _g('detCount'), de = _g('detDistances'), ae = _g('detAge');
-      if (ce) { ce.textContent = 'detector offline'; ce.style.color = '#3d444d'; }
-      if (de) de.textContent = '';
-      if (ae) ae.textContent = '';
+      // Show "offline" only after 4 consecutive failures (~2 s) to absorb transient
+      // hiccups (stream reconnect, YOLO loading, brief server busy).
+      if (++_detFailCount >= 4) {
+        console.warn('[det] poll failed:', err?.message || err);
+        const ce = _g('detCount'), de = _g('detDistances'), ae = _g('detAge');
+        if (ce) { ce.textContent = 'detector offline'; ce.style.color = '#3d444d'; }
+        if (de) de.textContent = '';
+        if (ae) ae.textContent = '';
+      }
+    } finally {
+      _detInFlight = false;
     }
   }
   poll(); _detPollTimer = setInterval(poll, 500);
