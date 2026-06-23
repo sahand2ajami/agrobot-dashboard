@@ -1041,16 +1041,17 @@ function _startDetPoll() {
 function _attachStream(imgId, errId, url, camLabel) {
   const img = _g(imgId); if (!img) return;
   const err = errId ? _g(errId) : null;
+  clearTimeout(img._noFrameTimer);   // cancel any pending "not found" timer from a prior call
   img.dataset.streamUrl = url;
   img.dataset.lastFrame = Date.now();
   let _firstLoad = true;
-  let noFrame = setTimeout(() => {
+  img._noFrameTimer = setTimeout(() => {
     if (img.parentNode && err) err.style.display = 'flex';
     if (camLabel) addLog('Camera', 'err', `${camLabel} camera not found after 6s`,
       'Check USB cable. Verify /api/camera/stream or /api/zed/stream responds.');
   }, 6000);
   img.onload = () => {
-    clearTimeout(noFrame); img.dataset.lastFrame = Date.now();
+    clearTimeout(img._noFrameTimer); img.dataset.lastFrame = Date.now();
     if (err) err.style.display = 'none';
     if (_firstLoad) {
       _firstLoad = false;
@@ -1058,7 +1059,7 @@ function _attachStream(imgId, errId, url, camLabel) {
     }
   };
   img.onerror = () => {
-    clearTimeout(noFrame);
+    clearTimeout(img._noFrameTimer);
     if (img.parentNode && err) err.style.display = 'flex';
     if (camLabel) addLog('Camera', 'warn', `${camLabel} camera stream error — retrying in 3s`,
       'If persistent: check RealSense/ZED USB & driver. Run serve.py to see errors.');
@@ -1142,7 +1143,7 @@ function _initPipInteraction() {
       document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp);
       const wasD = dragging; clearGrid(); dragging = false;
       if (wasD) { const z = zoneOf(e.clientX, e.clientY); _pipH = z.h; _pipV = z.v; _applyPipZone(); }
-      else { _camSwapped = !_camSwapped; _loadCameras(_camDetOn); }
+      else { _camSwapped = !_camSwapped; _applyCamStreams(); }
     }
     document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
   });
@@ -1159,7 +1160,7 @@ function _initPipInteraction() {
       pip.removeEventListener('touchmove', onMove); pip.removeEventListener('touchend', onEnd);
       const wasD = dragging; clearGrid(); dragging = false;
       if (wasD) { const t = e.changedTouches[0]; const z = zoneOf(t.clientX, t.clientY); _pipH = z.h; _pipV = z.v; _applyPipZone(); }
-      else { _camSwapped = !_camSwapped; _loadCameras(_camDetOn); }
+      else { _camSwapped = !_camSwapped; _applyCamStreams(); }
     }
     pip.addEventListener('touchmove', onMove, { passive: false });
     pip.addEventListener('touchend', onEnd);
