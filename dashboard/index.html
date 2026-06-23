@@ -255,12 +255,93 @@
     .act-auger { background: #311a00; color: #d29922; border: 1px solid #9e6a03; }
     .act-auger:hover { background: #9e6a03; color: #fff; }
     .act-auger.on { background: #d29922; color: #0d1117; box-shadow: 0 0 8px rgba(210,153,34,.5); }
-    .act-both { background: #0d2244; color: #79c0ff; border: 1px solid #1f6feb; }
+    .act-both { background: #1a3a6b; color: #79c0ff; border: 1px solid #1f6feb; }
     .act-both:hover { background: #1f6feb; color: #fff; }
     .act-both.on { background: #388bfd; color: #fff; box-shadow: 0 0 8px rgba(56,139,253,.5); }
     .act-det { background: #161b22; color: #7d8590; border: 1px solid #30363d; }
     .act-det:hover { background: #21262d; color: #e6edf3; border-color: #58a6ff; }
     .act-det.on { background: #112240; color: #58a6ff; border-color: #388bfd; box-shadow: 0 0 8px rgba(56,139,253,.4); }
+    /* Disabled state for actuator + settings buttons (PLC not ready / wrong mode). */
+    .act-btn:disabled, .act-btn.disabled { opacity: .4; pointer-events: none; }
+
+    /* ── PLC machine status strip (agrobot) ── */
+    .plc-strip { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+    .plc-chip {
+      font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 6px;
+      background: #161b22; border: 1px solid #30363d; color: #7d8590; white-space: nowrap;
+    }
+    .plc-chip.ok   { background: #1c4a2a; color: #3fb950; border-color: #2ea043; }
+    .plc-chip.warn { background: #2d1f00; color: #d29922; border-color: #9e6a03; }
+    .plc-chip.err  { background: #2d0b0a; color: #f85149; border-color: #9e2620; }
+    .plc-chip.cyc  { background: #0d2244; color: #79c0ff; border-color: #1f6feb; }
+
+    /* ── PLC settings (machine setup + robot arm) ── */
+    .sp-btn:disabled, .sp-btn.disabled { opacity: .4; pointer-events: none; }
+    .sp-btn.danger { border-color: #9e2620; color: #f85149; }
+    .sp-btn.danger:hover { background: #2d0b0a; border-color: #f85149; color: #fff; }
+    .sp-btn-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+    .sp-btn-grid.cols3 { grid-template-columns: repeat(3, 1fr); }
+    .plc-sub-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      padding: 6px 10px; background: #0d1117; border: 1px solid #21262d; border-radius: 6px;
+    }
+    .plc-sub-row .plc-sub-name { font-size: 12px; font-weight: 600; color: #adbac7; }
+    .plc-sub-row .sp-btn { flex: 0 0 auto; padding: 3px 10px; }
+
+    /* ── PLC Reference panel ── */
+    .plc-ref-loading { color: #7d8590; font-size: 13px; padding: 8px 0; }
+    .plc-ref-conn {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 13px; font-weight: 600; padding: 8px 12px;
+      border-radius: 8px; border: 1px solid #21262d; background: #0d1117;
+    }
+    .plc-ref-conn.online  { color: #3fb950; border-color: #1a7f4b; }
+    .plc-ref-conn.offline { color: #f85149; border-color: #9e2620; }
+    .plc-ref-group {
+      border: 1px solid #21262d; border-radius: 8px; overflow: hidden; background: #0d1117;
+    }
+    .plc-ref-ghead {
+      display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+      padding: 10px 12px; background: #161b22; border-bottom: 1px solid #21262d;
+    }
+    .plc-ref-sym  { font-size: 13px; font-weight: 700; color: #e6edf3; font-family: ui-monospace, monospace; }
+    .plc-ref-addr { font-size: 12px; color: #58a6ff; font-family: ui-monospace, monospace; }
+    .plc-ref-type { font-size: 11px; color: #7d8590; font-family: ui-monospace, monospace; }
+    .plc-ref-rpc  { font-size: 11px; color: #8b949e; margin-left: auto; }
+    .plc-ref-desc { font-size: 11px; color: #7d8590; padding: 8px 12px 0; }
+    .plc-ref-role {
+      font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
+      padding: 2px 7px; border-radius: 10px; border: 1px solid;
+    }
+    .plc-ref-role.read     { color: #58a6ff; border-color: #1f6feb; }
+    .plc-ref-role.write    { color: #d29922; border-color: #9e6a03; }
+    .plc-ref-role.reserved { color: #8b949e; border-color: #30363d; }
+    .plc-ref-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .plc-ref-table td { padding: 5px 12px; border-top: 1px solid #161b22; }
+    .plc-ref-table td.fld   { color: #adbac7; }
+    .plc-ref-table td.val   { text-align: right; font-family: ui-monospace, monospace; color: #7d8590; }
+    .plc-ref-table td.val.on  { color: #3fb950; font-weight: 700; }
+    .plc-ref-table td.val.off { color: #6e7681; }
+    .plc-ref-table td.val.num { color: #e6edf3; }
+    .plc-ref-cmds { display: flex; flex-wrap: wrap; gap: 5px; padding: 10px 12px; }
+    .plc-ref-cmd {
+      font-size: 11px; font-family: ui-monospace, monospace; color: #adbac7;
+      padding: 2px 8px; background: #161b22; border: 1px solid #30363d; border-radius: 5px;
+    }
+    .plc-ref-note {
+      font-size: 11px; color: #8b949e; line-height: 1.5;
+      padding: 10px 12px; background: #0d1117; border: 1px solid #21262d; border-radius: 8px;
+    }
+    .plc-ref-note b { color: #d29922; }
+    .plc-ref-note ul { margin: 6px 0 0; padding-left: 18px; }
+    .plc-symtable { width: 100%; border-collapse: collapse; font-size: 11.5px; font-family: ui-monospace, monospace; }
+    .plc-symtable th {
+      text-align: left; color: #7d8590; font-weight: 600; padding: 6px 8px;
+      border-bottom: 1px solid #30363d; position: sticky; top: 0; background: #0d1117;
+    }
+    .plc-symtable td { padding: 5px 8px; border-top: 1px solid #161b22; color: #adbac7; }
+    .plc-symtable td.addr { color: #58a6ff; }
+    .plc-symtable tr.used td { color: #e6edf3; }
 
     /* ── Action cluster (actuators + 2m + REC) ── */
     /* Flex rows so each row fills the same total width regardless of how many
@@ -695,6 +776,111 @@
     }
     .toast.show { opacity: 1; }
     .toast.err  { background: #da3633; }
+
+    /* ── Mobile / touch responsive ─────────────────────────────── */
+
+    /* Enlarge map overlay touch targets on any touch device */
+    @media (max-width: 900px) {
+      .map-ctrl-btn             { width: 44px; height: 44px; }
+      .zoom-group .map-ctrl-btn { width: 44px; height: 44px; }
+      .gnss-locate-btn          { width: 44px; height: 44px; }
+      .compass-btn              { width: 44px; }
+    }
+
+    /* Tablet / phone — single-column layout */
+    @media (max-width: 768px) {
+      /* Allow vertical page scroll */
+      body { overflow-y: auto; overflow-x: hidden; }
+
+      /* Compact header */
+      .dash   { grid-template-rows: 52px auto; height: auto; min-height: 100svh; }
+      .header { height: 52px; padding: 0 10px; gap: 8px; }
+      .logo-sub { display: none; }
+      .gear-btn { width: 44px; height: 44px; font-size: 28px; }
+
+      /* Stack left / right columns vertically */
+      .main { flex-direction: column; overflow: visible; height: auto; }
+
+      /* Left col: camera = 56.25 vw (16:9), controls auto-height */
+      .left-col {
+        width: 100%;
+        flex-shrink: 0;
+        grid-template-rows: 56.25vw auto;
+      }
+
+      /* Hide desktop column splitter */
+      .main-splitter { display: none; }
+
+      /* Right col: fixed-height map + telemetry */
+      .right-col   { flex: none; width: 100%; overflow: visible; }
+      .map-wrapper { height: 260px; flex: none; }
+
+      /* Controls: WASD + speed on row 1, action cluster full-width on row 2 */
+      .controls-area {
+        grid-template-columns: auto 1fr;
+        grid-template-rows: auto auto;
+        gap: 8px;
+        padding: 10px 12px;
+        align-items: start;
+      }
+      .action-cluster {
+        grid-column: 1 / -1;
+        border-left: none;
+        border-top: 1px solid #30363d;
+        padding-left: 0;
+        padding-top: 10px;
+      }
+      /* Action row buttons fill available width evenly */
+      .action-row > * { min-width: 60px; }
+
+      /* Telemetry strip — auto height, 3 columns */
+      .telem-strip {
+        height: auto;
+        min-height: 0;
+        padding: 10px 12px;
+        grid-template-columns: repeat(3, 1fr);
+        grid-template-rows: auto;
+      }
+      .tl-label { font-size: 12px; }
+      .tl-val   { font-size: 16px; }
+
+      /* Map overlay button positions inside shrunken map */
+      .zoom-group   { bottom: 90px; }
+      .compass-wrap { bottom: 180px; }
+      .locate-wrap  { bottom: 40px; }
+
+      /* Settings panel — full width, starts below compact header */
+      .settings-panel { top: 52px; width: 100%; max-width: 100%; }
+
+      /* Settings panel internals — bigger touch targets */
+      .sp-btn           { padding: 10px 8px; font-size: 13px; }
+      .sp-section-title { font-size: 14px; }
+      .sp-close         { width: 44px; height: 44px; }
+      .sp-status-label  { font-size: 14px; }
+      .sp-status-val    { font-size: 14px; }
+      .conn-label       { font-size: 14px; }
+
+      /* PLC subsystem rows stack vertically so enable/disable btns don't overflow */
+      .plc-sub-row { flex-direction: column; align-items: flex-start; gap: 8px; }
+      .plc-sub-row .sp-btn { padding: 8px 20px; }
+    }
+
+    /* Small phones (≤480 px) */
+    @media (max-width: 480px) {
+      .map-wrapper { height: 220px; }
+
+      /* 2-column telemetry on narrow screens */
+      .telem-strip { grid-template-columns: repeat(2, 1fr); }
+
+      /* Slightly smaller WASD keys to fit narrow screens */
+      .wasd      { grid-template-columns: repeat(3, 58px); grid-template-rows: repeat(2, 58px); }
+      .key       { width: 58px; height: 58px; font-size: 20px; }
+      .key-empty { width: 58px; height: 58px; }
+
+      /* Shorter action buttons to save vertical space */
+      .fwd-btn, .act-btn, .act-rec { height: 58px; font-size: 13px; }
+      .act-btn i { font-size: 18px; }
+    }
   </style>
 </head>
 <body>
@@ -710,6 +896,7 @@
          onerror="this.style.display='none';document.getElementById('logoText').style.display='block'">
     <span id="logoText" style="display:none;font-size:18px;font-weight:700;color:#e6edf3;letter-spacing:.5px">AGROBOT ROBOTICS</span>
     <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+      <button class="gear-btn" id="plcRefBtn" data-chassis-feature="plc" onclick="openPlcPanel()" title="PLC Reference &amp; Diagnostics"><i class="ti ti-cpu" aria-hidden="true"></i></button>
       <button class="gear-btn" id="gearBtn" onclick="openSettings()" title="Advanced Settings"><i class="ti ti-settings" aria-hidden="true"></i></button>
     </div>
   </div>
@@ -792,6 +979,17 @@
             <button class="act-btn act-both" id="bothBtn" onclick="toggleActuator('both')">
               <i class="ti ti-bolt" aria-hidden="true"></i>Both
             </button>
+          </div>
+          <!-- PLC machine status: gateway link, mode, safety, live sequence state.
+               Hidden on chassis without the PLC (jackal) via data-chassis-feature. -->
+          <div class="plc-strip" data-chassis-feature="plc" id="plcStrip">
+            <span class="plc-chip" id="plcGw">● Gateway</span>
+            <span class="plc-chip" id="plcMode">MODE —</span>
+            <span class="plc-chip" id="plcEstop">E-stop</span>
+            <span class="plc-chip" id="plcGate">Gate</span>
+            <span class="plc-chip err" id="plcFault" style="display:none">FAULT</span>
+            <span class="plc-chip cyc" id="plcAugerCyc" style="display:none">Auger ⟳</span>
+            <span class="plc-chip cyc" id="plcPlanterCyc" style="display:none">Planter ⟳</span>
           </div>
           <div class="action-row">
             <button class="fwd-btn" id="fwd2mBtn" onclick="moveForward2m()" data-chassis-feature="fwd2m">
@@ -948,6 +1146,67 @@
       </div>
     </div>
 
+    <!-- Machine Setup (PLC) — mode, fault, home, and per-subsystem enables. The PLC
+         gates sequence starts on Auto mode + subsystem-enabled + safety, so the operator
+         satisfies those preconditions here. Hidden on chassis without a PLC (jackal). -->
+    <div class="sp-section" data-chassis-feature="plc">
+      <div class="sp-section-title">Machine Setup (PLC)</div>
+      <div class="sp-btn-grid">
+        <button class="sp-btn" id="plcSetManual" onclick="plcMachine('SET_MANUAL')">Set Manual</button>
+        <button class="sp-btn" id="plcSetAuto"   onclick="plcMachine('SET_AUTO')">Set Auto</button>
+        <button class="sp-btn danger" id="plcFaultReset" onclick="plcMachine('FAULT_RESET')">Fault Reset</button>
+        <button class="sp-btn" id="plcHomeAll"    onclick="plcMachine('HOME_ALL')">Home All</button>
+      </div>
+      <div class="sp-section-title" style="margin-top:12px">Subsystems</div>
+      <div class="sp-status-grid">
+        <div class="plc-sub-row">
+          <span class="plc-sub-name">Auger <span class="plc-chip" id="plcAugerEn">—</span></span>
+          <span>
+            <button class="sp-btn" onclick="plcMachine('ENABLE_AUGER')">Enable</button>
+            <button class="sp-btn" onclick="plcMachine('DISABLE_AUGER')">Disable</button>
+          </span>
+        </div>
+        <div class="plc-sub-row">
+          <span class="plc-sub-name">Planter <span class="plc-chip" id="plcPlanterEn">—</span></span>
+          <span>
+            <button class="sp-btn" onclick="plcMachine('ENABLE_PLANTER')">Enable</button>
+            <button class="sp-btn" onclick="plcMachine('DISABLE_PLANTER')">Disable</button>
+          </span>
+        </div>
+        <div class="plc-sub-row">
+          <span class="plc-sub-name">Robot <span class="plc-chip" id="plcRobotEn">—</span></span>
+          <span>
+            <button class="sp-btn" onclick="plcMachine('ENABLE_ROBOT')">Enable</button>
+            <button class="sp-btn" onclick="plcMachine('DISABLE_ROBOT')">Disable</button>
+          </span>
+        </div>
+        <div class="plc-sub-row">
+          <span class="plc-sub-name">AMR <span class="plc-chip" id="plcAmrEn">—</span></span>
+          <span>
+            <button class="sp-btn" onclick="plcMachine('ENABLE_AMR')">Enable</button>
+            <button class="sp-btn" onclick="plcMachine('DISABLE_AMR')">Disable</button>
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Robot Arm (PLC) — manipulator pushbuttons. Disabled until the robot subsystem
+         is enabled (see Machine Setup). Shutdown is confirmed before sending. -->
+    <div class="sp-section" data-chassis-feature="plc">
+      <div class="sp-section-title">Robot Arm</div>
+      <div class="sp-btn-grid cols3" id="plcRobotBtns">
+        <button class="sp-btn" data-robot-cmd onclick="plcRobot('HOME')">Home</button>
+        <button class="sp-btn" data-robot-cmd onclick="plcRobot('MOTORS_ON')">Motors On</button>
+        <button class="sp-btn" data-robot-cmd onclick="plcRobot('MOTORS_OFF')">Motors Off</button>
+        <button class="sp-btn" data-robot-cmd onclick="plcRobot('START')">Start</button>
+        <button class="sp-btn" data-robot-cmd onclick="plcRobot('STOP')">Stop</button>
+        <button class="sp-btn" data-robot-cmd onclick="plcRobot('PAUSE')">Pause</button>
+        <button class="sp-btn" data-robot-cmd onclick="plcRobot('CONTINUE')">Continue</button>
+        <button class="sp-btn" data-robot-cmd onclick="plcRobot('RESET')">Reset</button>
+        <button class="sp-btn danger" data-robot-cmd onclick="plcRobot('SHUTDOWN')">Shutdown</button>
+      </div>
+    </div>
+
     <!-- Satellite Navigation (GNSS) -->
     <div class="sp-section">
       <div class="sp-section-title">Satellite Navigation</div>
@@ -977,6 +1236,18 @@
       </div>
     </div>
 
+  </div>
+</div>
+
+<!-- ── PLC Reference & Diagnostics overlay ── -->
+<div class="settings-overlay" id="plcOverlay" onclick="closePlcPanel()"></div>
+<div class="settings-panel" id="plcPanel">
+  <div class="sp-header">
+    <div class="sp-title"><i class="ti ti-cpu" aria-hidden="true"></i> PLC Reference</div>
+    <button class="sp-close" onclick="closePlcPanel()" title="Close"><i class="ti ti-x" aria-hidden="true"></i></button>
+  </div>
+  <div class="sp-body" id="plcPanelBody">
+    <div class="plc-ref-loading">Loading PLC tag map…</div>
   </div>
 </div>
 
@@ -1724,7 +1995,14 @@ function updateActuatorUI() {
   document.getElementById('bothBtn').classList.toggle('on', actuatorState.auger);
 }
 
+// Dispatcher: on a PLC-equipped chassis (agrobot) the actuator buttons drive the real
+// PLC; otherwise they keep the original cosmetic behaviour (jackal — local pin only).
 function toggleActuator(which) {
+  if (_plcEnabled) return _toggleActuatorPlc(which);
+  return _toggleActuatorLocal(which);
+}
+
+function _toggleActuatorLocal(which) {
   if (which === 'auger') {
     actuatorState.auger = !actuatorState.auger;
     updateActuatorUI();
@@ -1737,6 +2015,169 @@ function toggleActuator(which) {
     updateActuatorUI();
   }
   _recordPlant();
+}
+
+/* ── PLC machine control (agrobot) ──────────────────────────────────────────────
+   The browser talks REST to serve.py, which relays gRPC to the PLC gateway. A
+   command returning success only means the Modbus write landed; real completion is
+   confirmed by polling /api/plc/sequence and watching *_in_cycle clear. */
+let _plcEnabled         = false;
+let _plcStatus          = { connected: false };
+let _plcStatusPollTimer = null;
+let _plcSeqPollTimer    = null;
+let _plcSeqDeadline     = 0;       // keep polling sequence state until this time (ms)
+let _augerWasInCycle    = false;   // edge detection for "Auger complete"
+let _planterWasInCycle  = false;   // edge detection for "Planter complete" (+ pin)
+
+async function _plcPost(path, command) {
+  try {
+    const r = await _fetchWithTimeout(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command }),
+    }, 3000);
+    return await r.json();
+  } catch {
+    return { connected: false, success: false, message: 'request failed' };
+  }
+}
+
+// Toast helper: distinguishes gateway-offline / PLC-refused / OK. Returns true on OK.
+function _plcToast(resp, okMsg) {
+  if (!resp || resp.connected === false) { showToast('PLC gateway offline', true); return false; }
+  if (resp.success === false)            { showToast(resp.message || 'PLC command failed', true); return false; }
+  showToast(okMsg || resp.message || 'OK');
+  return true;
+}
+
+function _toggleActuatorPlc(which) {
+  if (which === 'auger') {
+    const cmd = _plcStatus.auger_in_cycle ? 'STOP' : 'START';
+    _plcPost('/api/plc/auger', cmd).then(r => {
+      if (_plcToast(r, cmd === 'START' ? 'Auger starting…' : 'Stopping auger…')) _startPlcSeqPoll();
+    });
+    return;
+  }
+  if (which === 'planter') {
+    _pulseBtn('planterBtn');
+    _plcPost('/api/plc/planter', 'START').then(r => {
+      if (_plcToast(r, 'Planter starting…')) _startPlcSeqPoll();
+    });
+    return;
+  }
+  if (which === 'both') {
+    _pulseBtn('bothBtn');
+    _plcPost('/api/plc/both', 'START').then(r => {
+      if (_plcToast(r, 'Auger + Planter starting…')) _startPlcSeqPoll();
+    });
+  }
+}
+
+function plcMachine(cmd) {
+  _plcPost('/api/plc/machine', cmd).then(r => {
+    if (_plcToast(r, cmd.replace(/_/g, ' ') + ' sent')) _pollPlcStatus();
+  });
+}
+
+function plcRobot(cmd) {
+  if (cmd === 'SHUTDOWN' && !confirm('Shut down the robot arm?')) return;
+  _plcPost('/api/plc/robot', cmd).then(r => {
+    if (_plcToast(r, 'Robot arm: ' + cmd.replace(/_/g, ' '))) _pollPlcStatus();
+  });
+}
+
+/* — Machine status poll (always on while PLC enabled) — */
+async function _pollPlcStatus() {
+  let d;
+  try { d = await _fetchWithTimeout('/api/plc/status', { cache: 'no-store' }, 2500).then(r => r.json()); }
+  catch { d = { connected: false }; }
+  _plcStatus = d;
+  _renderPlcStatus(d);
+}
+
+function _chip(id, on, label, cls) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = label;
+  el.className = 'plc-chip' + (on ? (' ' + (cls || 'ok')) : '');
+}
+
+function _renderPlcStatus(d) {
+  const online = d && d.connected !== false;
+  _chip('plcGw', online, online ? '● Gateway' : '● Gateway offline', online ? 'ok' : 'err');
+
+  // Mode / safety only meaningful when online.
+  const mode = !online ? 'MODE —' : (d.mode_auto ? 'AUTO' : 'MANUAL');
+  _chip('plcMode', online, mode, d.mode_auto ? 'ok' : 'warn');
+  _chip('plcEstop', online && d.estop_ok, 'E-stop', d.estop_ok ? 'ok' : 'err');
+  _chip('plcGate',  online && d.gate_ok,  'Gate',  d.gate_ok  ? 'ok' : 'err');
+
+  const fault = document.getElementById('plcFault');
+  if (fault) fault.style.display = (online && d.faulted) ? '' : 'none';
+
+  const ac = document.getElementById('plcAugerCyc');
+  if (ac) ac.style.display = (online && d.auger_in_cycle) ? '' : 'none';
+  const pc = document.getElementById('plcPlanterCyc');
+  if (pc) pc.style.display = (online && d.planter_in_cycle) ? '' : 'none';
+
+  // Subsystem enabled pills (Machine Setup section).
+  _chip('plcAugerEn',   online && d.auger_enabled,   d.auger_enabled   ? 'on' : 'off');
+  _chip('plcPlanterEn', online && d.planter_enabled, d.planter_enabled ? 'on' : 'off');
+  _chip('plcRobotEn',   online && d.robot_enabled,   d.robot_enabled   ? 'on' : 'off');
+  _chip('plcAmrEn',     online && d.amr_enabled,     d.amr_enabled     ? 'on' : 'off');
+
+  _updatePlcButtons(d);
+}
+
+function _updatePlcButtons(d) {
+  const online = d && d.connected !== false;
+  // Planter and Both are momentary one-shot commands — no latch state to sync,
+  // so keep them always clickable; clicking offline shows a "Gateway offline" toast.
+  // Auger stays gated on PLC online because it's a latch whose state tracks auger_in_cycle.
+  const augerBtn = document.getElementById('augerBtn');
+  if (augerBtn) {
+    augerBtn.disabled = !online;
+    augerBtn.classList.toggle('on', online && !!d.auger_in_cycle);
+  }
+  // Mode buttons: disable the already-active mode.
+  const setAuto = document.getElementById('plcSetAuto');
+  const setMan  = document.getElementById('plcSetManual');
+  if (setAuto) setAuto.disabled = !online || d.mode_auto;
+  if (setMan)  setMan.disabled  = !online || d.mode_manual;
+  // Robot-arm buttons: only when the robot subsystem is enabled.
+  document.querySelectorAll('#plcRobotBtns [data-robot-cmd]').forEach(b => {
+    b.disabled = !(online && d.robot_enabled);
+  });
+}
+
+/* — Sequence detail poll (runs while a sequence is active, detects completion) — */
+function _startPlcSeqPoll() {
+  _plcSeqDeadline = Date.now() + 8000;   // poll ≥8 s after a command (PLC may delay InCycle)
+  if (_plcSeqPollTimer) return;
+  _plcSeqPollTimer = setInterval(_pollPlcSequence, 500);
+  _pollPlcSequence();
+}
+function _stopPlcSeqPoll() {
+  if (_plcSeqPollTimer) { clearInterval(_plcSeqPollTimer); _plcSeqPollTimer = null; }
+}
+async function _pollPlcSequence() {
+  let d;
+  try { d = await _fetchWithTimeout('/api/plc/sequence', { cache: 'no-store' }, 2500).then(r => r.json()); }
+  catch { return; }
+  if (d.connected === false) { _stopPlcSeqPoll(); return; }
+
+  // Completion edges: a sequence that WAS running and is now idle has finished.
+  if (_augerWasInCycle && !d.auger_in_cycle) showToast('Auger complete ✓');
+  if (_planterWasInCycle && !d.planter_in_cycle) {
+    showToast('Planter complete ✓');
+    _recordPlant();                      // log the seedling only on confirmed completion
+  }
+  _augerWasInCycle   = !!d.auger_in_cycle;
+  _planterWasInCycle = !!d.planter_in_cycle;
+
+  // Keep polling while anything runs (+grace); otherwise stop after the deadline.
+  if (d.auger_in_cycle || d.planter_in_cycle) _plcSeqDeadline = Date.now() + 4000;
+  else if (Date.now() > _plcSeqDeadline)      _stopPlcSeqPoll();
 }
 
 /* ── Init ── */
@@ -1821,6 +2262,157 @@ function closeSettings() {
   document.getElementById('settingsPanel').classList.remove('open');
   document.getElementById('gearBtn').classList.remove('open');
   _stopSpPoll();
+}
+
+/* ── PLC Reference & Diagnostics panel ────────────────────────────────────────
+   Side panel (mirrors Advanced Settings) documenting every PLC tag: which we read,
+   which we write, what each maps to (struct · %MW address · gateway RPC), plus the
+   full PLC symbol table. On first open it fetches the static tag map (/api/plc/tags)
+   once; while open it polls the read endpoints so each mapped tag shows its live
+   value. Machine status reuses the always-on _plcStatus global; sequence + auger-motor
+   are polled here only while the panel is open. */
+let _plcRefMap   = null;       // cached /api/plc/tags payload
+let _plcRefTimer = null;
+let _plcRefLive  = { status: {}, sequence: {}, auger_motor: {} };
+
+function openPlcPanel() {
+  document.getElementById('plcOverlay').classList.add('open');
+  document.getElementById('plcPanel').classList.add('open');
+  document.getElementById('plcRefBtn').classList.add('open');
+  if (!_plcRefMap) {
+    _fetchWithTimeout('/api/plc/tags', { cache: 'no-store' }, 3000)
+      .then(r => r.ok ? r.json() : null)
+      .then(m => { _plcRefMap = m; _renderPlcRef(); })
+      .catch(() => { document.getElementById('plcPanelBody').innerHTML =
+        '<div class="plc-ref-loading">PLC tag map unavailable.</div>'; });
+  } else {
+    _renderPlcRef();
+  }
+  _pollPlcRefLive();
+  if (!_plcRefTimer) _plcRefTimer = setInterval(_pollPlcRefLive, 1000);
+}
+
+function closePlcPanel() {
+  document.getElementById('plcOverlay').classList.remove('open');
+  document.getElementById('plcPanel').classList.remove('open');
+  document.getElementById('plcRefBtn').classList.remove('open');
+  if (_plcRefTimer) { clearInterval(_plcRefTimer); _plcRefTimer = null; }
+}
+
+async function _pollPlcRefLive() {
+  _plcRefLive.status = _plcStatus || {};       // already polled app-wide while PLC enabled
+  const get = (p) => _fetchWithTimeout(p, { cache: 'no-store' }, 2500)
+                       .then(r => r.json()).catch(() => ({ connected: false }));
+  const [seq, aug] = await Promise.all([get('/api/plc/sequence'), get('/api/plc/auger_motor')]);
+  _plcRefLive.sequence    = seq || {};
+  _plcRefLive.auger_motor = aug || {};
+  _updatePlcRefLive();
+}
+
+function _plcEsc(s) {
+  return String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+}
+
+function _plcRefHead(g, role) {
+  return '<div class="plc-ref-ghead">' +
+    '<span class="plc-ref-sym">'  + _plcEsc(g.symbol)  + '</span>' +
+    '<span class="plc-ref-addr">' + _plcEsc(g.address) + '</span>' +
+    '<span class="plc-ref-type">' + _plcEsc(g.type)    + '</span>' +
+    '<span class="plc-ref-role ' + role + '">' + role + '</span>' +
+    (g.rpc ? '<span class="plc-ref-rpc">' + _plcEsc(g.rpc) + '</span>' : '') +
+    '</div>' + (g.desc ? '<div class="plc-ref-desc">' + _plcEsc(g.desc) + '</div>' : '');
+}
+
+function _renderPlcRef() {
+  const body = document.getElementById('plcPanelBody');
+  if (!_plcRefMap || !_plcRefMap.map) {
+    body.innerHTML = '<div class="plc-ref-loading">PLC tag map unavailable.</div>';
+    return;
+  }
+  const m = _plcRefMap.map;
+  let h = '<div class="plc-ref-conn" id="plcRefConn">● Gateway —</div>';
+
+  // Read groups — each field shows its live value.
+  h += '<div class="sp-section"><div class="sp-section-title">Tags we read from the PLC</div>';
+  (m.read || []).forEach(g => {
+    h += '<div class="plc-ref-group">' + _plcRefHead(g, 'read') + '<table class="plc-ref-table"><tbody>';
+    (g.fields || []).forEach(f => {
+      h += '<tr><td class="fld">' + _plcEsc(f.label) + '</td>' +
+           '<td class="val" id="plcv_' + g.source + '_' + f.key + '">—</td></tr>';
+    });
+    h += '</tbody></table></div>';
+  });
+  h += '</div>';
+
+  // Write groups — command set that pulses each pushbutton struct.
+  h += '<div class="sp-section"><div class="sp-section-title">Tags we write to the PLC</div>';
+  (m.write || []).forEach(g => {
+    h += '<div class="plc-ref-group">' + _plcRefHead(g, 'write') + '<div class="plc-ref-cmds">' +
+         (g.commands || []).map(c => '<span class="plc-ref-cmd">' + _plcEsc(c) + '</span>').join('') +
+         '</div></div>';
+  });
+  h += '</div>';
+
+  // Reserved (declared in the PLC, not used by the integration).
+  if (m.reserved && m.reserved.length) {
+    h += '<div class="sp-section"><div class="sp-section-title">Reserved (declared, unused)</div>';
+    m.reserved.forEach(g => { h += '<div class="plc-ref-group">' + _plcRefHead(g, 'reserved') + '</div>'; });
+    h += '</div>';
+  }
+
+  // Verification notes / open items.
+  if (m.notes) {
+    h += '<div class="sp-section"><div class="sp-section-title">Verification</div>';
+    h += '<div class="plc-ref-note">' + _plcEsc(m.notes.verified || '');
+    if (m.notes.open_items && m.notes.open_items.length) {
+      h += ' <b>Open items (confirm on live PLC):</b><ul>' +
+           m.notes.open_items.map(i => '<li>' + _plcEsc(i) + '</li>').join('') + '</ul>';
+    }
+    if (m.notes.planter_seq) h += '<div style="margin-top:6px">' + _plcEsc(m.notes.planter_seq) + '</div>';
+    h += '</div></div>';
+  }
+
+  // Full PLC symbol table (every declared tag; integration roles highlighted).
+  const syms = _plcRefMap.symbols || [];
+  if (syms.length) {
+    h += '<div class="sp-section"><div class="sp-section-title">Full PLC symbol table (' + syms.length + ')</div>';
+    h += '<table class="plc-symtable"><thead><tr><th>Name</th><th>Type</th><th>Address</th><th>Role</th></tr></thead><tbody>';
+    syms.forEach(s => {
+      h += '<tr class="' + (s.role ? 'used' : '') + '"><td>' + _plcEsc(s.name) + '</td><td>' + _plcEsc(s.type) +
+           '</td><td class="addr">' + _plcEsc(s.address) + '</td><td>' + (s.role || '—') + '</td></tr>';
+    });
+    h += '</tbody></table></div>';
+  }
+
+  body.innerHTML = h;
+  _updatePlcRefLive();
+}
+
+function _updatePlcRefLive() {
+  if (!_plcRefMap || !_plcRefMap.map) return;
+  const online = _plcRefLive.status && _plcRefLive.status.connected !== false;
+  const conn = document.getElementById('plcRefConn');
+  if (conn) {
+    conn.textContent = online ? '● Gateway online' : '● Gateway offline';
+    conn.className = 'plc-ref-conn ' + (online ? 'online' : 'offline');
+  }
+  (_plcRefMap.map.read || []).forEach(g => {
+    const src = _plcRefLive[g.source] || {};
+    const srcOnline = src.connected !== false;
+    (g.fields || []).forEach(f => {
+      const el = document.getElementById('plcv_' + g.source + '_' + f.key);
+      if (!el) return;
+      const v = src[f.key];
+      if (!srcOnline || v === undefined) { el.textContent = '—'; el.className = 'val'; return; }
+      if (f.kind === 'bool') {
+        el.textContent = v ? 'TRUE' : 'false';
+        el.className   = 'val ' + (v ? 'on' : 'off');
+      } else {
+        el.textContent = v;
+        el.className   = 'val num';
+      }
+    });
+  });
 }
 
 let _modbusMasterDragging = false;
@@ -2083,6 +2675,14 @@ function _applyChassisConfig() {
         const key = el.getAttribute('data-chassis-feature');
         if (feats[key] === false) el.style.display = 'none';
       });
+      // PLC machine control (agrobot): wire the actuator buttons to the gateway and start
+      // polling machine status. On chassis without a PLC the panels are already hidden
+      // above and the actuator buttons keep their cosmetic behaviour.
+      _plcEnabled = feats.plc === true;
+      if (_plcEnabled && !_plcStatusPollTimer) {
+        _pollPlcStatus();
+        _plcStatusPollTimer = setInterval(_pollPlcStatus, 1000);
+      }
       if (cfg.chassis) {
         document.title = cfg.chassis.charAt(0).toUpperCase() + cfg.chassis.slice(1) +
                          ' Teleop Dashboard';

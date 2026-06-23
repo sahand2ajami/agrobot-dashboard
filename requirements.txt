@@ -20,6 +20,16 @@ pyserial>=3.5
 # minimal built-in fallback parser, so this is optional but recommended.
 pyyaml>=5.3
 
+# PLC Gateway client (agrobot chassis only) — serve.py relays the auger/planter/robot-arm
+# buttons to the gRPC gateway (~/plc_gateway, port 50051) via dashboard/plc_client.py.
+# Imported lazily, so these are only needed on a PLC-equipped deployment; the dashboard
+# and tests run fine without them. The vendored client stubs in dashboard/plc/ were
+# generated for protobuf 4.x — keep protobuf <5 (or regenerate the stubs to match).
+grpcio>=1.50
+protobuf>=4.21,<5
+# Build-only (NOT a runtime dep): regenerating dashboard/plc/robot_control_pb2*.py needs
+#   pip install 'grpcio-tools==1.62.3'   # pins protobuf 4.x to match the runtime above
+
 # Test runner
 pytest>=6.0
 

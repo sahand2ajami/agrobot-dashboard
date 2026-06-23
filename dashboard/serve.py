@@ -32,6 +32,15 @@ try:
 except ImportError:                       # imported as a package (dashboard.serve)
     from dashboard import chassis
 
+# PLC command allow-lists (import-safe — plc_client lazy-imports grpc, so this never
+# pulls in grpc at module load and tests run without it).
+try:
+    from plc_client import (SEQUENCE_COMMANDS, MACHINE_COMMANDS, ROBOT_COMMANDS,
+                            PLC_TAG_MAP, symbol_roles)
+except ImportError:
+    from dashboard.plc_client import (SEQUENCE_COMMANDS, MACHINE_COMMANDS, ROBOT_COMMANDS,
+                                      PLC_TAG_MAP, symbol_roles)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -123,6 +132,7 @@ class Handler(SimpleHTTPRequestHandler):
     gnss_file: str   = GNSS_FILE_DEFAULT
     speed_cmd_pub    = None   # rclpy publisher, set by main() after rclpy.init()
     chassis          = None   # active chassis.Chassis, set by main(); None in tests
+    plc              = None   # plc_client.PlcClient, set by main() on plc-enabled chassis
 
     _cam_lock            = threading.Lock()
     _cam_jpeg: bytes     = None
@@ -217,6 +227,14 @@ class Handler(SimpleHTTPRequestHandler):
             self._serve_settings_get()
         elif self.path == '/api/config':
             self._serve_config()
+        elif self.path == '/api/plc/status':
+            self._serve_plc_read('get_machine_status')
+        elif self.path == '/api/plc/sequence':
+            self._serve_plc_read('get_sequence_detail')
+        elif self.path == '/api/plc/auger_motor':
+            self._serve_plc_read('get_auger_motor_status')
+        elif self.path == '/api/plc/tags':
+            self._serve_plc_tags()
         else:
             # Only serve the dashboard HTML and logo assets; everything else
             # (including serve.py) returns 403 to avoid exposing server internals.
@@ -242,6 +260,16 @@ class Handler(SimpleHTTPRequestHandler):
             self._serve_settings_post()
         elif self.path == '/api/fwd2m':
             self._serve_fwd2m()
+        elif self.path == '/api/plc/auger':
+            self._serve_plc_sequence('control_auger')
+        elif self.path == '/api/plc/planter':
+            self._serve_plc_sequence('control_planter')
+        elif self.path == '/api/plc/both':
+            self._serve_plc_sequence('control_both')
+        elif self.path == '/api/plc/machine':
+            self._serve_plc_command('machine_command')
+        elif self.path == '/api/plc/robot':
+            self._serve_plc_command('control_robot')
         else:
             self.send_error(404)
 
@@ -509,6 +537,103 @@ class Handler(SimpleHTTPRequestHandler):
                 "limits":   {"maxLinear": MAX_LIN_INPUT, "maxAngular": MAX_ANG_INPUT},
             }).encode()
         self._json_response(200, body)
+
+    # ── PLC Gateway relay ────────────────────────────────────────────────────
+    # Browsers can't speak gRPC, so these endpoints forward to the PlcClient
+    # (Handler.plc), which talks gRPC to the PLC gateway. Every PLC response already
+    # carries `connected`/`success`/`message`; we pass it straight through as JSON so
+    # the UI can show the gateway/PLC state. None of these raise — the client maps a
+    # downed gateway to {connected:false}, returned here as a normal 200 body.
+    def _plc_client(self):
+        """Return the PlcClient if PLC control is available on the active chassis,
+        else send a 503 and return None (e.g. jackal, or PLC disabled)."""
+        if Handler.plc is None or (Handler.chassis is not None and not Handler.chassis.plc_enabled):
+            self._json_response(503, b'{"error":"PLC control not available on this chassis"}')
+            return None
+        return Handler.plc
+
+    def _read_command(self, allowed):
+        """Parse {command} from the POST body and validate it against `allowed`
+        (case-insensitive). Returns the upper-cased command, or None after sending
+        a 400/413. Mirrors the body-parsing guard in _serve_cmd_vel/_serve_fwd2m."""
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            if length > MAX_POST_BYTES:
+                self._json_response(413, b'{"error":"Request too large"}')
+                return None
+            body    = self.rfile.read(length) if length else b"{}"
+            data    = json.loads(body)
+            command = str(data.get("command", "")).strip().upper()
+        except Exception as exc:
+            self._json_response(400, json.dumps({"error": str(exc)}).encode())
+            return None
+        if command not in allowed:
+            self._json_response(400, json.dumps(
+                {"error": f"unknown command '{command}'", "allowed": sorted(allowed)}).encode())
+            return None
+        return command
+
+    def _serve_plc_read(self, method_name):
+        """GET — forward a read RPC (get_machine_status / get_sequence_detail /
+        get_auger_motor_status) and return its dict as JSON."""
+        client = self._plc_client()
+        if client is None:
+            return
+        result = getattr(client, method_name)()
+        self._json_response(200, json.dumps(result).encode())
+
+    def _serve_plc_tags(self):
+        """GET /api/plc/tags — static PLC tag/register reference for the UI's PLC panel:
+        the curated read/write/reserved tag map (PLC_TAG_MAP) plus the full PLC symbol
+        table read from docs/plc/, each symbol annotated with its integration role. No
+        gateway call — works whether or not the gateway is up; only gated on the chassis
+        having a PLC (jackal → 503, via _plc_client)."""
+        if self._plc_client() is None:
+            return
+        roles   = symbol_roles()
+        symbols = []
+        csv_path = DASHBOARD_DIR.parent / "docs" / "plc" / "GTS_Tree_Planter_symbols.csv"
+        try:
+            import csv as _csv
+            with open(csv_path, newline="") as fh:
+                for row in _csv.DictReader(fh):
+                    name = (row.get("Name") or "").strip()
+                    if not name:
+                        continue
+                    symbols.append({
+                        "name":    name,
+                        "type":    (row.get("Type") or "").strip(),
+                        "address": (row.get("Address") or "").strip(),
+                        "role":    roles.get(name, ""),
+                    })
+        except Exception as exc:
+            log.warning("PLC symbol table unavailable (%s): %s", csv_path, exc)
+        self._json_response(200, json.dumps({"map": PLC_TAG_MAP, "symbols": symbols}).encode())
+
+    def _serve_plc_sequence(self, method_name):
+        """POST {command: START|STOP} — forward a sequence RPC (control_auger /
+        control_planter / control_both)."""
+        client = self._plc_client()
+        if client is None:
+            return
+        command = self._read_command(SEQUENCE_COMMANDS)
+        if command is None:
+            return
+        result = getattr(client, method_name)(command)
+        self._json_response(200, json.dumps(result).encode())
+
+    def _serve_plc_command(self, method_name):
+        """POST {command} — forward a machine/robot pushbutton RPC. The allow-list
+        depends on the RPC (machine vs robot arm)."""
+        client = self._plc_client()
+        if client is None:
+            return
+        allowed = MACHINE_COMMANDS if method_name == 'machine_command' else ROBOT_COMMANDS
+        command = self._read_command(allowed)
+        if command is None:
+            return
+        result = getattr(client, method_name)(command)
+        self._json_response(200, json.dumps(result).encode())
 
     def _serve_fwd2m(self):
         """Server-side 2 m auto-drive.  Runs a tight encoder loop so speed has
@@ -1398,6 +1523,19 @@ def main():
     CHASSIS.rear_camera = rear_src   # so GET /api/config reflects the effective source
     log.info("[chassis] active: %s — %s (comms=%s, rear_camera=%s)",
              CHASSIS.name, CHASSIS.description, CHASSIS.comms, rear_src)
+
+    # PLC client — sends auger/planter/robot-arm commands DIRECTLY over Modbus TCP to the
+    # PLC at plc_host:plc_port (502). Built only for chassis with plc.enabled (agrobot); the
+    # connection is lazy, so this never blocks startup if the PLC is unreachable.
+    if CHASSIS.plc_enabled:
+        try:
+            from plc_client import PlcClient
+        except ImportError:
+            from dashboard.plc_client import PlcClient
+        Handler.plc = PlcClient(CHASSIS.plc_host, CHASSIS.plc_port)
+        log.info("[plc] Modbus TCP client → %s (connects on first request)", Handler.plc.target)
+    else:
+        log.info("[plc] disabled for chassis %s", CHASSIS.name)
 
     # Set true once the ROS camera subscription is created and delivering the rear
     # feed; the local V4L2 capture is then skipped to avoid encoding the same camera

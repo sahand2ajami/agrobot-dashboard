@@ -34,6 +34,12 @@ host_ip: 192.168.1.100/24    # Jetson address on the Jackal subnet
 robot_ip: 192.168.1.200      # Jackal address
 ros_domain_id: 0             # Jackal is hard-wired to ROS domain 0
 
+# PLC Gateway — Jackal is not wired to the LS Electric PLC gateway, so the PLC
+# control panels (auger/planter sequence control, robot-arm, machine setup) stay
+# hidden. The cosmetic planter/auger buttons below remain (actuators: true).
+plc:
+  enabled: false
+
 # Dashboard panels — Jackal reports none of the agrobot-specific telemetry.
 features:
   battery: false

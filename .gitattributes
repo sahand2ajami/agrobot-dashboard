@@ -18,3 +18,5 @@
 *.jpg   binary
 *.jpeg  binary
 *.pkl   binary
+# LS Electric XG5000 PLC project (compressed binary container)
+*.xgwx  binary
