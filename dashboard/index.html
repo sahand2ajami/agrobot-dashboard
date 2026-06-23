@@ -916,9 +916,11 @@
         <div id="detBar" style="display:none;position:absolute;bottom:10px;left:10px;right:10px;
              background:rgba(13,18,23,.85);border:1px solid #30363d;border-radius:5px;
              padding:5px 12px;z-index:1100;align-items:center;gap:10px;font-size:12px">
-          <span style="color:#0ca678;font-weight:600" id="detCount">0 persons</span>
-          <span id="detDistances" style="color:#7d8590;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
-          <span style="color:#3d444d;font-size:10px" id="detAge"></span>
+          <span style="color:#7d8590;font-weight:500">Front:</span>
+          <span id="detFrontInfo" style="font-weight:600;color:#0ca678">—</span>
+          <span style="color:#30363d;padding:0 2px">|</span>
+          <span style="color:#7d8590;font-weight:500">Rear:</span>
+          <span id="detRearInfo" style="font-weight:600;color:#0ca678">—</span>
         </div>
 
         <div class="scan-line"></div>
@@ -1144,6 +1146,18 @@
           <span class="sp-status-val" id="stChassisBatt">&mdash;</span>
         </div>
       </div>
+    </div>
+
+    <!-- Planting — seedling type label applied to every recorded seedling. -->
+    <div class="sp-section" data-chassis-feature="actuators">
+      <div class="sp-section-title">Planting</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <label for="seedlingTypeInput" style="color:#7d8590;font-size:13px;white-space:nowrap">Seedling Type</label>
+        <input type="text" id="seedlingTypeInput" placeholder="e.g. Jack Pine" maxlength="100"
+               style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;padding:6px 10px;font-size:13px;outline:none">
+        <button class="sp-btn" onclick="saveSeedlingType()">Save</button>
+      </div>
+      <div style="color:#7d8590;font-size:11px;margin-top:-10px">Saved for this session; added to every planted seedling record pushed to the server.</div>
     </div>
 
     <!-- Machine Setup (PLC) — mode, fault, home, and per-subsystem enables. The PLC
@@ -1452,17 +1466,31 @@ setInterval(() => {
 function _startDetPoll() {
   _stopDetPoll();
   document.getElementById('detBar').style.display = 'flex';
+  function _fmtDet(d) {
+    const count = d.count === 1 ? '1 person' : `${d.count} persons`;
+    const dists = (d.detections||[]).filter(x=>x.distance_m!==null).map(x=>`${x.distance_m.toFixed(1)} m`).join(' · ');
+    return dists ? `${count}  ${dists}` : count;
+  }
   async function poll() {
-    try {
-      const d = await _fetchWithTimeout(CFG.detDataUrl, { cache:'no-store' }).then(r => r.json());
-      const ce = document.getElementById('detCount'), de = document.getElementById('detDistances'), ae = document.getElementById('detAge');
-      ce.textContent = d.count === 1 ? '1 person' : `${d.count} persons`;
-      ce.style.color = d.count > 0 ? '#f85149' : '#0ca678';
-      de.textContent = (d.detections||[]).filter(x=>x.distance_m!==null).map(x=>`${x.distance_m.toFixed(1)} m`).join(' · ');
-      ae.textContent = ((Date.now()/1000 - d.ts).toFixed(1)) + 's ago';
-    } catch (_) {
-      document.getElementById('detCount').textContent = 'detector offline';
-      document.getElementById('detCount').style.color = '#3d444d';
+    const [front, rear] = await Promise.allSettled([
+      _fetchWithTimeout(CFG.detDataUrl,            { cache:'no-store' }).then(r => r.json()),
+      _fetchWithTimeout('/api/detection/rear_data', { cache:'no-store' }).then(r => r.json()),
+    ]);
+    const fi = document.getElementById('detFrontInfo');
+    const ri = document.getElementById('detRearInfo');
+    if (front.status === 'fulfilled') {
+      const d = front.value;
+      fi.textContent = _fmtDet(d);
+      fi.style.color = d.count > 0 ? '#f85149' : '#0ca678';
+    } else {
+      fi.textContent = 'offline'; fi.style.color = '#3d444d';
+    }
+    if (rear.status === 'fulfilled') {
+      const d = rear.value;
+      ri.textContent = _fmtDet(d);
+      ri.style.color = d.count > 0 ? '#f85149' : '#0ca678';
+    } else {
+      ri.textContent = 'offline'; ri.style.color = '#3d444d';
     }
   }
   poll(); _detPollTimer = setInterval(poll, 500);
@@ -2479,6 +2507,8 @@ function _loadSettingsPanel() {
       const units = d.modbusSpeed ?? Math.round((d.maxLinear ?? 2.0) / 4 * MODBUS_LINEAR_SCALE);
       document.getElementById('slModbus').value = units;
       onModbusSlider(units);
+      const stEl = document.getElementById('seedlingTypeInput');
+      if (stEl) stEl.value = d.seedlingType ?? '';
     })
     .catch(() => {
       // Fallback: seed from live CFG
@@ -2525,6 +2555,20 @@ function applySettings() {
         btn.textContent = 'Apply & Update Robot';
       }, 1800);
     });
+}
+
+function saveSeedlingType() {
+  const el = document.getElementById('seedlingTypeInput');
+  if (!el) return;
+  const seedlingType = el.value.trim();
+  _fetchWithTimeout('/api/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ seedlingType }),
+  })
+    .then(r => r.ok ? r.json() : Promise.reject())
+    .then(() => showToast(seedlingType ? `Seedling type set: ${seedlingType}` : 'Seedling type cleared'))
+    .catch(() => showToast('Failed to save seedling type', true));
 }
 
 function showToast(msg, isErr) {

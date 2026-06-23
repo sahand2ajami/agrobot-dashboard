@@ -22,6 +22,8 @@ import socketserver
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from http.server import SimpleHTTPRequestHandler
 from pathlib import Path
@@ -64,6 +66,11 @@ def _quiet_stderr():
         os.close(saved)
 
 DASHBOARD_DIR        = Path(__file__).parent
+
+# Supabase ingest endpoint for planted-seedling records.
+_SUPABASE_INGEST_URL = "https://ingest.invalid/functions/v1/ingest"
+_SUPABASE_AUTH       = "Bearer sb_publishable_zqFL0fpTopkXVMJZD4GvBw_rPWjkR3f"
+_SUPABASE_AGROBOT_KEY   = "ed3487f602cc909606e60e3da9309e6faf8821ec4757f9eac809fb4"
 GNSS_FILE_DEFAULT    = "/tmp/gnss_coords.json"
 DETECTIONS_FILE      = "/tmp/object_detections.json"
 ZED_DEVICE           = "/dev/zed2i"    # symlink used by the OpenCV grayscale fallback only
@@ -125,6 +132,30 @@ def _dms(value, is_lat):
     minutes = int(minutes_full)
     seconds = (minutes_full - minutes) * 60.0
     return f"{deg}°{minutes:02d}'{seconds:05.2f}\"{hemi}"
+
+
+def _push_seedling(entry: dict):
+    """POST a planted-seedling record to the Supabase ingest endpoint.
+    Runs in a daemon thread so it never blocks the HTTP response."""
+    payload = json.dumps({"source": "robot", "records": [entry]}).encode()
+    req = urllib.request.Request(
+        _SUPABASE_INGEST_URL,
+        data=payload,
+        headers={
+            "Content-Type":  "application/json",
+            "Authorization": _SUPABASE_AUTH,
+            "x-agrobot-key":    _SUPABASE_AGROBOT_KEY,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            body = resp.read().decode()
+            log.info("[seedling] Supabase ingest OK: %s", body)
+    except urllib.error.HTTPError as exc:
+        log.warning("[seedling] Supabase ingest HTTP %s: %s", exc.code, exc.read().decode())
+    except Exception as exc:
+        log.warning("[seedling] Supabase ingest failed: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -202,9 +233,10 @@ class Handler(SimpleHTTPRequestHandler):
 
     _settings_lock = threading.Lock()
     _settings: dict = {
-        'maxLinear':  2.0,    # absolute max forward speed m/s (= Fast preset)
-        'maxAngular': 0.5,    # max turn rate rad/s
-        'modbusSpeed': 1500,  # raw Modbus units for Normal preset (mirrors slLinear/4 * LINEAR_SCALE)
+        'maxLinear':   2.0,    # absolute max forward speed m/s (= Fast preset)
+        'maxAngular':  0.5,    # max turn rate rad/s
+        'modbusSpeed': 1500,   # raw Modbus units for Normal preset (mirrors slLinear/4 * LINEAR_SCALE)
+        'seedlingType': '',    # species label appended to every planted-seedling record
     }
 
     def __init__(self, *args, **kwargs):
@@ -869,30 +901,42 @@ class Handler(SimpleHTTPRequestHandler):
 
         lat, lon = data["lat"], data["lon"]
         chassis_name = Handler.chassis.name if Handler.chassis else "unknown"
+
+        with Handler._settings_lock:
+            seedling_type = Handler._settings.get('seedlingType', '')
+
+        slug = '_'.join(seedling_type.lower().split()) or 'unknown'
+        seedling_id = f"{slug}_{lat:.4f}_{lon:.4f}"
+
         seed_dir = DASHBOARD_DIR.parent / "logs" / "planted_seedlings"
         seed_dir.mkdir(parents=True, exist_ok=True)
         # One cumulative line-delimited JSON log; each seedling carries both
         # decimal degrees and a human-readable DMS geo-coordinate.
         entry = {
-            "index":     data["count"],
-            "ts":        data["ts"],
-            "chassis":   chassis_name,
-            "lat":       lat,
-            "lon":       lon,
-            "lat_dms":   _dms(lat, True),
-            "lon_dms":   _dms(lon, False),
-            "fix":       data.get("fix"),
-            "fix_label": data.get("fix_label"),
-            "sats":      data.get("sats"),
-            "hdop":      data.get("hdop"),
-            "alt":       data.get("alt"),
+            "index":        data["count"],
+            "ts":           data["ts"],
+            "chassis":      chassis_name,
+            "lat":          lat,
+            "lon":          lon,
+            "lat_dms":      _dms(lat, True),
+            "lon_dms":      _dms(lon, False),
+            "fix":          data.get("fix"),
+            "fix_label":    data.get("fix_label"),
+            "sats":         data.get("sats"),
+            "hdop":         data.get("hdop"),
+            "alt":          data.get("alt"),
+            "seedling_type": seedling_type,
+            "seedling_id":  seedling_id,
         }
         seed_log = seed_dir / "seedlings.jsonl"
         try:
             with open(seed_log, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-            log.info("[seedling] #%s at %s %s (%s) → %s",
-                     data["count"], entry["lat_dms"], entry["lon_dms"], chassis_name, seed_log)
+            log.info("[seedling] #%s at %s %s (%s) type=%r → %s",
+                     data["count"], entry["lat_dms"], entry["lon_dms"],
+                     chassis_name, seedling_type, seed_log)
+            threading.Thread(target=_push_seedling, args=(entry,),
+                             daemon=True, name="seedling-push").start()
             self._json_response(200, json.dumps({
                 "ok": True, "count": data["count"],
                 "lat_dms": entry["lat_dms"], "lon_dms": entry["lon_dms"],
@@ -977,6 +1021,10 @@ class Handler(SimpleHTTPRequestHandler):
                         {"error": f"{key} out of range ({lo}–{hi})"}).encode())
                     return
                 updates[key] = int(v) if key == 'modbusSpeed' else round(v, 3)
+
+        if 'seedlingType' in data:
+            st = str(data['seedlingType']).strip()[:100]
+            updates['seedlingType'] = st
 
         with Handler._settings_lock:
             Handler._settings.update(updates)
@@ -1286,9 +1334,9 @@ def _start_zed_rear_thread():
     """Capture the ZED 2i rear camera (pyzed SDK index ZED_REAR_INDEX) for color.
 
     Mirrors _start_zed_thread: runs YOLO when detection is requested on the rear view.
-    No depth (rear camera opened with DEPTH_MODE.NONE) so detections carry confidence
-    only, no distance. Uses the shared YOLO singleton + _YOLO_INFER_LOCK so front and
-    rear inferences are serialized and don't fight over the GPU.
+    Mirrors _start_zed_thread including depth (DEPTH_MODE.PERFORMANCE) so detections
+    carry both confidence and distance_m. Uses the shared YOLO singleton +
+    _YOLO_INFER_LOCK so front and rear inferences are serialized and don't fight over the GPU.
     """
     try:
         import cv2
@@ -1298,12 +1346,12 @@ def _start_zed_rear_thread():
 
     _min_infer_interval = 1.0 / max(YOLO_THROTTLE_HZ, 0.1)
 
-    def _capture_loop(zed, image_mat):
+    def _capture_loop(zed, image_mat, depth_mat):
         import pyzed.sl as sl
         yolo, yolo_dev, yolo_half = _get_shared_yolo()
 
         _inf_lock  = threading.Lock()
-        _inf_frame = [None]
+        _inf_frame = [None]   # (color_bgr, depth_float32 | None)
         _inf_event = threading.Event()
 
         def _rear_yolo_worker():
@@ -1311,10 +1359,11 @@ def _start_zed_rear_thread():
                 _inf_event.wait()
                 _inf_event.clear()
                 with _inf_lock:
-                    color = _inf_frame[0]
+                    data = _inf_frame[0]
                     _inf_frame[0] = None
-                if color is None:
+                if data is None:
                     continue
+                color, depth = data
                 try:
                     with _YOLO_INFER_LOCK:
                         results = yolo(color, classes=[YOLO_PERSON_CLASS],
@@ -1327,12 +1376,15 @@ def _start_zed_rear_thread():
                         for box in result.boxes:
                             x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
                             conf = float(box.conf[0])
-                            boxes_half.append((x1 // 2, y1 // 2, x2 // 2, y2 // 2,
-                                               f'person {conf:.0%}'))
+                            dist = _depth_at_bbox(depth, x1, y1, x2, y2) if depth is not None else None
+                            label = f'person {conf:.0%}'
+                            if dist is not None:
+                                label += f'  {dist:.1f} m'
+                            boxes_half.append((x1 // 2, y1 // 2, x2 // 2, y2 // 2, label))
                             detections.append({
                                 'label':      'person',
                                 'confidence': round(conf, 3),
-                                'distance_m': None,
+                                'distance_m': round(dist, 2) if dist is not None else None,
                                 'bbox':       [x1, y1, x2, y2],
                             })
                     det_payload = {
@@ -1381,8 +1433,10 @@ def _start_zed_rear_thread():
                 if yolo is not None and Handler._rear_detection_wanted():
                     if now - last_queue >= _min_infer_interval:
                         last_queue = now
+                        zed.retrieve_measure(depth_mat, sl.MEASURE.DEPTH)
+                        depth_arr = depth_mat.get_data().copy()
                         with _inf_lock:
-                            _inf_frame[0] = frame.copy()
+                            _inf_frame[0] = (frame.copy(), depth_arr)
                         _inf_event.set()
 
             elif err == sl.ERROR_CODE.END_OF_SVOFILE_REACHED:
@@ -1420,7 +1474,8 @@ def _start_zed_rear_thread():
                 init_params = sl.InitParameters()
                 init_params.camera_resolution = sl.RESOLUTION.HD720
                 init_params.camera_fps        = 30
-                init_params.depth_mode        = sl.DEPTH_MODE.NONE
+                init_params.depth_mode        = sl.DEPTH_MODE.PERFORMANCE
+                init_params.coordinate_units  = sl.UNIT.METER
                 # Select the second camera (pyzed 4.x API; 3.x uses camera_linux_id)
                 try:
                     init_params.input.set_from_camera_index(ZED_REAR_INDEX)
@@ -1432,9 +1487,10 @@ def _start_zed_rear_thread():
                 err = zed.open(init_params)
                 if err == sl.ERROR_CODE.SUCCESS:
                     image_mat = sl.Mat()
+                    depth_mat = sl.Mat()
                     log.info("[rear-cam] ZED 2i rear (SDK index %d) opened", ZED_REAR_INDEX)
                     delay = ZED_SDK_OPEN_RETRY_DELAY
-                    _capture_loop(zed, image_mat)
+                    _capture_loop(zed, image_mat, depth_mat)
                     err = "camera lost"
                 else:
                     with Handler._cam_lock:
@@ -1933,7 +1989,7 @@ def main():
     try:
         import rclpy
         from rclpy.node import Node
-        from rclpy.executors import SingleThreadedExecutor
+        from rclpy.executors import MultiThreadedExecutor
         from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
         from sensor_msgs.msg import Image as RosImage
 
@@ -2038,7 +2094,7 @@ def main():
         else:
             log.info("[camera] no ROS camera_topic for this chassis — using local capture only")
 
-        _executor = SingleThreadedExecutor()
+        _executor = MultiThreadedExecutor(num_threads=4)
         _executor.add_node(_node)
 
         def _ros_spin():

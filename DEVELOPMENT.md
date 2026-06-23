@@ -85,7 +85,11 @@ Unchanged from the agrobot dashboard, plus one new endpoint:
 | GET | `/api/chassis_battery` | **New.** `{voltage_v, connected}` — median-smoothed chassis pack voltage. Reports `0 / false` on chassis without the `battery` feature (jackal). |
 | POST | `/api/cmd_vel` | `{linear_x, angular_z}`. Rejected with 400 if it exceeds the **active chassis's** `max_linear`/`max_angular` (falls back to module `MAX_*` when `Handler.chassis` is unset, e.g. in tests). |
 | POST | `/api/fwd2m` | Server-side 2 m auto-drive. Returns 503 on a chassis whose `fwd2m` feature is false (jackal). |
-| GET | `/api/wheel_odom`, `/api/camera*`, `/api/zed*`, `/api/detection*`, `/api/gnss`, `/api/settings` | As before. |
+| GET | `/api/wheel_odom`, `/api/gnss`, `/api/settings` | As before. |
+| GET | `/api/camera/stream` | Rear camera MJPEG (raw). |
+| GET | `/api/zed/stream` | Front camera MJPEG (raw). |
+| GET | `/api/detection/stream`, `/api/detection/data` | Front camera with YOLO boxes / front detection JSON `{ts, count, detections:[{label, confidence, distance_m, bbox}]}`. |
+| GET | `/api/detection/rear_stream`, `/api/detection/rear_data` | Rear camera with YOLO boxes / rear detection JSON (same schema). |
 | POST | `/api/plc/{auger,planter,both}` | **New (PLC).** `{command: START\|STOP}` → Modbus pulse of the auger/planter pushbutton word(s). |
 | POST | `/api/plc/machine` | **New (PLC).** `{command}` (SET_AUTO, ENABLE_*, HOME_ALL, FAULT_RESET…) → `MachineCommand`. |
 | POST | `/api/plc/robot` | **New (PLC).** `{command}` (HOME, START, STOP, PAUSE, MOTORS_ON…) → `ControlRobot`. |
@@ -196,10 +200,19 @@ dashboard path uses `robot_base_node` directly.
 
 - **GNSS** — `scripts/gnss_p9_read.py` (Columbus P-9 Race). Auto-detects port,
   writes `/tmp/gnss_coords.json` atomically; polled by `serve.py`.
-- **Cameras** — `serve.py` runs best-effort local RealSense/ZED capture threads
-  **and** subscribes to the chassis ROS camera topic; MJPEG streamed to the UI.
-- **YOLOv8** — `scripts/object_detector.py` (persons only). Launched for agrobot;
-  skipped for jackal (no local RealSense topics).
+- **Cameras** — `serve.py` opens both ZED 2i cameras directly via the pyzed SDK
+  (front index 0, rear index 1) with `DEPTH_MODE.PERFORMANCE` on both. MJPEG is
+  streamed to the UI at 20 fps. The chassis ROS camera topic is only used as a
+  fallback when pyzed is unavailable.
+- **YOLOv8 person detection** — runs **inside `serve.py`**, on demand, on **both**
+  ZED feeds simultaneously. A shared `yolov8n.pt` singleton is loaded once onto the
+  GPU (FP16) and serialised under `_YOLO_INFER_LOCK` so front and rear workers take
+  turns without GPU contention. Detection is active only while the browser's Det view
+  is open (`DET_IDLE_TIMEOUT = 3.0 s`). Each detected person gets a confidence score
+  and a depth-derived distance from the ZED stereo depth map. The status bar shows
+  **Front: N persons  X m | Rear: N persons  Y m**. See [detection.md](detection.md)
+  for full setup and tuning. `scripts/object_detector.py` is a legacy ROS node that
+  is no longer launched — detection now lives entirely in the dashboard.
 - **Recording / track / plant logging** — under `logs/`.
 
 ---
@@ -262,6 +275,7 @@ ladder). There is no longer a Python gRPC emulator; the old `mock_plc_gateway.py
 | Script | When to use |
 |--------|-------------|
 | `./launch_dashboard.sh [--chassis X] [--port N] [--headless]` | Full dashboard for chassis X. `--headless` (or `DASHBOARD_HEADLESS=1`) serves only and skips opening a local browser — view it from another device at the printed `http://<jetson-ip>:<port>`. Default still opens a browser on the Jetson. |
+| `./launch_dashboard_plc.sh [--chassis X] [--port N] [--headless]` | Same as above but serves `plc_combined.html` (4-tab UI: Camera · GPS · Connectivity · PLC Handshake) via `serve_plc.py`. Default port **8769**. All chassis flags forwarded. |
 | `./launch_dashboard_wide.sh [--chassis X]` | Wide-angle UI (`serve_wide.py` monkey-patches `serve.py`, so chassis logic is inherited) |
 | `./start_all.sh`, `./start.sh <variant>`, `./teleop.sh` | agrobot-only ROS dev helpers; they exit early if the active chassis is not `agrobot` |
 
@@ -270,6 +284,7 @@ ladder). There is no longer a Python gRPC emulator; the old `mock_plc_gateway.py
 ## Development notes
 
 - `rclpy` and ROS message packages come from `ros-humble-*` apt packages, never pip.
+- The ROS executor is `MultiThreadedExecutor(num_threads=4)`. It handles wheel-odom, battery, and ROS camera-topic callbacks concurrently. The velocity publisher runs on its **own dedicated thread** (not in the executor) so a busy callback queue can never jitter teleop commands.
 - `dashboard/chassis.py` prefers PyYAML but has a minimal built-in YAML parser
   fallback, so the dashboard and tests work even without PyYAML installed.
 - The static-file whitelist in `serve.py` allows only `/`, `/index.html`,
@@ -277,6 +292,9 @@ ladder). There is no longer a Python gRPC emulator; the old `mock_plc_gateway.py
 - `dashboard/logo/` and `reference/` are gitignored.
 - `serve_wide.py` inherits all chassis behaviour from `serve.py` by importing it
   and monkey-patching only the HTML served and the ZED resolution.
+- `serve_plc.py` inherits from `serve.py` the same way and adds `/api/amr/*` routes
+  (AMR ↔ PLC handshake registers) plus auto-writes `%MW5112` on moving-state changes.
+  It serves `plc_combined.html` instead of `index.html`.
 
 ---
 

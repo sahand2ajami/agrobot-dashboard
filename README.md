@@ -86,11 +86,9 @@ source install/setup.bash
 
 Hardware/driver prerequisites by chassis:
 
-- **agrobot** — RealSense SDK + `ros-humble-realsense2-camera`, `ros-humble-rosbridge-suite`,
-  a USB-serial adapter at `/dev/ttyUSB0` to the chassis, and (optional) the Columbus
-  P-9 GNSS receiver. The YOLOv8 detector needs `ultralytics`.
+- **agrobot** — **ZED SDK** (from Stereolabs) + two ZED 2i cameras on USB 3.0, `ros-humble-rosbridge-suite`, a USB-serial adapter at `/dev/ttyUSB0` to the chassis, and (optional) the Columbus P-9 GNSS receiver. Person detection (YOLOv8) needs `ultralytics` and runs on the Jetson GPU — see [detection.md](detection.md).
 - **jackal** — a LAN cable to the Jackal and permission to add an IP on the wired
-  interface (`eno1`). No local base driver or RealSense is required.
+  interface (`eno1`). No local base driver or ZED is required.
 
 You can run and test the dashboard **without** any of this hardware — the UI loads,
 the API responds, and missing devices degrade gracefully (panels show "No data").
@@ -106,7 +104,7 @@ browser on the Jetson, port 8766):
 | Option | Values | Default | How to set it (highest priority first) |
 |--------|--------|---------|----------------------------------------|
 | **Chassis** | `agrobot` \| `jackal` | **`agrobot`** | `--chassis <name>` → `ROBOT_CHASSIS` env → `chassis:` in `config/active_chassis.yaml` |
-| **Rear camera** | `realsense` \| `webcam` \| `none` | **`realsense`** (present) | `--rear-camera <v>` → `REAR_CAMERA` env → `rear_camera:` in the chassis YAML |
+| **Rear camera** | `zed` \| `webcam` \| `none` | **`zed`** | `--rear-camera <v>` → `REAR_CAMERA` env → `rear_camera:` in the chassis YAML |
 | **Headless** (don't open a browser on the Jetson) | enabled \| disabled | **disabled** (opens a local browser) | `--headless` / `--no-headless` → `DASHBOARD_HEADLESS=1` env |
 | **Port** | any free TCP port | **`8766`** | `--port <n>` |
 
@@ -152,28 +150,22 @@ UI never hard-code robot details — they read these files (the server) and `/ap
 | `host_iface`, `host_ip`, `robot_ip`, `ros_domain_id` | jackal | LAN setup applied by the launcher. |
 | `features` | both | Booleans that show/hide UI panels: `battery`, `oil`, `wheel_odom`, `fwd2m`, `modbus_slider`, `actuators`. |
 
-### Rear camera (realsense | webcam | none)
+### Rear camera (zed | webcam | none)
 
-The dashboard shows a rear camera in a picture-in-picture corner. You choose its
-**source** — the RealSense D435 or a generic USB webcam (e.g. a Logitech) — or turn the
-rear view **off** entirely. Resolution order: `--rear-camera` flag → `REAR_CAMERA` env
-→ `rear_camera:` in the chassis YAML → `realsense`.
+The dashboard shows a rear camera in a picture-in-picture corner. Resolution order:
+`--rear-camera` flag → `REAR_CAMERA` env → `rear_camera:` in the chassis YAML → `zed`.
 
 ```bash
-./launch_dashboard.sh --chassis agrobot --rear-camera webcam     # use a USB webcam
+./launch_dashboard.sh --chassis agrobot --rear-camera webcam     # use a USB webcam instead
 ./launch_dashboard.sh --chassis agrobot --rear-camera none       # no rear view (front fills the frame)
 REAR_CAMERA=webcam ./launch_dashboard.sh                       # same, via env
 ```
 
-- **`realsense`** (default) — the RealSense D435 rear feed.
-- **`webcam`** — opens a local USB UVC camera and **skips the ROS camera topic** so the
-  two feeds don't fight over the buffer. Pin a specific device with
-  `rear_camera_device: /dev/video2` if auto-detection picks the wrong one.
-- **`none`** (aliases: `off`, `disabled`) — disables the rear view and its capture
-  entirely; the front (ZED) camera fills the frame. Saves CPU when you only need the
-  front view.
+- **`zed`** (default) — the second ZED 2i camera (SDK index 1) via pyzed. Supports depth-based distance estimation in person detection.
+- **`webcam`** — opens a local USB UVC camera. No depth — person detection shows confidence only, no distance. Pin a specific device with `rear_camera_device: /dev/video2` if auto-detection picks the wrong one.
+- **`none`** (aliases: `off`, `disabled`) — disables the rear view entirely; the front ZED fills the frame. Saves CPU when you only need the front view.
 
-The front (ZED) camera is unaffected by this setting.
+The front (ZED 2i, SDK index 0) is unaffected by this setting.
 
 ### Headless (don't open a browser on the Jetson)
 
@@ -210,11 +202,13 @@ source install/setup.bash
 ./launch_dashboard.sh --chassis agrobot
 ```
 
-This brings up, in order: RealSense D435i (color) → GNSS reader → `robot_base_node`
-(Modbus RTU on `/dev/ttyUSB0`) → rosbridge → dashboard server. Person detection runs
-**inside the dashboard** on the ZED front feed, on demand (see Tutorial 2 → Cameras).
-You should see the **Chassis Link** card go green, **Chassis Battery** show a voltage,
-and the rear camera appear once the RealSense initialises. Drive with **W A S D**.
+This brings up, in order: ZED 2i front + rear cameras (via pyzed SDK) → GNSS reader → `robot_base_node` (Modbus RTU on `/dev/ttyUSB0`) → rosbridge → dashboard server. Person detection runs **inside the dashboard** on both ZED feeds, on demand (see Tutorial 2 → Cameras and [detection.md](detection.md)). You should see the **Chassis Link** card go green, **Chassis Battery** show a voltage, and both camera feeds appear. Drive with **W A S D**.
+
+To also enable the PLC handshake panel (AMR ↔ PLC register monitor):
+
+```bash
+./launch_dashboard_plc.sh --chassis agrobot    # same as above + PLC tab, port 8769
+```
 
 > If the serial port needs permission, the launcher attempts `sudo chmod a+rw
 > /dev/ttyUSB0`. If the chassis is on a different port, update `serial_port` in
@@ -315,14 +309,11 @@ on the active chassis — the UI hides panels a chassis doesn't support.
 
 ### Cameras
 
-- The view is a **split**: the **front** camera (ZED) fills the frame and the **rear**
-  camera (RealSense or webcam) sits in a picture-in-picture corner. **Click the PiP**
-  to swap which feed is large. (With `--rear-camera none` there is no PiP — the front
-  fills the frame.)
-- **Detection** button — overlays YOLOv8 person detection on the front (ZED) feed.
-  Detection runs **on demand**: YOLO only does work while this view is open, so it
-  costs nothing when off. Toggling it never touches the chassis link, GPS, or driving —
-  WASD stays fully responsive.
+- The view is a **split**: the **front** ZED fills the frame and the **rear** ZED sits in a picture-in-picture corner. **Click the PiP** to swap which feed is large. (With `--rear-camera none` there is no PiP — the front fills the frame.)
+- **Det button** — overlays YOLOv8 person detection on **both** camera feeds simultaneously. Detection runs **on demand**: YOLO only does work while the Det view is open, so it costs nothing when off. Toggling it never touches the chassis link, GPS, or driving — WASD stays fully responsive.
+  - Bounding boxes show confidence and depth-derived distance: `person 87%  1.3 m`
+  - A status bar shows **Front: 1 person  1.3 m | Rear: 1 person  2.0 m**
+  - See [detection.md](detection.md) for setup, tuning, and troubleshooting.
 - The live feed streams at 20 fps (recordings are saved at 15 fps).
 
 ### GPS map & recording
@@ -374,6 +365,7 @@ slider** lets you command raw Modbus speed units directly; its scale mirrors
 | Run the persisted default chassis | `./launch_dashboard.sh` |
 | Run agrobot explicitly | `./launch_dashboard.sh --chassis agrobot` |
 | Run the Jackal | `./launch_dashboard.sh --chassis jackal` |
+| Run with PLC handshake panel (agrobot) | `./launch_dashboard_plc.sh --chassis agrobot` (port 8769) |
 | Use a USB webcam as the rear camera | `./launch_dashboard.sh --chassis agrobot --rear-camera webcam` |
 | Turn off the rear camera (front only) | `./launch_dashboard.sh --rear-camera none` |
 | Pin the webcam device | set `rear_camera_device: /dev/video2` in `agrobot.yaml` |
@@ -404,7 +396,12 @@ Server: `dashboard/serve.py`, default port **8766**.
 | POST | `/api/fwd2m` | Server-side 2 m auto-drive. 503 on chassis without the `fwd2m` feature. |
 | POST | `/api/plant` | Logs a planting event + geo-location to `logs/planted_seedlings/`. |
 | POST | `/api/record/start`, `/api/record/stop` | Start/stop a camera + GPS-track recording session. |
-| GET | `/api/camera*`, `/api/zed*`, `/api/detection*` | MJPEG streams / status / detection data. |
+| GET | `/api/camera/stream` | Rear camera MJPEG stream (raw, no boxes). |
+| GET | `/api/zed/stream` | Front camera MJPEG stream (raw, no boxes). |
+| GET | `/api/detection/stream` | Front camera MJPEG stream with YOLO bounding boxes. |
+| GET | `/api/detection/data` | Front detection JSON: `{ts, count, detections:[{label, confidence, distance_m, bbox}]}`. |
+| GET | `/api/detection/rear_stream` | Rear camera MJPEG stream with YOLO bounding boxes. |
+| GET | `/api/detection/rear_data` | Rear detection JSON (same schema as above). |
 | GET/POST | `/api/settings` | Read / write speed and Modbus settings. |
 | POST | `/api/plc/{auger,planter,both}` | PLC sequence control `{command: START\|STOP}` (agrobot). 503 without `plc.enabled`. |
 | POST | `/api/plc/{machine,robot}` | PLC machine-setup / robot-arm pushbuttons `{command}` (agrobot). |
@@ -414,46 +411,25 @@ Server: `dashboard/serve.py`, default port **8766**.
 
 ## PLC integration (agrobot tree-planter)
 
-The auger, planter, and robot manipulator live on an **LS Electric PLC**, fronted by a
-separate **gRPC gateway** (`~/plc_gateway/gRPC-Gateway-Agrobot`, port **50051**). The dashboard
-relays the actuator + robot-arm controls to it — `serve.py` is the gRPC client, so the
-browser only ever speaks REST:
+The auger, planter, and robot manipulator live on an **LS Electric PLC**. The dashboard
+talks to it **directly over Modbus TCP** — no separate gateway process is needed:
 
 ```
-Browser ──REST :8766──► serve.py ──gRPC :50051──► PLC Gateway ──Modbus TCP :502──► LS PLC
+Browser ──REST :8766──► serve.py ──Modbus TCP :502──► LS Electric PLC (192.168.1.2)
 ```
 
-- **Run the gateway separately:** `cd ~/plc_gateway/gRPC-Gateway-Agrobot && python main.py`
-  (starts on :50051; runs in offline/mock mode if the PLC is unreachable). The dashboard
-  connects lazily — if the gateway is down the UI just shows **"Gateway offline"** and the
-  rest of the dashboard is unaffected.
-- **Test with NO PLC / NO real gateway** — a software emulator ships with the dashboard:
-  ```bash
-  python3 scripts/mock_plc_gateway.py --auto      # AUTO + all subsystems enabled
-  ```
-  It speaks the same gRPC service on :50051 and emulates mode/safety gating plus
-  auger/planter cycles that auto-complete (so the dashboard's completion toast + seedling
-  pin fire). Flags: `--cycle-secs N`, `--fault`, `--estop`, `--gate-open`. Run the
-  dashboard normally against it (`./launch_dashboard.sh --chassis agrobot`). See the three
-  fidelity tiers (emulator → gateway offline-mode → XG5000 PLC simulator) in DEVELOPMENT.md.
-- **Per-chassis config** in `config/chassis/<name>.yaml`:
+- The Jetson's `eno1` is given the address `192.168.1.100/24` (set by the launcher from `agrobot.yaml`), putting it on the same subnet as the PLC CPU Ethernet port at `192.168.1.2`.
+- The dashboard connects lazily on first use and degrades gracefully — if the PLC is unreachable the UI shows **"PLC offline"** (normal 200 with `connected:false`) and driving is unaffected.
+- **Per-chassis config** in `config/chassis/agrobot.yaml`:
   ```yaml
   plc:
-    enabled: true      # agrobot: true · jackal: false
-    host: 127.0.0.1
-    port: 50051
+    enabled: true
+    host: 192.168.1.2    # PLC CPU Ethernet port
+    port: 502
   ```
-- **Teleop flow:** in Settings → *Machine Setup (PLC)* set **Auto** and enable the
-  subsystems, then the **Planter / Auger / Both** buttons start the real sequence. The
-  dashboard polls the PLC and toasts *"complete"* when the cycle finishes (and only then
-  logs the seedling pin). The *Robot Arm* panel drives the manipulator (Home/Start/Stop/…).
-- `success:true` from the gateway means the Modbus write landed, **not** that the machine
-  moved — the PLC ladder gates motion on Auto-mode + enabled + safety interlocks.
-
-> **protobuf note:** `dashboard/plc/` holds a client copy of the gateway's gRPC stubs
-> regenerated for protobuf 4.x (the upstream stubs are protobuf 6.x and won't import under
-> the dashboard's runtime). Wire format is version-independent. To regenerate after a proto
-> change, see the header of `dashboard/plc/__init__.py`.
+- **Testing without the real PLC:** point `plc.host` at any Modbus-TCP server exposing the `%MW`/`%MX` registers — e.g. a `pymodbus` simulator on the Jetson, or LS Electric's **XG5000** simulator (Windows, highest fidelity — runs the real ladder).
+- **Teleop flow:** in Settings → *Machine Setup (PLC)* set **Auto** and enable the subsystems, then the **Planter / Auger / Both** buttons start the real sequence. The dashboard polls the PLC and toasts *"complete"* when the cycle finishes (and only then logs the seedling pin). The *Robot Arm* panel drives the manipulator (Home/Start/Stop/…).
+- `success:true` means the Modbus write landed, **not** that the machine moved — the PLC ladder gates motion on Auto-mode + enabled + safety interlocks.
 
 ---
 
@@ -526,7 +502,7 @@ rear-camera resolution, and the chassis-battery endpoint.
 | Dashboard loads but driving does nothing | Is ROS sourced? For agrobot, is `robot_base_node` running and `/dev/ttyUSB0` accessible? For jackal, can you `ping 192.168.1.200` and see `/jackal1/cmd_vel` in `ros2 topic list`? |
 | **Chassis Link** stays red (agrobot) | `robot_base_node` not publishing `/avatar_robot/wheel_odom` — check the serial port and the launch log. |
 | **Chassis Battery** shows "No data" | No `Float32` on `/avatar_robot/battery` yet, or voltage outside the 30–70 V validity window. Confirm the chassis is powered and `battery_topic` is set in `agrobot.yaml`. |
-| Rear camera blank | Wrong source/device — try `--rear-camera webcam` or set `rear_camera_device`. RealSense needs the camera node up first. |
+| Rear camera blank | ZED SDK not installed, or second ZED not plugged in. Check `[rear-cam]` lines in the dashboard log. Try `python3 -c "import pyzed.sl as sl; print('ok')"` to verify pyzed. |
 | GPS map shows "No Data" | Plug in the Columbus P-9 receiver; the GNSS reader auto-detects `/dev/ttyACM*` / `/dev/ttyUSB1`. |
 | Port already in use | Launch with a different `--port`. |
 | agrobot helper script "refuses to run" | `start_all.sh` / `start.sh` / `teleop.sh` are agrobot-only; the active chassis is `jackal`. |
