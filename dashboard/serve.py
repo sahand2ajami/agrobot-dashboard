@@ -144,7 +144,8 @@ class Handler(SimpleHTTPRequestHandler):
     _cam_last_frame_time = 0.0   # kept for MJPEG stream throttling
 
     _det_lock         = threading.Lock()
-    _det_jpeg: bytes  = None
+    _det_jpeg: bytes  = None   # kept as fallback when _zed_frame is not yet available
+    _det_boxes        = []     # [(x1,y1,x2,y2,label), ...] at stream-res; under _det_lock
     # On-demand detection: YOLO inference runs ONLY while a client is actively
     # viewing detections. Each detection request stamps this monotonic time; the
     # capture loop checks _detection_wanted() and skips inference entirely when the
@@ -154,6 +155,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     _zed_lock            = threading.Lock()
     _zed_jpeg: bytes     = None
+    _zed_frame           = None  # latest stream-res BGR numpy frame for detection compositing
     _zed_frame_count     = 0
     _zed_connected       = False
     _zed_last_error      = None
@@ -476,9 +478,30 @@ class Handler(SimpleHTTPRequestHandler):
     def _serve_detection_stream(self):
         Handler._mark_detection_wanted()
         def get_frame():
-            Handler._mark_detection_wanted()   # keep YOLO alive while this stream is open
+            Handler._mark_detection_wanted()
+            # Read live camera frame (stream-res numpy) and latest YOLO boxes independently.
+            # This decouples video rate (camera fps) from inference rate (YOLO fps):
+            # the stream is always real-time; boxes are drawn from the last YOLO result.
+            with Handler._zed_lock:
+                frame = Handler._zed_frame
+            if frame is None:
+                with Handler._det_lock:
+                    return Handler._det_jpeg   # fallback before first camera frame
             with Handler._det_lock:
-                return Handler._det_jpeg
+                boxes = list(Handler._det_boxes)
+            try:
+                import cv2
+                if boxes:
+                    out = frame.copy()
+                    for x1, y1, x2, y2, label in boxes:
+                        _draw_box(out, x1, y1, x2, y2, label)
+                else:
+                    out = frame
+                ok, enc = cv2.imencode('.jpg', out, [cv2.IMWRITE_JPEG_QUALITY, 60])
+                return enc.tobytes() if ok else None
+            except Exception:
+                with Handler._det_lock:
+                    return Handler._det_jpeg
         self._stream_jpeg(get_frame)
 
     def _serve_cmd_vel(self):
@@ -1376,6 +1399,16 @@ ZED_SDK_OPEN_RETRY_DELAY = 2.5   # seconds between attempts (~15 s total)
 ZED_GRAB_LOST_LIMIT      = 15    # consecutive grab failures → treat camera as lost, re-open
 
 
+def _draw_box(img, x1, y1, x2, y2, label):
+    """Draw a red bounding box + label on img in-place (used by YOLO worker and detection stream)."""
+    import cv2
+    cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 220), 2)
+    (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
+    cv2.rectangle(img, (x1, y1 - th - 8), (x1 + tw + 6, y1), (0, 0, 220), -1)
+    cv2.putText(img, label, (x1 + 3, y1 - 4),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+
+
 def _start_zed_thread():
     """Capture the ZED 2i front feed in COLOR via the pyzed SDK, which identifies the
     camera by USB serial (deterministic) and yields a single rectified left-eye image
@@ -1390,13 +1423,6 @@ def _start_zed_thread():
         return
 
     _min_infer_interval = 1.0 / max(YOLO_THROTTLE_HZ, 0.1)
-
-    def _draw_box(img, x1, y1, x2, y2, label):
-        cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 220), 2)
-        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
-        cv2.rectangle(img, (x1, y1 - th - 8), (x1 + tw + 6, y1), (0, 0, 220), -1)
-        cv2.putText(img, label, (x1 + 3, y1 - 4),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
 
     # ── pyzed SDK capture (full color + depth for YOLO distance) ─────────────
     def _capture_loop_sdk(zed, image_mat):
@@ -1425,11 +1451,13 @@ def _start_zed_thread():
                     continue
                 color, depth = data
                 try:
-                    results   = yolo(color, classes=[YOLO_PERSON_CLASS],
-                                     conf=YOLO_CONFIDENCE, imgsz=YOLO_IMGSZ,
-                                     device=yolo_dev, half=yolo_half,
-                                     max_det=YOLO_MAX_DET, verbose=False)
-                    annotated  = color.copy()
+                    results    = yolo(color, classes=[YOLO_PERSON_CLASS],
+                                      conf=YOLO_CONFIDENCE, imgsz=YOLO_IMGSZ,
+                                      device=yolo_dev, half=yolo_half,
+                                      max_det=YOLO_MAX_DET, verbose=False)
+                    # Store boxes at stream-res (÷2) — the detection stream composites
+                    # them onto the live camera frame so video is always real-time.
+                    boxes_half = []
                     detections = []
                     for result in results:
                         for box in result.boxes:
@@ -1439,18 +1467,15 @@ def _start_zed_thread():
                             label = f'person {conf:.0%}'
                             if dist is not None:
                                 label += f'  {dist:.1f} m'
-                            _draw_box(annotated, x1, y1, x2, y2, label)
+                            boxes_half.append((x1 // 2, y1 // 2, x2 // 2, y2 // 2, label))
                             detections.append({
                                 'label':      'person',
                                 'confidence': round(conf, 3),
                                 'distance_m': round(dist, 2) if dist is not None else None,
                                 'bbox':       [x1, y1, x2, y2],
                             })
-                    small2 = cv2.resize(annotated, (annotated.shape[1] // 2, annotated.shape[0] // 2))
-                    ok2, enc2 = cv2.imencode('.jpg', small2, [cv2.IMWRITE_JPEG_QUALITY, 60])
-                    if ok2:
-                        with Handler._det_lock:
-                            Handler._det_jpeg = enc2.tobytes()
+                    with Handler._det_lock:
+                        Handler._det_boxes = boxes_half
                     payload = json.dumps({
                         'ts':         time.time(),
                         'count':      len(detections),
@@ -1496,6 +1521,7 @@ def _start_zed_thread():
                     if ok:
                         with Handler._zed_lock:
                             Handler._zed_jpeg            = enc.tobytes()
+                            Handler._zed_frame           = small   # raw frame for detection compositing
                             Handler._zed_frame_count    += 1
                             Handler._zed_last_frame_time = time.monotonic()
 
@@ -1542,28 +1568,26 @@ def _start_zed_thread():
                 if color is None:
                     continue
                 try:
-                    results   = yolo(color, classes=[YOLO_PERSON_CLASS],
-                                     conf=YOLO_CONFIDENCE, imgsz=YOLO_IMGSZ,
-                                     device=yolo_dev, half=yolo_half,
-                                     max_det=YOLO_MAX_DET, verbose=False)
-                    annotated = color.copy()
+                    results    = yolo(color, classes=[YOLO_PERSON_CLASS],
+                                      conf=YOLO_CONFIDENCE, imgsz=YOLO_IMGSZ,
+                                      device=yolo_dev, half=yolo_half,
+                                      max_det=YOLO_MAX_DET, verbose=False)
+                    boxes_half = []
                     detections = []
                     for result in results:
                         for box in result.boxes:
                             x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
                             conf = float(box.conf[0])
-                            _draw_box(annotated, x1, y1, x2, y2, f'person {conf:.0%}')
+                            boxes_half.append((x1 // 2, y1 // 2, x2 // 2, y2 // 2,
+                                               f'person {conf:.0%}'))
                             detections.append({
                                 'label':      'person',
                                 'confidence': round(conf, 3),
                                 'distance_m': None,
                                 'bbox':       [x1, y1, x2, y2],
                             })
-                    small2 = cv2.resize(annotated, (annotated.shape[1] // 2, annotated.shape[0] // 2))
-                    ok2, enc2 = cv2.imencode('.jpg', small2, [cv2.IMWRITE_JPEG_QUALITY, 60])
-                    if ok2:
-                        with Handler._det_lock:
-                            Handler._det_jpeg = enc2.tobytes()
+                    with Handler._det_lock:
+                        Handler._det_boxes = boxes_half
                     payload = json.dumps({
                         'ts': time.time(), 'count': len(detections), 'detections': detections,
                     })
@@ -1633,6 +1657,7 @@ def _start_zed_thread():
                 if ok:
                     with Handler._zed_lock:
                         Handler._zed_jpeg            = enc.tobytes()
+                        Handler._zed_frame           = small
                         Handler._zed_frame_count    += 1
                         Handler._zed_last_frame_time = time.monotonic()
 
