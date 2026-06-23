@@ -885,10 +885,12 @@ const CFG = {
   maxLinear:    0.5,
   maxLinearBack: 0.5,
   maxAngular:   0.5,
-  camStreamUrl: '/api/camera/stream',
-  zedStreamUrl: '/api/zed/stream',
-  detStreamUrl: '/api/detection/stream',
-  detDataUrl:   '/api/detection/data',
+  camStreamUrl:     '/api/camera/stream',
+  zedStreamUrl:     '/api/zed/stream',
+  detStreamUrl:     '/api/detection/stream',
+  detDataUrl:       '/api/detection/data',
+  rearDetStreamUrl: '/api/detection/rear_stream',
+  rearDetDataUrl:   '/api/detection/rear_data',
   gnssApiUrl:   '/api/gnss',
 };
 const MODBUS_LINEAR_SCALE = 3000;
@@ -1026,7 +1028,8 @@ function _startDetPoll() {
   const db = _g('detBar'); if (db) db.style.display = 'flex';
   async function poll() {
     try {
-      const r = await _fetchWithTimeout(CFG.detDataUrl, { cache:'no-store' });
+      const dataUrl = (_camSwapped && CFG.rearDetDataUrl) ? CFG.rearDetDataUrl : CFG.detDataUrl;
+      const r = await _fetchWithTimeout(dataUrl, { cache:'no-store' });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const d = await r.json();
       if (typeof d.count === 'undefined') throw new Error('bad shape');
@@ -1086,13 +1089,15 @@ setInterval(() => {
 }, 5000);
 
 function _applyCamStreams() {
-  const mainUrl = _camSwapped ? CFG.camStreamUrl : (_camDetOn ? CFG.detStreamUrl : CFG.zedStreamUrl);
-  const pipUrl  = _camSwapped ? (_camDetOn ? CFG.detStreamUrl : CFG.zedStreamUrl) : CFG.camStreamUrl;
+  const frontUrl = _camDetOn ? CFG.detStreamUrl     : CFG.zedStreamUrl;
+  const rearUrl  = _camDetOn ? CFG.rearDetStreamUrl : CFG.camStreamUrl;
+  const mainUrl  = _camSwapped ? rearUrl  : frontUrl;
+  const pipUrl   = _camSwapped ? frontUrl : rearUrl;
   const lm = _g('splitLabelMain'), lp = _g('splitLabelPip');
   if (lm) lm.textContent = _camSwapped ? 'Rear'  : 'Front';
   if (lp) lp.textContent = _camSwapped ? 'Front' : 'Rear';
-  const mainLbl = _camSwapped ? 'Rear'  : (_camDetOn ? 'Detection' : 'Front');
-  const pipLbl  = _camSwapped ? 'Front' : 'Rear';
+  const mainLbl = _camSwapped ? (_camDetOn ? 'Rear Det' : 'Rear')  : (_camDetOn ? 'Front Det' : 'Front');
+  const pipLbl  = _camSwapped ? (_camDetOn ? 'Front Det' : 'Front') : (_camDetOn ? 'Rear Det'  : 'Rear');
   _attachStream('splitImgMain', 'splitErrMain', mainUrl, mainLbl);
   _attachStream('splitImgPip',  'splitErrPip',  pipUrl,  pipLbl);
 }

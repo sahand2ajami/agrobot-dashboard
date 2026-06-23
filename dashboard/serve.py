@@ -138,6 +138,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     _cam_lock            = threading.Lock()
     _cam_jpeg: bytes     = None
+    _cam_frame           = None   # latest stream-res BGR numpy frame for rear detection compositing
     _cam_frame_count     = 0
     _cam_last_error      = None
     _cam_connected       = False
@@ -153,6 +154,12 @@ class Handler(SimpleHTTPRequestHandler):
     # detection view is closed — so person-detection costs zero CPU/GPU when off.
     _det_last_request = 0.0
     DET_IDLE_TIMEOUT  = 3.0   # stop inferring this long after the last detection request
+
+    # Rear camera detection — same pattern as front; under _rear_det_lock.
+    _rear_det_lock    = threading.Lock()
+    _rear_det_boxes   = []
+    _rear_det_payload = None
+    _rear_det_last_request = 0.0
 
     _zed_lock            = threading.Lock()
     _zed_jpeg: bytes     = None
@@ -226,6 +233,10 @@ class Handler(SimpleHTTPRequestHandler):
             self._serve_detection_data()
         elif self.path.startswith("/api/detection/stream"):
             self._serve_detection_stream()
+        elif self.path.startswith("/api/detection/rear_stream"):
+            self._serve_rear_detection_stream()
+        elif self.path == "/api/detection/rear_data":
+            self._serve_rear_detection_data()
         elif self.path.startswith("/api/detection"):
             self._serve_detection_image()
         elif self.path == '/api/settings':
@@ -388,14 +399,23 @@ class Handler(SimpleHTTPRequestHandler):
 
     @classmethod
     def _mark_detection_wanted(cls):
-        """A client is viewing detections — keep YOLO inference running."""
+        """A client is viewing front detections — keep front YOLO inference running."""
         cls._det_last_request = time.monotonic()
 
     @classmethod
     def _detection_wanted(cls) -> bool:
-        """True while a client has requested detections recently; the capture loop
-        uses this to run YOLO on demand only (zero cost when the view is closed)."""
+        """True while a client has requested front detections recently."""
         return (time.monotonic() - cls._det_last_request) < cls.DET_IDLE_TIMEOUT
+
+    @classmethod
+    def _mark_rear_detection_wanted(cls):
+        """A client is viewing rear detections — keep rear YOLO inference running."""
+        cls._rear_det_last_request = time.monotonic()
+
+    @classmethod
+    def _rear_detection_wanted(cls) -> bool:
+        """True while a client has requested rear detections recently."""
+        return (time.monotonic() - cls._rear_det_last_request) < cls.DET_IDLE_TIMEOUT
 
     def _serve_detection_image(self):
         Handler._mark_detection_wanted()
@@ -506,6 +526,42 @@ class Handler(SimpleHTTPRequestHandler):
                 with Handler._det_lock:
                     return Handler._det_jpeg
         self._stream_jpeg(get_frame)
+
+    def _serve_rear_detection_stream(self):
+        """Rear camera live feed with YOLO boxes composited at stream rate."""
+        Handler._mark_rear_detection_wanted()
+        def get_frame():
+            Handler._mark_rear_detection_wanted()
+            with Handler._cam_lock:
+                frame = Handler._cam_frame
+            if frame is None:
+                return None
+            with Handler._rear_det_lock:
+                boxes = list(Handler._rear_det_boxes)
+            try:
+                import cv2
+                if boxes:
+                    out = frame.copy()
+                    for x1, y1, x2, y2, label in boxes:
+                        _draw_box(out, x1, y1, x2, y2, label)
+                else:
+                    out = frame
+                ok, enc = cv2.imencode('.jpg', out, [cv2.IMWRITE_JPEG_QUALITY, 60])
+                return enc.tobytes() if ok else None
+            except Exception:
+                return None
+        self._stream_jpeg(get_frame)
+
+    def _serve_rear_detection_data(self):
+        Handler._mark_rear_detection_wanted()
+        with Handler._rear_det_lock:
+            payload = Handler._rear_det_payload
+        if payload is None:
+            self._json_response(200, json.dumps(
+                {"ts": time.time(), "count": 0, "detections": []}
+            ).encode())
+        else:
+            self._json_response(200, json.dumps(payload).encode())
 
     def _serve_cmd_vel(self):
         # Parse and validate the request body first — before checking ROS state.
@@ -1229,8 +1285,10 @@ def _start_rear_camera_thread(source="realsense", device=None):
 def _start_zed_rear_thread():
     """Capture the ZED 2i rear camera (pyzed SDK index ZED_REAR_INDEX) for color.
 
-    Mirrors _start_zed_thread but skips depth and YOLO — the rear feed is a plain
-    color picture-in-picture. Retries forever so the feed auto-recovers on replug.
+    Mirrors _start_zed_thread: runs YOLO when detection is requested on the rear view.
+    No depth (rear camera opened with DEPTH_MODE.NONE) so detections carry confidence
+    only, no distance. Uses the shared YOLO singleton + _YOLO_INFER_LOCK so front and
+    rear inferences are serialized and don't fight over the GPU.
     """
     try:
         import cv2
@@ -1238,10 +1296,63 @@ def _start_zed_rear_thread():
         log.warning("[rear-cam] cv2 not available — rear ZED capture disabled")
         return
 
+    _min_infer_interval = 1.0 / max(YOLO_THROTTLE_HZ, 0.1)
+
     def _capture_loop(zed, image_mat):
         import pyzed.sl as sl
+        yolo, yolo_dev, yolo_half = _get_shared_yolo()
+
+        _inf_lock  = threading.Lock()
+        _inf_frame = [None]
+        _inf_event = threading.Event()
+
+        def _rear_yolo_worker():
+            while True:
+                _inf_event.wait()
+                _inf_event.clear()
+                with _inf_lock:
+                    color = _inf_frame[0]
+                    _inf_frame[0] = None
+                if color is None:
+                    continue
+                try:
+                    with _YOLO_INFER_LOCK:
+                        results = yolo(color, classes=[YOLO_PERSON_CLASS],
+                                       conf=YOLO_CONFIDENCE, imgsz=YOLO_IMGSZ,
+                                       device=yolo_dev, half=yolo_half,
+                                       max_det=YOLO_MAX_DET, verbose=False)
+                    boxes_half = []
+                    detections = []
+                    for result in results:
+                        for box in result.boxes:
+                            x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+                            conf = float(box.conf[0])
+                            boxes_half.append((x1 // 2, y1 // 2, x2 // 2, y2 // 2,
+                                               f'person {conf:.0%}'))
+                            detections.append({
+                                'label':      'person',
+                                'confidence': round(conf, 3),
+                                'distance_m': None,
+                                'bbox':       [x1, y1, x2, y2],
+                            })
+                    det_payload = {
+                        'ts':         time.time(),
+                        'count':      len(detections),
+                        'detections': detections,
+                    }
+                    with Handler._rear_det_lock:
+                        Handler._rear_det_boxes   = boxes_half
+                        Handler._rear_det_payload = det_payload
+                except Exception as exc:
+                    log.error("[rear-cam] YOLO error: %s", exc)
+
+        if yolo is not None:
+            threading.Thread(target=_rear_yolo_worker, daemon=True,
+                             name="yolo-rear").start()
+
         runtime_params    = sl.RuntimeParameters()
         last_display      = 0.0
+        last_queue        = 0.0
         _display_interval = 1.0 / STREAM_FPS
         retry_sleep       = 1.0
         lost              = 0
@@ -1261,10 +1372,19 @@ def _start_zed_rear_thread():
                     if ok:
                         with Handler._cam_lock:
                             Handler._cam_jpeg            = enc.tobytes()
+                            Handler._cam_frame           = small   # raw frame for rear detection
                             Handler._cam_frame_count    += 1
                             Handler._cam_connected       = True
                             Handler._cam_last_error      = None
                             Handler._cam_last_frame_time = time.monotonic()
+
+                if yolo is not None and Handler._rear_detection_wanted():
+                    if now - last_queue >= _min_infer_interval:
+                        last_queue = now
+                        with _inf_lock:
+                            _inf_frame[0] = frame.copy()
+                        _inf_event.set()
+
             elif err == sl.ERROR_CODE.END_OF_SVOFILE_REACHED:
                 zed.set_svo_position(0)
             else:
@@ -1402,6 +1522,27 @@ ZED_SDK_OPEN_RETRY_DELAY = 2.5   # seconds between attempts (~15 s total)
 ZED_GRAB_LOST_LIMIT      = 15    # consecutive grab failures → treat camera as lost, re-open
 
 
+# ---------------------------------------------------------------------------
+# Shared YOLO singleton — loaded once; both front and rear ZED threads share it.
+# Inference is serialized under _YOLO_INFER_LOCK so neither camera stalls the
+# GPU with concurrent calls (yolov8n is too small to benefit from parallelism).
+# ---------------------------------------------------------------------------
+_YOLO_MODEL      = None
+_YOLO_DEV        = 'cpu'
+_YOLO_HALF       = False
+_YOLO_LOAD_LOCK  = threading.Lock()
+_YOLO_INFER_LOCK = threading.Lock()
+
+
+def _get_shared_yolo():
+    """Return (model, dev, half), loading the singleton on first call."""
+    global _YOLO_MODEL, _YOLO_DEV, _YOLO_HALF
+    with _YOLO_LOAD_LOCK:
+        if _YOLO_MODEL is None:
+            _YOLO_MODEL, _YOLO_DEV, _YOLO_HALF = _load_yolo("(shared)")
+    return _YOLO_MODEL, _YOLO_DEV, _YOLO_HALF
+
+
 def _draw_box(img, x1, y1, x2, y2, label):
     """Draw a red bounding box + label on img in-place (used by YOLO worker and detection stream)."""
     import cv2
@@ -1431,7 +1572,7 @@ def _start_zed_thread():
     def _capture_loop_sdk(zed, image_mat):
         import pyzed.sl as sl
         import numpy as np
-        yolo, yolo_dev, yolo_half = _load_yolo("(SDK path)")
+        yolo, yolo_dev, yolo_half = _get_shared_yolo()
         depth_mat = sl.Mat()   # reused each grab; retrieve_measure fills it in-place
 
         # ── YOLO worker thread ────────────────────────────────────────────────
@@ -1454,10 +1595,11 @@ def _start_zed_thread():
                     continue
                 color, depth = data
                 try:
-                    results    = yolo(color, classes=[YOLO_PERSON_CLASS],
-                                      conf=YOLO_CONFIDENCE, imgsz=YOLO_IMGSZ,
-                                      device=yolo_dev, half=yolo_half,
-                                      max_det=YOLO_MAX_DET, verbose=False)
+                    with _YOLO_INFER_LOCK:
+                        results = yolo(color, classes=[YOLO_PERSON_CLASS],
+                                       conf=YOLO_CONFIDENCE, imgsz=YOLO_IMGSZ,
+                                       device=yolo_dev, half=yolo_half,
+                                       max_det=YOLO_MAX_DET, verbose=False)
                     # Store boxes at stream-res (÷2) — the detection stream composites
                     # them onto the live camera frame so video is always real-time.
                     boxes_half = []
@@ -1555,7 +1697,7 @@ def _start_zed_thread():
 
     # ── OpenCV fallback (grayscale — YUYV color bug on Jetson pip OpenCV) ─────
     def _capture_loop_opencv():
-        yolo, yolo_dev, yolo_half = _load_yolo("(OpenCV fallback)")
+        yolo, yolo_dev, yolo_half = _get_shared_yolo()
 
         # Same worker-thread pattern as the SDK path so capture isn't stalled.
         _inf_lock  = threading.Lock()
@@ -1572,10 +1714,11 @@ def _start_zed_thread():
                 if color is None:
                     continue
                 try:
-                    results    = yolo(color, classes=[YOLO_PERSON_CLASS],
-                                      conf=YOLO_CONFIDENCE, imgsz=YOLO_IMGSZ,
-                                      device=yolo_dev, half=yolo_half,
-                                      max_det=YOLO_MAX_DET, verbose=False)
+                    with _YOLO_INFER_LOCK:
+                        results = yolo(color, classes=[YOLO_PERSON_CLASS],
+                                       conf=YOLO_CONFIDENCE, imgsz=YOLO_IMGSZ,
+                                       device=yolo_dev, half=yolo_half,
+                                       max_det=YOLO_MAX_DET, verbose=False)
                     boxes_half = []
                     detections = []
                     for result in results:
