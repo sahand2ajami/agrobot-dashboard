@@ -25,7 +25,7 @@ pulse_per_m: 3211.0     # encoder pulses per metre (calibrated; used by auto-for
 speed_cmd_topic: /avatar_robot/speed_cmd
 wheel_odom_topic: /avatar_robot/wheel_odom      # subscribed for odometry/mileage
 battery_topic: /avatar_robot/battery            # chassis pack voltage (Float32, V) from robot_base_node
-camera_topic: /camera/camera/color/image_raw    # RealSense D435i color stream
+camera_topic: ''    # ZED 2i rear uses pyzed SDK directly (see rear_camera below)
 
 # Chassis battery (shown on the dashboard when feature `battery` is on). The pack
 # voltage from robot_base_node is mapped to a 0-100% gauge over [min_v, max_v].
@@ -33,11 +33,10 @@ camera_topic: /camera/camera/color/image_raw    # RealSense D435i color stream
 battery_min_v: 42.0
 battery_max_v: 58.0
 
-# Rear camera source: realsense (D435 color) | webcam (generic USB UVC, e.g. Logitech)
+# Rear camera source: zed (ZED 2i via pyzed SDK, index 1) | webcam (generic USB UVC)
 # | none (disable the rear view — front camera fills the frame, no picture-in-picture).
 # Override per launch with:  ./launch_dashboard.sh --rear-camera webcam   (or none)
-rear_camera: realsense
-# rear_camera_device: /dev/video0   # optional explicit V4L2 device/index (auto-detected if omitted)
+rear_camera: zed
 
 # Modbus driver (robot_base_node). The node currently hard-codes these; they are
 # recorded here for reference and for the launch script / future parameterisation.

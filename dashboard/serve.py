@@ -65,8 +65,9 @@ def _quiet_stderr():
 DASHBOARD_DIR        = Path(__file__).parent
 GNSS_FILE_DEFAULT    = "/tmp/gnss_coords.json"
 DETECTIONS_FILE      = "/tmp/object_detections.json"
-ZED_DEVICE           = "/dev/zed2i"
-RS_DEVICE_DEFAULT    = "/dev/video4"   # RealSense D435 color stream (YUYV)
+ZED_DEVICE           = "/dev/zed2i"    # symlink used by the OpenCV grayscale fallback only
+ZED_FRONT_INDEX      = 0              # pyzed camera index — front ZED 2i
+ZED_REAR_INDEX       = 1              # pyzed camera index — rear ZED 2i
 WEBCAM_DEVICE_DEFAULT = "/dev/video0"  # generic USB UVC webcam (e.g. Logitech)
 RS_DISPLAY_FPS       = 20.0   # live camera capture / display (20 fps: smoother + far lighter than 30 on the Jetson)
 RECORD_FPS           = 15.0   # rear.mp4 + front.mp4 saved at 15 fps (lighter on the Jetson)
@@ -1069,17 +1070,36 @@ def _find_webcam_device(preferred=None):
     return WEBCAM_DEVICE_DEFAULT
 
 
+def _depth_at_bbox(depth_data, x1, y1, x2, y2, r=5):
+    """Median depth (metres) in a small patch at the bounding-box centre.
+
+    depth_data: float32 numpy array from ZED MEASURE.DEPTH (metres, NaN/inf for invalid).
+    Returns None if no valid pixels are found.
+    """
+    import numpy as np
+    cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+    h, w   = depth_data.shape[:2]
+    patch  = depth_data[max(0, cy - r):min(h, cy + r + 1),
+                        max(0, cx - r):min(w, cx + r + 1)]
+    valid  = patch[np.isfinite(patch) & (patch > 0.1) & (patch < 40.0)]
+    return float(np.median(valid)) if len(valid) > 0 else None
+
+
 def _start_rear_camera_thread(source="realsense", device=None):
     """Capture the rear camera directly via V4L2 — no ROS driver needed.
 
-    source: 'realsense' (D435 color, YUYV) | 'webcam' (generic USB UVC, e.g. Logitech;
-    opened MJPG for full frame-rate at 720p). `device` optionally pins the V4L2
-    device path/index; auto-detected when None.
+    source: 'zed' (ZED 2i via pyzed SDK, index ZED_REAR_INDEX) | 'webcam' (generic USB
+    UVC, opened MJPG for full frame-rate at 720p). `device` optionally pins the V4L2
+    device path/index for the webcam source; auto-detected when None.
 
     Writes to Handler._cam_jpeg / _cam_frame_count so /api/camera works even when no
     ROS camera node is running.  If the ROS subscriber is also active (realsense
     source), both paths write the same buffer; last write wins — harmless, same camera.
     """
+    if source == "zed":
+        _start_zed_rear_thread()
+        return
+
     try:
         import cv2
         import numpy as np
@@ -1095,8 +1115,8 @@ def _start_rear_camera_thread(source="realsense", device=None):
         _resolve_dev = lambda: _find_webcam_device(device)
     else:
         use_mjpg = False
-        label    = "RealSense color"
-        _resolve_dev = lambda: (device if device is not None else _find_rs_device())
+        label    = "webcam (V4L2)"
+        _resolve_dev = lambda: (device if device is not None else WEBCAM_DEVICE_DEFAULT)
 
     def _capture_loop():
         _interval    = 1.0 / max(RS_DISPLAY_FPS, 0.1)
@@ -1166,6 +1186,114 @@ def _start_rear_camera_thread(source="realsense", device=None):
 
     threading.Thread(target=_capture_loop, daemon=True, name="rear-cam").start()
     log.info("[rear-cam] Direct capture thread started (%s, %s)", _resolve_dev(), label)
+
+
+def _start_zed_rear_thread():
+    """Capture the ZED 2i rear camera (pyzed SDK index ZED_REAR_INDEX) for color.
+
+    Mirrors _start_zed_thread but skips depth and YOLO — the rear feed is a plain
+    color picture-in-picture. Retries forever so the feed auto-recovers on replug.
+    """
+    try:
+        import cv2
+    except ImportError:
+        log.warning("[rear-cam] cv2 not available — rear ZED capture disabled")
+        return
+
+    def _capture_loop(zed, image_mat):
+        import pyzed.sl as sl
+        runtime_params    = sl.RuntimeParameters()
+        last_display      = 0.0
+        _display_interval = 1.0 / STREAM_FPS
+        retry_sleep       = 1.0
+        lost              = 0
+
+        while True:
+            err = zed.grab(runtime_params)
+            if err == sl.ERROR_CODE.SUCCESS:
+                zed.retrieve_image(image_mat, sl.VIEW.LEFT)
+                frame = image_mat.get_data()[:, :, :3]   # BGRA → BGR
+                retry_sleep = 1.0
+                lost        = 0
+                now = time.monotonic()
+                if now - last_display >= _display_interval:
+                    last_display = now
+                    ok, enc = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                    if ok:
+                        with Handler._cam_lock:
+                            Handler._cam_jpeg            = enc.tobytes()
+                            Handler._cam_frame_count    += 1
+                            Handler._cam_connected       = True
+                            Handler._cam_last_error      = None
+                            Handler._cam_last_frame_time = time.monotonic()
+            elif err == sl.ERROR_CODE.END_OF_SVOFILE_REACHED:
+                zed.set_svo_position(0)
+            else:
+                with Handler._cam_lock:
+                    Handler._cam_connected  = False
+                    Handler._cam_last_error = f"rear ZED grab: {err}"
+                lost += 1
+                if lost >= ZED_GRAB_LOST_LIMIT:
+                    log.warning("[rear-cam] rear ZED grab failing (%s) — releasing to re-open", err)
+                    return
+                time.sleep(retry_sleep)
+                retry_sleep = min(retry_sleep * 2, 5.0)
+
+    def _start():
+        try:
+            import ctypes
+            ctypes.CDLL('/lib/aarch64-linux-gnu/libusb-1.0.so.0').libusb_init(None)
+            import pyzed.sl as sl
+        except ImportError:
+            log.warning("[rear-cam] pyzed not installed — rear ZED capture disabled")
+            return
+        except Exception as exc:
+            log.warning("[rear-cam] libusb/pyzed init failed (%s) — rear ZED disabled", exc)
+            return
+
+        attempt = 0
+        delay   = ZED_SDK_OPEN_RETRY_DELAY
+        while True:
+            attempt += 1
+            zed = None
+            try:
+                zed         = sl.Camera()
+                init_params = sl.InitParameters()
+                init_params.camera_resolution = sl.RESOLUTION.HD720
+                init_params.camera_fps        = 30
+                init_params.depth_mode        = sl.DEPTH_MODE.NONE
+                init_params.input.set_from_camera_index(ZED_REAR_INDEX)
+                err = zed.open(init_params)
+                if err == sl.ERROR_CODE.SUCCESS:
+                    image_mat = sl.Mat()
+                    log.info("[rear-cam] ZED 2i rear (SDK index %d) opened", ZED_REAR_INDEX)
+                    delay = ZED_SDK_OPEN_RETRY_DELAY
+                    _capture_loop(zed, image_mat)
+                    err = "camera lost"
+                else:
+                    with Handler._cam_lock:
+                        Handler._cam_last_error = f"rear ZED SDK open: {err}"
+            except Exception as exc:
+                err = exc
+                with Handler._cam_lock:
+                    Handler._cam_last_error = f"rear ZED SDK: {exc}"
+
+            with Handler._cam_lock:
+                Handler._cam_connected = False
+            try:
+                if zed is not None:
+                    zed.close()
+            except Exception:
+                pass
+
+            if attempt <= ZED_SDK_OPEN_RETRIES or attempt % 10 == 0:
+                log.warning("[rear-cam] rear ZED open failed (%s) — retrying in %.1fs",
+                            err, delay)
+            time.sleep(delay)
+            delay = min(delay * 1.5, 5.0)
+
+    threading.Thread(target=_start, daemon=True, name="rear-cam").start()
+    log.info("[rear-cam] ZED 2i rear capture thread started (SDK, index %d)", ZED_REAR_INDEX)
 
 
 # Person-detection (front/ZED feed), tuned for the Jetson Orin GPU.
@@ -1244,10 +1372,12 @@ def _start_zed_thread():
         cv2.putText(img, label, (x1 + 3, y1 - 4),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
 
-    # ── pyzed SDK capture (full color) ────────────────────────────────────────
+    # ── pyzed SDK capture (full color + depth for YOLO distance) ─────────────
     def _capture_loop_sdk(zed, image_mat):
         import pyzed.sl as sl
+        import numpy as np
         yolo, yolo_dev, yolo_half = _load_yolo("(SDK path)")
+        depth_mat = sl.Mat()   # reused each frame; retrieve_measure fills it in-place
 
         runtime_params   = sl.RuntimeParameters()
         last_infer       = 0.0
@@ -1287,20 +1417,28 @@ def _start_zed_thread():
                 last_infer = now
 
                 try:
-                    results  = yolo(left, classes=[YOLO_PERSON_CLASS],
-                                    conf=YOLO_CONFIDENCE, imgsz=YOLO_IMGSZ,
-                                    device=yolo_dev, half=yolo_half, verbose=False)
-                    annotated = left.copy()
+                    # Retrieve depth (metres, float32) for distance estimation.
+                    zed.retrieve_measure(depth_mat, sl.MEASURE.DEPTH)
+                    depth_data = depth_mat.get_data()
+
+                    results   = yolo(left, classes=[YOLO_PERSON_CLASS],
+                                     conf=YOLO_CONFIDENCE, imgsz=YOLO_IMGSZ,
+                                     device=yolo_dev, half=yolo_half, verbose=False)
+                    annotated  = left.copy()
                     detections = []
                     for result in results:
                         for box in result.boxes:
                             x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
                             conf = float(box.conf[0])
-                            _draw_box(annotated, x1, y1, x2, y2, f'person {conf:.0%}')
+                            dist = _depth_at_bbox(depth_data, x1, y1, x2, y2)
+                            label = f'person {conf:.0%}'
+                            if dist is not None:
+                                label += f'  {dist:.1f} m'
+                            _draw_box(annotated, x1, y1, x2, y2, label)
                             detections.append({
                                 'label':      'person',
                                 'confidence': round(conf, 3),
-                                'distance_m': None,
+                                'distance_m': round(dist, 2) if dist is not None else None,
                                 'bbox':       [x1, y1, x2, y2],
                             })
                     ok2, enc2 = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
@@ -1468,12 +1606,16 @@ def _start_zed_thread():
                 init_params = sl.InitParameters()
                 init_params.camera_resolution = sl.RESOLUTION.HD720
                 init_params.camera_fps        = 30
-                init_params.depth_mode        = sl.DEPTH_MODE.NONE
+                # PERFORMANCE depth enables distance readout in YOLO detection.
+                init_params.depth_mode        = sl.DEPTH_MODE.PERFORMANCE
+                init_params.coordinate_units  = sl.UNIT.METER
+                init_params.input.set_from_camera_index(ZED_FRONT_INDEX)
 
                 err = zed.open(init_params)
                 if err == sl.ERROR_CODE.SUCCESS:
                     image_mat = sl.Mat()
-                    log.info("[zed] ZED SDK opened — color feed active")
+                    log.info("[zed] ZED 2i front (index %d) SDK opened — color+depth active",
+                             ZED_FRONT_INDEX)
                     delay = ZED_SDK_OPEN_RETRY_DELAY
                     _capture_loop_sdk(zed, image_mat)   # returns if the camera is lost
                     # capture loop exited (camera unplugged) — release and re-open below
@@ -1510,7 +1652,7 @@ def main():
     ap.add_argument("--chassis", default=None,
                     help="agrobot | jackal — overrides config/active_chassis.yaml")
     ap.add_argument("--rear-camera", dest="rear_camera", default=None,
-                    help="realsense | webcam | none — overrides the chassis rear_camera setting")
+                    help="zed | webcam | none — overrides the chassis rear_camera setting")
     args = ap.parse_args()
 
     Handler.gnss_file = args.gnss
@@ -1608,7 +1750,7 @@ def main():
         _encode_fn = _build_encode_fn()
         # Skip the ROS camera topic when a local webcam is the rear source (the two
         # feeds would fight over the same buffer) or when the rear view is disabled.
-        if _encode_fn and CHASSIS.camera_topic and rear_src not in ("webcam", "none"):
+        if _encode_fn and CHASSIS.camera_topic and rear_src not in ("webcam", "none", "zed"):
             _cam_enc_interval = 1.0 / max(STREAM_FPS, 1.0)
             _cam_last_enc     = [0.0]   # mutable holder for the closure
             def _on_image(msg: RosImage):

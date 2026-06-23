@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """
-Person detector node: YOLOv8 (COCO) + D435i aligned depth for distance estimation.
+Person detector node: YOLOv8 (COCO) + ZED 2i depth for distance estimation.
 
-Subscribes:
-  /camera/camera/color/image_raw                   (sensor_msgs/Image, BEST_EFFORT)
-  /camera/camera/aligned_depth_to_color/image_raw  (sensor_msgs/Image, BEST_EFFORT)
+Subscribes (ZED ROS2 driver topics — adjust namespace to match your launch):
+  /zed_front/zed_node/rgb/image_rect_color   (sensor_msgs/Image, BEST_EFFORT)
+  /zed_front/zed_node/depth/depth_registered (sensor_msgs/Image, 32FC1, metres, BEST_EFFORT)
 
 Publishes:
   /object_detection/image_annotated  (sensor_msgs/Image, bgr8)
   /object_detection/detections       (std_msgs/String, JSON)
 
 Also writes /tmp/object_detections.json for the dashboard /api/detection/data endpoint.
+
+Note: the dashboard's on-demand YOLO (serve.py) uses the ZED pyzed SDK directly and
+does not need this ROS node. This node is an optional standalone path for when the
+ZED ROS2 driver (zed-ros2-wrapper) is running.
 """
 import json
 import threading
@@ -74,17 +78,17 @@ class ObjectDetector(Node):
         self._img_pub = self.create_publisher(Image,  '/object_detection/image_annotated', 1)
         self._det_pub = self.create_publisher(String, '/object_detection/detections', 10)
 
-        self.create_subscription(Image, '/camera/camera/color/image_raw',
-                                 self._colour_cb, best_effort)
+        colour_topic = self.declare_parameter(
+            'colour_topic', '/zed_front/zed_node/rgb/image_rect_color').value
+        depth_topic  = self.declare_parameter(
+            'depth_topic',  '/zed_front/zed_node/depth/depth_registered').value
+
+        self.create_subscription(Image, colour_topic, self._colour_cb, best_effort)
+        self.get_logger().info(f'Subscribing to colour: {colour_topic}')
 
         if self._use_depth:
-            self.create_subscription(
-                Image,
-                '/camera/camera/aligned_depth_to_color/image_raw',
-                self._depth_cb,
-                best_effort,
-            )
-            self.get_logger().info('Depth estimation enabled')
+            self.create_subscription(Image, depth_topic, self._depth_cb, best_effort)
+            self.get_logger().info(f'Subscribing to depth: {depth_topic}')
         else:
             self.get_logger().info('Depth estimation disabled (use_depth:=false)')
 
@@ -94,7 +98,10 @@ class ObjectDetector(Node):
     # Depth callback                                                       #
     # ------------------------------------------------------------------ #
     def _depth_cb(self, msg: Image):
-        arr = np.frombuffer(bytes(msg.data), dtype=np.uint16).reshape(msg.height, msg.width)
+        # ZED depth is 32FC1 (float32, metres). RealSense was 16UC1 (uint16, mm).
+        dtype = np.float32 if '32FC1' in msg.encoding or 'float' in msg.encoding.lower() \
+                else np.uint16
+        arr = np.frombuffer(bytes(msg.data), dtype=dtype).reshape(msg.height, msg.width)
         with self._depth_lock:
             self._depth_arr = arr
             self._depth_ts  = time.monotonic()
@@ -161,14 +168,22 @@ class ObjectDetector(Node):
             return None
 
     def _estimate_distance(self, depth_arr: np.ndarray, x1, y1, x2, y2) -> float | None:
-        """Median depth of a small patch at the bounding-box centre (mm → m)."""
+        """Median depth at bbox centre.
+
+        ZED depth is float32 in metres (NaN/inf for invalid pixels).
+        Legacy uint16 depth (RealSense) is in mm and is converted to metres.
+        """
         cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
         r      = self._depth_r
         h, w   = depth_arr.shape
         patch  = depth_arr[max(0, cy - r):min(h, cy + r + 1),
                            max(0, cx - r):min(w, cx + r + 1)]
-        valid  = patch[patch > 0]
-        return float(np.median(valid)) / 1000.0 if len(valid) > 0 else None
+        if depth_arr.dtype == np.float32:
+            valid = patch[np.isfinite(patch) & (patch > 0.1) & (patch < 40.0)]
+            return float(np.median(valid)) if len(valid) > 0 else None
+        else:   # uint16 mm (legacy)
+            valid = patch[patch > 0]
+            return float(np.median(valid)) / 1000.0 if len(valid) > 0 else None
 
     @staticmethod
     def _draw_box(img, x1, y1, x2, y2, label: str):
