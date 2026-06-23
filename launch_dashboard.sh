@@ -285,13 +285,18 @@ else
 fi
 
 log "Press Ctrl-C to stop."
-# Print the dashboard URL as the very last terminal output.
-# Skips: loopback, link-local, docker bridges, PLC subnet (192.168.*),
+# Write the URL directly to /dev/tty so it reaches the terminal regardless
+# of the log redirect and regardless of what background processes print after.
+# Skips: loopback, link-local, docker/172.*, PLC subnet (192.168.*),
 # Tailscale (100.*), and IPv6 — leaving only the main LAN/WiFi address.
-for _ip in $(hostname -I 2>/dev/null); do
-  case "$_ip" in
-    127.*|169.254.*|172.*|192.168.*|100.*|*:*) continue ;;
-  esac
-  echo "http://${_ip}:${PORT}"
-done
+{
+  echo ""
+  for _ip in $(hostname -I 2>/dev/null); do
+    case "$_ip" in
+      127.*|169.254.*|172.*|192.168.*|100.*|*:*) continue ;;
+    esac
+    echo "  http://${_ip}:${PORT}"
+  done
+  echo ""
+} > /dev/tty
 wait "$SERVER_PID"
