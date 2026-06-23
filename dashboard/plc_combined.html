@@ -1026,12 +1026,15 @@ function _startDetPoll() {
   const db = _g('detBar'); if (db) db.style.display = 'flex';
   async function poll() {
     try {
-      const d = await _fetchWithTimeout(CFG.detDataUrl, { cache:'no-store' }).then(r => r.json());
+      const r = await _fetchWithTimeout(CFG.detDataUrl, { cache:'no-store' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = await r.json();
+      if (typeof d.count === 'undefined') throw new Error('bad shape');
       const ce = _g('detCount'), de = _g('detDistances'), ae = _g('detAge');
       if (ce) { ce.textContent = d.count === 1 ? '1 person' : `${d.count} persons`; ce.style.color = d.count > 0 ? '#f85149' : '#0ca678'; }
-      if (de) de.textContent = (d.detections||[]).filter(x=>x.distance_m!==null).map(x=>`${x.distance_m.toFixed(1)} m`).join(' · ');
-      if (ae) ae.textContent = ((Date.now()/1000 - d.ts).toFixed(1)) + 's ago';
-    } catch {
+      if (de) de.textContent = (d.detections||[]).filter(x=>x.distance_m!=null).map(x=>`${x.distance_m.toFixed(1)} m`).join(' · ');
+      if (ae) ae.textContent = d.ts ? ((Date.now()/1000 - d.ts).toFixed(1)) + 's ago' : '';
+    } catch (err) {
       const ce = _g('detCount'), de = _g('detDistances'), ae = _g('detAge');
       if (ce) { ce.textContent = 'detector offline'; ce.style.color = '#3d444d'; }
       if (de) de.textContent = '';
