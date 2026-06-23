@@ -193,15 +193,9 @@ if [[ "$CHASSIS" == "agrobot" ]]; then
     fi
   fi
 
-  log "[agrobot] Starting RealSense D435i (color only — depth/alignment disabled to save CPU)"
-  ros2 run realsense2_camera realsense2_camera_node --ros-args \
-    -r __node:=camera -r __ns:=/camera \
-    -p enable_color:=true -p enable_depth:=false -p align_depth.enable:=false \
-    -p enable_infra1:=false -p enable_infra2:=false \
-    -p enable_accel:=false -p enable_gyro:=false \
-    -p initial_reset:=true -p rgb_camera.power_line_frequency:=0 &
-  log "  waiting for camera to initialise..."
-  sleep 5
+  # Cameras: ZED 2i front (pyzed SDK, color+depth) + ZED 2i rear (pyzed SDK, color).
+  # Both are opened by serve.py directly — no ROS camera driver needed.
+  log "[agrobot] Cameras: ZED 2i front (SDK, depth) + ZED 2i rear (SDK, color-only)"
 
   start_gnss
 

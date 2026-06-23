@@ -1384,60 +1384,38 @@ def _start_zed_thread():
         import pyzed.sl as sl
         import numpy as np
         yolo, yolo_dev, yolo_half = _load_yolo("(SDK path)")
-        depth_mat = sl.Mat()   # reused each frame; retrieve_measure fills it in-place
+        depth_mat = sl.Mat()   # reused each grab; retrieve_measure fills it in-place
 
-        runtime_params   = sl.RuntimeParameters()
-        last_infer       = 0.0
-        last_display     = 0.0
-        _display_interval = 1.0 / STREAM_FPS
-        retry_sleep      = 1.0
-        lost             = 0     # consecutive grab failures (camera-lost detection)
+        # ── YOLO worker thread ────────────────────────────────────────────────
+        # Inference can take >1 s (NMS on large scenes), which would stall grab()
+        # and trigger ZED grab-lost errors if done inline. The worker runs at its
+        # own pace: the grab loop writes the latest frame and signals; the worker
+        # always picks up the most recent frame (last-write-wins, no queue build-up).
+        _inf_lock  = threading.Lock()
+        _inf_frame = [None]        # (color_bgr_copy, depth_float32_copy) or None
+        _inf_event = threading.Event()
 
-        while True:
-            err = zed.grab(runtime_params)
-            if err == sl.ERROR_CODE.SUCCESS:
-                zed.retrieve_image(image_mat, sl.VIEW.LEFT)
-                # get_data() returns BGRA (4-channel); drop alpha
-                left = image_mat.get_data()[:, :, :3]
-
-                Handler._zed_connected  = True
-                Handler._zed_last_error = None
-                retry_sleep = 1.0
-                lost = 0
-
-                now_disp = time.monotonic()
-                if now_disp - last_display >= _display_interval:
-                    last_display = now_disp
-                    ok, enc = cv2.imencode('.jpg', left, [cv2.IMWRITE_JPEG_QUALITY, 75])
-                    if ok:
-                        with Handler._zed_lock:
-                            Handler._zed_jpeg            = enc.tobytes()
-                            Handler._zed_frame_count     += 1
-                            Handler._zed_last_frame_time = time.monotonic()
-
-                # On-demand: only run YOLO while a client is viewing detections.
-                if yolo is None or not Handler._detection_wanted():
+        def _yolo_worker():
+            while True:
+                _inf_event.wait()
+                _inf_event.clear()
+                with _inf_lock:
+                    data = _inf_frame[0]
+                    _inf_frame[0] = None
+                if data is None:
                     continue
-                now = time.monotonic()
-                if now - last_infer < _min_infer_interval:
-                    continue
-                last_infer = now
-
+                color, depth = data
                 try:
-                    # Retrieve depth (metres, float32) for distance estimation.
-                    zed.retrieve_measure(depth_mat, sl.MEASURE.DEPTH)
-                    depth_data = depth_mat.get_data()
-
-                    results   = yolo(left, classes=[YOLO_PERSON_CLASS],
+                    results   = yolo(color, classes=[YOLO_PERSON_CLASS],
                                      conf=YOLO_CONFIDENCE, imgsz=YOLO_IMGSZ,
                                      device=yolo_dev, half=yolo_half, verbose=False)
-                    annotated  = left.copy()
+                    annotated  = color.copy()
                     detections = []
                     for result in results:
                         for box in result.boxes:
                             x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
                             conf = float(box.conf[0])
-                            dist = _depth_at_bbox(depth_data, x1, y1, x2, y2)
+                            dist = _depth_at_bbox(depth, x1, y1, x2, y2)
                             label = f'person {conf:.0%}'
                             if dist is not None:
                                 label += f'  {dist:.1f} m'
@@ -1464,6 +1442,49 @@ def _start_zed_thread():
                 except Exception as exc:
                     log.error("[zed] YOLO error: %s", exc)
 
+        if yolo is not None:
+            threading.Thread(target=_yolo_worker, daemon=True, name="yolo-infer").start()
+
+        # ── ZED grab loop — must call grab() continuously at camera rate ──────
+        runtime_params    = sl.RuntimeParameters()
+        last_queue        = 0.0    # last time we queued a frame for the YOLO worker
+        last_display      = 0.0
+        _display_interval = 1.0 / STREAM_FPS
+        retry_sleep       = 1.0
+        lost              = 0
+
+        while True:
+            err = zed.grab(runtime_params)
+            if err == sl.ERROR_CODE.SUCCESS:
+                zed.retrieve_image(image_mat, sl.VIEW.LEFT)
+                # get_data() returns BGRA (4-channel); drop alpha
+                left = image_mat.get_data()[:, :, :3]
+
+                Handler._zed_connected  = True
+                Handler._zed_last_error = None
+                retry_sleep = 1.0
+                lost        = 0
+
+                now = time.monotonic()
+                if now - last_display >= _display_interval:
+                    last_display = now
+                    ok, enc = cv2.imencode('.jpg', left, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                    if ok:
+                        with Handler._zed_lock:
+                            Handler._zed_jpeg            = enc.tobytes()
+                            Handler._zed_frame_count    += 1
+                            Handler._zed_last_frame_time = time.monotonic()
+
+                # Queue a frame for the YOLO worker (non-blocking — never stalls grab).
+                # retrieve_measure is fast (buffer copy, computed at grab time).
+                if yolo is not None and Handler._detection_wanted():
+                    if now - last_queue >= _min_infer_interval:
+                        last_queue = now
+                        zed.retrieve_measure(depth_mat, sl.MEASURE.DEPTH)
+                        with _inf_lock:
+                            _inf_frame[0] = (left.copy(), depth_mat.get_data().copy())
+                        _inf_event.set()
+
             elif err == sl.ERROR_CODE.END_OF_SVOFILE_REACHED:
                 zed.set_svo_position(0)
             else:
@@ -1482,6 +1503,54 @@ def _start_zed_thread():
     def _capture_loop_opencv():
         yolo, yolo_dev, yolo_half = _load_yolo("(OpenCV fallback)")
 
+        # Same worker-thread pattern as the SDK path so capture isn't stalled.
+        _inf_lock  = threading.Lock()
+        _inf_frame = [None]
+        _inf_event = threading.Event()
+
+        def _yolo_worker_cv():
+            while True:
+                _inf_event.wait()
+                _inf_event.clear()
+                with _inf_lock:
+                    color = _inf_frame[0]
+                    _inf_frame[0] = None
+                if color is None:
+                    continue
+                try:
+                    results   = yolo(color, classes=[YOLO_PERSON_CLASS],
+                                     conf=YOLO_CONFIDENCE, imgsz=YOLO_IMGSZ,
+                                     device=yolo_dev, half=yolo_half, verbose=False)
+                    annotated = color.copy()
+                    detections = []
+                    for result in results:
+                        for box in result.boxes:
+                            x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+                            conf = float(box.conf[0])
+                            _draw_box(annotated, x1, y1, x2, y2, f'person {conf:.0%}')
+                            detections.append({
+                                'label':      'person',
+                                'confidence': round(conf, 3),
+                                'distance_m': None,
+                                'bbox':       [x1, y1, x2, y2],
+                            })
+                    ok2, enc2 = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    if ok2:
+                        with Handler._det_lock:
+                            Handler._det_jpeg = enc2.tobytes()
+                    payload = json.dumps({
+                        'ts': time.time(), 'count': len(detections), 'detections': detections,
+                    })
+                    try:
+                        Path(DETECTIONS_FILE).write_text(payload)
+                    except Exception:
+                        pass
+                except Exception as exc:
+                    log.error("[zed] YOLO error: %s", exc)
+
+        if yolo is not None:
+            threading.Thread(target=_yolo_worker_cv, daemon=True, name="yolo-infer").start()
+
         def _device_index():
             try:
                 target = os.readlink(ZED_DEVICE)
@@ -1494,11 +1563,11 @@ def _start_zed_thread():
             gray = frame[:, :, 1]
             return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
-        cap = None
-        last_infer    = 0.0
-        last_display  = 0.0
+        cap          = None
+        last_queue   = 0.0
+        last_display = 0.0
         _display_interval = 1.0 / STREAM_FPS
-        retry_sleep   = 1.0
+        retry_sleep  = 1.0
 
         while True:
             if cap is None or not cap.isOpened():
@@ -1530,56 +1599,22 @@ def _start_zed_thread():
             h, w = frame.shape[:2]
             left = _fix_yuyv(frame[:, :w // 2])
 
-            now_disp = time.monotonic()
-            if now_disp - last_display >= _display_interval:
-                last_display = now_disp
+            now = time.monotonic()
+            if now - last_display >= _display_interval:
+                last_display = now
                 ok, enc = cv2.imencode('.jpg', left, [cv2.IMWRITE_JPEG_QUALITY, 75])
                 if ok:
                     with Handler._zed_lock:
                         Handler._zed_jpeg            = enc.tobytes()
-                        Handler._zed_frame_count     += 1
+                        Handler._zed_frame_count    += 1
                         Handler._zed_last_frame_time = time.monotonic()
 
-            # On-demand: only run YOLO while a client is viewing detections.
-            if yolo is None or not Handler._detection_wanted():
-                continue
-            now = time.monotonic()
-            if now - last_infer < _min_infer_interval:
-                continue
-            last_infer = now
-
-            try:
-                results   = yolo(left, classes=[YOLO_PERSON_CLASS],
-                                 conf=YOLO_CONFIDENCE, imgsz=YOLO_IMGSZ,
-                                 device=yolo_dev, half=yolo_half, verbose=False)
-                annotated = left.copy()
-                detections = []
-                for result in results:
-                    for box in result.boxes:
-                        x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-                        conf = float(box.conf[0])
-                        _draw_box(annotated, x1, y1, x2, y2, f'person {conf:.0%}')
-                        detections.append({
-                            'label':      'person',
-                            'confidence': round(conf, 3),
-                            'distance_m': None,
-                            'bbox':       [x1, y1, x2, y2],
-                        })
-                ok2, enc2 = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                if ok2:
-                    with Handler._det_lock:
-                        Handler._det_jpeg = enc2.tobytes()
-                payload = json.dumps({
-                    'ts':         time.time(),
-                    'count':      len(detections),
-                    'detections': detections,
-                })
-                try:
-                    Path(DETECTIONS_FILE).write_text(payload)
-                except Exception:
-                    pass
-            except Exception as exc:
-                log.error("[zed] YOLO error: %s", exc)
+            if yolo is not None and Handler._detection_wanted():
+                if now - last_queue >= _min_infer_interval:
+                    last_queue = now
+                    with _inf_lock:
+                        _inf_frame[0] = left.copy()
+                    _inf_event.set()
 
     # ── ZED front feed: SDK only (color), retried forever. The SDK identifies the
     #    camera by its USB serial, so the front view is deterministic — it is always
