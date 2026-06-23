@@ -263,26 +263,11 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 
-_print_network_urls() {
-  log "  Remote access — open any of these on another device:"
-  local _shown=0
-  for _ip in $(hostname -I 2>/dev/null); do
-    case "$_ip" in
-      127.*|169.254.*|172.17.*|172.18.*) continue ;;  # skip loopback / link-local / docker bridge
-    esac
-    log "    →  http://${_ip}:${PORT}"
-    _shown=1
-  done
-  [[ "$_shown" == "1" ]] || log "    →  http://${NET_IP}:${PORT}"
-}
-
 if [[ "$READY" == "1" ]]; then
   if [[ "$HEADLESS" == "1" ]]; then
     log "Server ready — HEADLESS (no local browser opened)."
-    _print_network_urls
   else
     log "Server ready — opening local browser at $URL"
-    _print_network_urls
     if command -v firefox &>/dev/null; then
       setsid firefox --new-window "$URL" </dev/null &>/dev/null &
     elif command -v firefox-esr &>/dev/null; then
@@ -299,5 +284,17 @@ else
   log "Server did not respond within 30 s — check the log above"
 fi
 
-log "Press Ctrl-C to stop all services."
+log "Press Ctrl-C to stop."
+log ""
+log "  Dashboard available at:"
+_shown=0
+for _ip in $(hostname -I 2>/dev/null); do
+  case "$_ip" in
+    127.*|169.254.*|172.17.*|172.18.*) continue ;;
+  esac
+  log "    http://${_ip}:${PORT}"
+  _shown=1
+done
+[[ "$_shown" == "1" ]] || log "    http://${NET_IP}:${PORT}"
+log ""
 wait "$SERVER_PID"
