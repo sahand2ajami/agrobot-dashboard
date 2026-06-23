@@ -146,6 +146,7 @@ class Handler(SimpleHTTPRequestHandler):
     _det_lock         = threading.Lock()
     _det_jpeg: bytes  = None   # kept as fallback when _zed_frame is not yet available
     _det_boxes        = []     # [(x1,y1,x2,y2,label), ...] at stream-res; under _det_lock
+    _det_payload      = None   # last detection JSON dict; under _det_lock; served by /api/detection/data
     # On-demand detection: YOLO inference runs ONLY while a client is actively
     # viewing detections. Each detection request stamps this monotonic time; the
     # capture loop checks _detection_wanted() and skips inference entirely when the
@@ -412,13 +413,15 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _serve_detection_data(self):
         Handler._mark_detection_wanted()
-        try:
-            data = Path(DETECTIONS_FILE).read_text()
-            self._json_response(200, data.encode())
-        except FileNotFoundError:
-            self._json_response(404, b'{"error":"No detections yet"}')
-        except Exception as e:
-            self._json_response(500, json.dumps({"error": str(e)}).encode())
+        with Handler._det_lock:
+            payload = Handler._det_payload
+        if payload is None:
+            # YOLO hasn't finished its first inference yet — return empty, not an error.
+            self._json_response(200, json.dumps(
+                {"ts": time.time(), "count": 0, "detections": []}
+            ).encode())
+        else:
+            self._json_response(200, json.dumps(payload).encode())
 
     def _stream_jpeg(self, get_frame_fn):
         """Push JPEG frames as multipart/x-mixed-replace at STREAM_FPS.
@@ -1474,15 +1477,16 @@ def _start_zed_thread():
                                 'distance_m': round(dist, 2) if dist is not None else None,
                                 'bbox':       [x1, y1, x2, y2],
                             })
-                    with Handler._det_lock:
-                        Handler._det_boxes = boxes_half
-                    payload = json.dumps({
+                    det_payload = {
                         'ts':         time.time(),
                         'count':      len(detections),
                         'detections': detections,
-                    })
+                    }
+                    with Handler._det_lock:
+                        Handler._det_boxes   = boxes_half
+                        Handler._det_payload = det_payload
                     try:
-                        Path(DETECTIONS_FILE).write_text(payload)
+                        Path(DETECTIONS_FILE).write_text(json.dumps(det_payload))
                     except Exception:
                         pass
                 except Exception as exc:
@@ -1586,13 +1590,14 @@ def _start_zed_thread():
                                 'distance_m': None,
                                 'bbox':       [x1, y1, x2, y2],
                             })
-                    with Handler._det_lock:
-                        Handler._det_boxes = boxes_half
-                    payload = json.dumps({
+                    det_payload = {
                         'ts': time.time(), 'count': len(detections), 'detections': detections,
-                    })
+                    }
+                    with Handler._det_lock:
+                        Handler._det_boxes   = boxes_half
+                        Handler._det_payload = det_payload
                     try:
-                        Path(DETECTIONS_FILE).write_text(payload)
+                        Path(DETECTIONS_FILE).write_text(json.dumps(det_payload))
                     except Exception:
                         pass
                 except Exception as exc:
