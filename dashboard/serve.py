@@ -1318,44 +1318,50 @@ def _start_zed_rear_thread():
 
 # Person-detection (front/ZED feed), tuned for the Jetson Orin GPU.
 # The CPU cost of detection is dominated by fixed per-call overhead (~18 ms/call),
-# NOT by model/image size, so the CPU savings come from running ON DEMAND only
-# (see Handler._detection_wanted() — zero cost when the view is closed) and from a
-# lower inference rate. We therefore keep the accurate yolov8s @ 640 and just add
-# FP16 + GPU device + a 5 Hz cap; this never starves the (now separate) teleop loop.
-YOLO_MODEL        = 'yolov8s.pt'   # accurate model; CPU cost ≈ nano's, so no reason to shrink
+# Detection runs entirely on the GPU (CUDA FP16). CPU is only used for the
+# thin Python glue: queuing frames (numpy copy) and writing the JPEG + JSON.
+# Model: yolov8n (nano) — 3-4× faster than small on the same GPU with
+# negligible accuracy loss for nearby persons.
+# imgsz=320: 4× fewer NMS candidates than 640, which eliminates the
+# "NMS time limit exceeded" warning seen with the larger model+resolution.
+# max_det=20: further caps NMS work (unlikely to see >20 people at once).
+# At 10 Hz throttle and ~30-80 ms GPU inference, detection lag ≈ 100-200 ms.
+YOLO_MODEL        = 'yolov8n.pt'   # nano: 3-4× faster than small, GPU FP16
 YOLO_CONFIDENCE   = 0.5
 YOLO_PERSON_CLASS = 0
-YOLO_THROTTLE_HZ  = 5.0            # infer at 5 Hz while viewed (was 10) — the real CPU lever
-YOLO_IMGSZ        = 640            # full resolution for best small/distant-person accuracy
-YOLO_DEVICE       = 0              # CUDA device index (auto-falls back to CPU if unavailable)
-YOLO_HALF         = True           # FP16 on the GPU — faster, lower memory, accuracy unchanged
+YOLO_THROTTLE_HZ  = 10.0           # 10 Hz — achievable now that inference is fast
+YOLO_IMGSZ        = 320            # 320: fast NMS, good enough for nearby persons
+YOLO_MAX_DET      = 20             # cap NMS candidates
+YOLO_DEVICE       = 0              # CUDA device index (GPU-only; warns loudly if unavailable)
+YOLO_HALF         = True           # FP16 — halves GPU memory and speeds matmul
 
 
 def _load_yolo(label=""):
-    """Load the YOLO model on the GPU (FP16) with CPU thread-thrash limited, and
-    warm it up. Returns (model, device, half) or (None, 'cpu', False) on failure.
+    """Load YOLO on the GPU (CUDA FP16), limit CPU threads, and warm up.
 
-    torch.set_num_threads(1): the heavy math runs on the GPU, so letting torch
-    spawn one intra-op thread per core (12 here) only thrashes the CPU and fights
-    the control loop for cores. One thread for the small CPU-side ops is faster
-    and far steadier under load.
+    Returns (model, device, half) on success, (None, 'cpu', False) on failure.
+    torch.set_num_threads(1): all heavy math runs on the GPU; spawning one
+    intra-op thread per CPU core only causes cache thrashing with no benefit.
     """
     try:
         import numpy as np
         import torch
         from ultralytics import YOLO
         torch.set_num_threads(1)
-        if torch.cuda.is_available():
-            dev, half = YOLO_DEVICE, YOLO_HALF
-        else:
-            dev, half = "cpu", False
-            log.warning("[yolo] CUDA unavailable — running on CPU (slow)")
+        if not torch.cuda.is_available():
+            log.error("[yolo] CUDA unavailable — detection will NOT run. "
+                      "Check that the Jetson's CUDA drivers are installed.")
+            return None, "cpu", False
+        dev, half = YOLO_DEVICE, YOLO_HALF
         model = YOLO(YOLO_MODEL)
+        model.to(f'cuda:{dev}')   # pin model to GPU before warm-up
         model(np.zeros((YOLO_IMGSZ, YOLO_IMGSZ, 3), dtype=np.uint8),
               classes=[YOLO_PERSON_CLASS], imgsz=YOLO_IMGSZ, device=dev,
-              half=half, verbose=False)   # warm-up so the first real frame isn't slow
-        log.info("[yolo] %s'%s' ready (device=%s, half=%s, imgsz=%d, %.0f Hz)",
-                 f"{label} " if label else "", YOLO_MODEL, dev, half, YOLO_IMGSZ, YOLO_THROTTLE_HZ)
+              half=half, max_det=YOLO_MAX_DET, verbose=False)
+        gpu_name = torch.cuda.get_device_name(dev)
+        log.info("[yolo] %s'%s' on GPU:%d (%s) FP16=%s imgsz=%d %.0f Hz — GPU-only confirmed",
+                 f"{label} " if label else "", YOLO_MODEL, dev, gpu_name,
+                 half, YOLO_IMGSZ, YOLO_THROTTLE_HZ)
         return model, dev, half
     except Exception as exc:
         log.warning("[yolo] model unavailable — %s", exc)
@@ -1421,7 +1427,8 @@ def _start_zed_thread():
                 try:
                     results   = yolo(color, classes=[YOLO_PERSON_CLASS],
                                      conf=YOLO_CONFIDENCE, imgsz=YOLO_IMGSZ,
-                                     device=yolo_dev, half=yolo_half, verbose=False)
+                                     device=yolo_dev, half=yolo_half,
+                                     max_det=YOLO_MAX_DET, verbose=False)
                     annotated  = color.copy()
                     detections = []
                     for result in results:
@@ -1537,7 +1544,8 @@ def _start_zed_thread():
                 try:
                     results   = yolo(color, classes=[YOLO_PERSON_CLASS],
                                      conf=YOLO_CONFIDENCE, imgsz=YOLO_IMGSZ,
-                                     device=yolo_dev, half=yolo_half, verbose=False)
+                                     device=yolo_dev, half=yolo_half,
+                                     max_det=YOLO_MAX_DET, verbose=False)
                     annotated = color.copy()
                     detections = []
                     for result in results:

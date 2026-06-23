@@ -285,16 +285,13 @@ else
 fi
 
 log "Press Ctrl-C to stop."
-log ""
-log "  Dashboard available at:"
-_shown=0
+# Print the dashboard URL as the very last terminal output.
+# Skips: loopback, link-local, docker bridges, PLC subnet (192.168.*),
+# Tailscale (100.*), and IPv6 — leaving only the main LAN/WiFi address.
 for _ip in $(hostname -I 2>/dev/null); do
   case "$_ip" in
-    127.*|169.254.*|172.17.*|172.18.*) continue ;;
+    127.*|169.254.*|172.*|192.168.*|100.*|*:*) continue ;;
   esac
-  log "    http://${_ip}:${PORT}"
-  _shown=1
+  echo "http://${_ip}:${PORT}"
 done
-[[ "$_shown" == "1" ]] || log "    http://${NET_IP}:${PORT}"
-log ""
 wait "$SERVER_PID"
