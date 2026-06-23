@@ -17,6 +17,7 @@ import contextlib
 import json
 import logging
 import os
+import socket
 import socketserver
 import sys
 import threading
@@ -423,10 +424,21 @@ class Handler(SimpleHTTPRequestHandler):
         Holds the connection open; exits when the client disconnects.
         Only sends a frame when a new one is available (identity check on bytes object).
         """
+        # TCP_NODELAY: send each frame immediately without Nagle batching.
+        # SO_SNDBUF=65536: cap the OS send buffer at 64 KB (~8-12 frames at our
+        # reduced quality). When the client is slow the buffer fills and write()
+        # blocks briefly; on resume get_frame_fn() returns the LATEST frame,
+        # so stale frames are automatically dropped instead of queuing up.
+        try:
+            self.request.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            self.request.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
+        except Exception:
+            pass
         interval = 1.0 / STREAM_FPS
         self.send_response(200)
         self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", "no-cache, no-store")
+        self.send_header("Pragma", "no-cache")
         self.end_headers()
         last_frame = None
         try:
@@ -1218,7 +1230,8 @@ def _start_zed_rear_thread():
                 now = time.monotonic()
                 if now - last_display >= _display_interval:
                     last_display = now
-                    ok, enc = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                    small = cv2.resize(frame, (frame.shape[1] // 2, frame.shape[0] // 2))
+                    ok, enc = cv2.imencode('.jpg', small, [cv2.IMWRITE_JPEG_QUALITY, 60])
                     if ok:
                         with Handler._cam_lock:
                             Handler._cam_jpeg            = enc.tobytes()
@@ -1426,7 +1439,8 @@ def _start_zed_thread():
                                 'distance_m': round(dist, 2) if dist is not None else None,
                                 'bbox':       [x1, y1, x2, y2],
                             })
-                    ok2, enc2 = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    small2 = cv2.resize(annotated, (annotated.shape[1] // 2, annotated.shape[0] // 2))
+                    ok2, enc2 = cv2.imencode('.jpg', small2, [cv2.IMWRITE_JPEG_QUALITY, 60])
                     if ok2:
                         with Handler._det_lock:
                             Handler._det_jpeg = enc2.tobytes()
@@ -1468,7 +1482,10 @@ def _start_zed_thread():
                 now = time.monotonic()
                 if now - last_display >= _display_interval:
                     last_display = now
-                    ok, enc = cv2.imencode('.jpg', left, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                    # Halve resolution for the stream — cuts per-frame size ~4× and
+                    # prevents the OS/browser from buffering stale frames.
+                    small = cv2.resize(left, (left.shape[1] // 2, left.shape[0] // 2))
+                    ok, enc = cv2.imencode('.jpg', small, [cv2.IMWRITE_JPEG_QUALITY, 60])
                     if ok:
                         with Handler._zed_lock:
                             Handler._zed_jpeg            = enc.tobytes()
@@ -1534,7 +1551,8 @@ def _start_zed_thread():
                                 'distance_m': None,
                                 'bbox':       [x1, y1, x2, y2],
                             })
-                    ok2, enc2 = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    small2 = cv2.resize(annotated, (annotated.shape[1] // 2, annotated.shape[0] // 2))
+                    ok2, enc2 = cv2.imencode('.jpg', small2, [cv2.IMWRITE_JPEG_QUALITY, 60])
                     if ok2:
                         with Handler._det_lock:
                             Handler._det_jpeg = enc2.tobytes()
@@ -1602,7 +1620,8 @@ def _start_zed_thread():
             now = time.monotonic()
             if now - last_display >= _display_interval:
                 last_display = now
-                ok, enc = cv2.imencode('.jpg', left, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                small = cv2.resize(left, (left.shape[1] // 2, left.shape[0] // 2))
+                ok, enc = cv2.imencode('.jpg', small, [cv2.IMWRITE_JPEG_QUALITY, 60])
                 if ok:
                     with Handler._zed_lock:
                         Handler._zed_jpeg            = enc.tobytes()

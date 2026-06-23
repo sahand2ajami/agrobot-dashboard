@@ -263,23 +263,26 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 
+_print_network_urls() {
+  log "  Remote access — open any of these on another device:"
+  local _shown=0
+  for _ip in $(hostname -I 2>/dev/null); do
+    case "$_ip" in
+      127.*|169.254.*|172.17.*|172.18.*) continue ;;  # skip loopback / link-local / docker bridge
+    esac
+    log "    →  http://${_ip}:${PORT}"
+    _shown=1
+  done
+  [[ "$_shown" == "1" ]] || log "    →  http://${NET_IP}:${PORT}"
+}
+
 if [[ "$READY" == "1" ]]; then
   if [[ "$HEADLESS" == "1" ]]; then
     log "Server ready — HEADLESS (no local browser opened)."
-    log "  Open the dashboard from your laptop's browser at one of these"
-    log "  (whichever address your laptop can reach this Jetson on):"
-    _shown=0
-    for _ip in $(hostname -I 2>/dev/null); do
-      case "$_ip" in
-        127.*|169.254.*|172.17.*|172.18.*) continue ;;  # skip loopback / link-local / docker bridge
-      esac
-      log "    →  http://${_ip}:${PORT}"
-      _shown=1
-    done
-    [[ "$_shown" == "1" ]] || log "    →  http://${NET_IP}:${PORT}"
+    _print_network_urls
   else
-    log "Server ready — opening browser at $URL"
-    log "  Network → http://${NET_IP}:${PORT}"
+    log "Server ready — opening local browser at $URL"
+    _print_network_urls
     if command -v firefox &>/dev/null; then
       setsid firefox --new-window "$URL" </dev/null &>/dev/null &
     elif command -v firefox-esr &>/dev/null; then
