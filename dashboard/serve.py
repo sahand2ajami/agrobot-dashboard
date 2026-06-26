@@ -69,8 +69,7 @@ DASHBOARD_DIR        = Path(__file__).parent
 
 # Supabase ingest endpoint for planted-seedling records.
 _SUPABASE_INGEST_URL = "https://ingest.invalid/functions/v1/ingest"
-_SUPABASE_AUTH       = "Bearer sb_publishable_zqFL0fpTopkXVMJZD4GvBw_rPWjkR3f"
-_SUPABASE_AGROBOT_KEY   = "ed3487f602cc909606e60e3da9309e6faf8821ec4757f9eac809fb4"
+_SUPABASE_AGROBOT_KEY   = "3b26ae50466743e6a780ef28e2cd6a54d7ea765c5ec24ae666521f977a7708d3"
 GNSS_FILE_DEFAULT    = "/tmp/gnss_coords.json"
 DETECTIONS_FILE      = "/tmp/object_detections.json"
 ZED_DEVICE           = "/dev/zed2i"    # symlink used by the OpenCV grayscale fallback only
@@ -142,9 +141,8 @@ def _push_seedling(entry: dict):
         _SUPABASE_INGEST_URL,
         data=payload,
         headers={
-            "Content-Type":  "application/json",
-            "Authorization": _SUPABASE_AUTH,
-            "x-agrobot-key":    _SUPABASE_AGROBOT_KEY,
+            "Content-Type": "application/json",
+            "x-agrobot-key":   _SUPABASE_AGROBOT_KEY,
         },
         method="POST",
     )
