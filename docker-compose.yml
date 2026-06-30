@@ -1,0 +1,66 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Dual-Robot Dashboard — docker-compose  (Jetson / JetPack 6.1)
+#
+# ── Quick start ───────────────────────────────────────────────────────────────
+#   docker compose build           # build once (downloads ~4 GB)
+#   docker compose up              # start; dashboard at http://<jetson-ip>:8766
+#   docker compose down            # stop
+#
+# ── Chassis selection ─────────────────────────────────────────────────────────
+#   Change ROBOT_CHASSIS below to `jackal` for the Jackal UGV.
+#   Or edit config/active_chassis.yaml (bind-mounted, no rebuild needed).
+#
+# ── Hardware assumptions ──────────────────────────────────────────────────────
+#   This file is tuned for the agrobot Jetson deployment:
+#   • Tegra GPU exposed via nvidia-container-toolkit (runtime: nvidia)
+#   • network_mode: host — required for PLC LAN (192.168.1.2:502 Modbus TCP)
+#     and ROS 2 DDS discovery (Jackal). Access the UI at http://<jetson-ip>:8766.
+#   • privileged: true — required for pyzed to enumerate ZED cameras over USB.
+#     pyzed uses libusb directly; it cannot see cameras without host device access.
+#   • /usr/local/zed bind-mount — provides the ZED C++ runtime (libsl_zed.so).
+#     The image contains only the Python bindings (pyzed); the host must have
+#     ZED SDK 4.2.x installed (currently at 4.2.5 on this Jetson).
+#   • Serial devices (/dev/ttyUSB*, /dev/ttyACM*) — accessible via privileged
+#     mode; no need to list them explicitly.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  dashboard:
+    build: .
+    image: dual-robot-dashboard:latest
+    container_name: dual-robot-dashboard
+    restart: unless-stopped
+
+    # ── GPU: Tegra CUDA 12.6 via nvidia-container-toolkit ────────────────────
+    runtime: nvidia
+
+    # ── Networking: host mode for PLC LAN + ROS 2 DDS ────────────────────────
+    # The container shares the Jetson's network stack. The dashboard is reachable
+    # at http://<jetson-ip>:8766 (no port mapping needed or allowed here).
+    network_mode: host
+
+    # ── Privileges: full host device access for ZED USB enumeration ──────────
+    # pyzed calls libusb to find ZED cameras on the USB bus. Docker cannot
+    # enumerate USB devices without this. Serial ports (/dev/ttyUSB*, ttyACM*)
+    # are also accessible automatically — no separate `devices:` list needed.
+    privileged: true
+
+    environment:
+      # Never open a local browser inside the container
+      - DASHBOARD_HEADLESS=1
+      # Active chassis: agrobot | jackal
+      - ROBOT_CHASSIS=agrobot
+      # ZED SDK C++ runtime + CUDA (also set in /entrypoint.sh for robustness)
+      - LD_LIBRARY_PATH=/usr/local/zed/lib:/usr/local/cuda-12.6/lib64
+
+    volumes:
+      # ZED C++ runtime — pyzed loads libsl_zed.so from here at import time.
+      # The host must have ZED SDK 4.2.x installed at /usr/local/zed.
+      - /usr/local/zed:/usr/local/zed:ro
+
+      # Edit chassis config without rebuilding the image.
+      # Key files: config/active_chassis.yaml, config/chassis/agrobot.yaml
+      - ./config:/app/config
+
+      # Persist dashboard + GPS logs and plant events on the host filesystem
+      - ./logs:/app/logs

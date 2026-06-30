@@ -1,0 +1,40 @@
+# ── Git ───────────────────────────────────────────────────────────────────────
+.git/
+.gitignore
+
+# ── Python cache ─────────────────────────────────────────────────────────────
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# ── ROS 2 build artifacts (rebuilt inside the container) ─────────────────────
+build/
+install/
+log/
+
+# ── Runtime / volatile data ───────────────────────────────────────────────────
+logs/
+/tmp/
+
+# ── Reference clones (read-only; not needed in the image) ────────────────────
+reference/
+
+# ── Brand assets (gitignored; not needed for the dashboard to run) ────────────
+dashboard/logo/
+
+# ── Development / editor files ───────────────────────────────────────────────
+.env
+.env.*
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# ── Developer docs / reports (not needed at runtime) ─────────────────────────
+# NOTE: docs/ is intentionally included — docs/plc/GTS_Tree_Planter_symbols.csv
+# is read at runtime by the /api/plc/tags endpoint.
+documents/
+*.md

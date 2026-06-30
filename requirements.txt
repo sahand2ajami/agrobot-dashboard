@@ -1,56 +1,72 @@
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # Dual-Robot Dashboard (agrobot | jackal) — Python dependencies
 # Tested on Python 3.10 / Ubuntu 22.04 / ROS 2 Humble
 # Install with:  pip3 install -r requirements.txt
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 
 # Object detection (YOLOv8) — includes torch / torchvision as transitive deps
 ultralytics>=8.4
 
-# Computer vision — used by object_detector.py and dashboard/serve.py
+# Computer vision — MJPEG encoding in serve.py and legacy object_detector.py
 opencv-python>=4.5
 
-# Numerical arrays — used by object_detector.py (also pulled in by ultralytics)
+# Numerical arrays — detection pipeline (also pulled in by ultralytics)
 numpy>=1.21
 
-# GNSS and robot chassis serial communication
+# Serial communication — GNSS receiver (scripts/gnss_rtu608bt_read.py)
 pyserial>=3.5
 
-# Chassis configuration files (config/chassis/*.yaml). dashboard/chassis.py has a
-# minimal built-in fallback parser, so this is optional but recommended.
+# Chassis YAML config (config/chassis/*.yaml). dashboard/chassis.py has a minimal
+# built-in fallback parser, so this is optional but strongly recommended.
 pyyaml>=5.3
 
-# PLC Gateway client (agrobot chassis only) — serve.py relays the auger/planter/robot-arm
-# buttons to the gRPC gateway (~/plc_gateway, port 50051) via dashboard/plc_client.py.
-# Imported lazily, so these are only needed on a PLC-equipped deployment; the dashboard
-# and tests run fine without them. The vendored client stubs in dashboard/plc/ were
-# generated for protobuf 4.x — keep protobuf <5 (or regenerate the stubs to match).
-grpcio>=1.50
-protobuf>=4.21,<5
-# Build-only (NOT a runtime dep): regenerating dashboard/plc/robot_control_pb2*.py needs
-#   pip install 'grpcio-tools==1.62.3'   # pins protobuf 4.x to match the runtime above
+# Modbus TCP — direct PLC communication (dashboard/plc_client.py, dashboard/amr_plc_serve.py).
+# Imported lazily; the dashboard and tests run without a live PLC.
+pymodbus>=3.0
 
 # Test runner
 pytest>=6.0
 
-# ─────────────────────────────────────────────────────────────
-# NOT pip-installable — must come from ROS 2 Humble apt packages.
-# Common to both chassis:
+# ─────────────────────────────────────────────────────────────────────────────
+# Optional / legacy — not required for the core dashboard at runtime
+# ─────────────────────────────────────────────────────────────────────────────
+
+# gRPC stubs in dashboard/plc/ and scripts/mock_plc_gateway.py.
+# The gRPC gateway was replaced by direct Modbus TCP (plc_client.py) and is no
+# longer used by the dashboard. Uncomment only if you need the mock gateway script
+# or plan to regenerate the .proto stubs.
 #
-#   sudo apt install \
-#     ros-humble-rclpy \
-#     ros-humble-std-msgs \
-#     ros-humble-geometry-msgs \
-#     ros-humble-sensor-msgs \
-#     ros-humble-nav-msgs \
-#     ros-humble-realsense2-camera
+# grpcio>=1.50
+# protobuf>=4.21,<5
 #
-# agrobot chassis additionally needs:
+# Stub regeneration (build-only):
+#   pip install 'grpcio-tools==1.62.3'   # pins protobuf 4.x to match the stubs
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NOT pip-installable — must come from other sources
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ZED 2i cameras (pyzed / Stereolabs SDK):
+#   Jetson (aarch64): install ZED SDK from https://www.stereolabs.com/developers
+#                     then: pip install pyzed  (the SDK ships the wheel)
+#   x86-64 Linux (dev/test): pip install pyzed  (requires CUDA at runtime)
+#   Without pyzed: both ZED camera feeds are disabled; the dashboard still starts.
+
+# ROS 2 Humble (apt — NOT pip):
+#   Common to both chassis:
+#     sudo apt install \
+#       ros-humble-rclpy          \
+#       ros-humble-std-msgs       \
+#       ros-humble-geometry-msgs  \
+#       ros-humble-sensor-msgs    \
+#       ros-humble-nav-msgs
 #
-#     ros-humble-tf2-ros \
-#     ros-humble-rosbridge-server \
-#     ros-humble-robot-state-publisher \
-#     python3-colcon-common-extensions
+#   agrobot chassis additionally needs:
+#     sudo apt install \
+#       ros-humble-tf2-ros               \
+#       ros-humble-rosbridge-server      \
+#       ros-humble-robot-state-publisher \
+#       python3-colcon-common-extensions
 #
-# jackal chassis: nothing extra (the Jackal's onboard stack runs on the robot).
-# ─────────────────────────────────────────────────────────────
+#   jackal: no extra ROS packages on the Jetson (the Jackal runs its own stack).
+# ─────────────────────────────────────────────────────────────────────────────

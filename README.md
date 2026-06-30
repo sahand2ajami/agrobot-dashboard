@@ -17,17 +17,18 @@ One web dashboard that drives **two different robot platforms** from a single in
 1. [System Overview](#system-overview)
 2. [Repository Layout](#repository-layout)
 3. [Install & Build](#install--build)
-4. [Chassis Configuration](#chassis-configuration)
-5. [Quick Start](#quick-start)
-6. [Using the Dashboard](#using-the-dashboard)
-7. [PLC Integration (agrobot)](#plc-integration-agrobot)
-8. [Network Topology](#network-topology)
-9. [Camera & Detection Pipeline](#camera--detection-pipeline)
-10. [HTTP API Reference](#http-api-reference)
-11. [Adding a Third Chassis](#adding-a-third-chassis)
-12. [Tests](#tests)
-13. [Logs](#logs)
-14. [Troubleshooting](#troubleshooting)
+4. [Docker Deployment](#docker-deployment)
+5. [Chassis Configuration](#chassis-configuration)
+6. [Quick Start](#quick-start)
+7. [Using the Dashboard](#using-the-dashboard)
+8. [PLC Integration (agrobot)](#plc-integration-agrobot)
+9. [Network Topology](#network-topology)
+10. [Camera & Detection Pipeline](#camera--detection-pipeline)
+11. [HTTP API Reference](#http-api-reference)
+12. [Adding a Third Chassis](#adding-a-third-chassis)
+13. [Tests](#tests)
+14. [Logs](#logs)
+15. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -147,6 +148,9 @@ dual-robot-dashboard/
 ├── launch_dashboard_plc.sh         ← launcher: full dashboard + PLC handshake tab
 ├── launch_dashboard_wide.sh        ← launcher: wide-angle UI
 ├── requirements.txt                ← Python deps (ROS msgs come from apt, not pip)
+├── Dockerfile                      ← 3-stage build: ROS base → pip deps → app
+├── docker-compose.yml              ← Jetson deployment (GPU, host networking, ZED)
+├── .dockerignore
 └── DEVELOPMENT.md                       ← detailed developer / implementation guide
 ```
 
@@ -171,6 +175,7 @@ Python 3.10
 source /opt/ros/humble/setup.bash
 
 # 2. Install Python dependencies
+#    Includes: ultralytics, opencv-python, pyserial, pyyaml, pymodbus, pytest
 #    (rclpy and ROS message packages MUST come from apt, never pip)
 pip3 install -r requirements.txt
 
@@ -205,6 +210,108 @@ source install/setup.bash
 | LAN cable to robot | — | ✓ |
 
 > **No hardware? No problem.** The dashboard loads and the API responds without any connected hardware. Missing devices degrade gracefully — panels show "No data" or go offline rather than crashing.
+
+---
+
+## Docker Deployment
+
+A `Dockerfile` and `docker-compose.yml` are included for containerised deployments. The image is built for **NVIDIA Jetson / JetPack 6.1** (L4T R36.x, CUDA 12.6, Ubuntu 22.04, aarch64) but the same `Dockerfile` can run in CPU-only mode on any Linux machine.
+
+### Prerequisites (Jetson)
+
+| Requirement | Notes |
+|---|---|
+| JetPack 6.1 (L4T R36.x) | CUDA 12.6 |
+| `nvidia-container-toolkit` | Exposes the Tegra GPU inside the container (`runtime: nvidia`) |
+| ZED SDK 4.2.x at `/usr/local/zed` | C++ runtime is bind-mounted; not baked into the image |
+| Docker Engine + Compose plugin | `docker compose version` ≥ 2.x |
+
+### Quick start
+
+```bash
+# First run — downloads base image (~1.5 GB) and builds all layers
+docker compose build
+
+# Start — dashboard at http://<jetson-ip>:8766
+docker compose up
+
+# Stop
+docker compose down
+```
+
+The image build takes 5–10 minutes on a Jetson (downloading the ROS base + PyTorch wheel). Subsequent `docker compose up` calls start in a few seconds using the cached image.
+
+### What the container includes
+
+| Layer | Content |
+|---|---|
+| `ros:humble-ros-base-jammy` | ROS 2 Humble runtime + all needed apt packages |
+| Python pip | Everything in `requirements.txt` (pymodbus, ultralytics, opencv, pyserial, pyzed, …) |
+| JetPack torch | NVIDIA's CUDA 12.6 build of PyTorch 2.5.0 + torchvision 0.20 — replaces the CPU torch that `ultralytics` pulls |
+| pyzed 4.2 | ZED Python bindings — C++ runtime provided via `/usr/local/zed` bind-mount |
+| ROS package | `avatar_robot_base` built with `colcon` during image build |
+| App code | `dashboard/`, `scripts/`, `config/`, `docs/`, YOLO model weights |
+
+### How hardware is exposed
+
+| Hardware | Mechanism | Notes |
+|---|---|---|
+| **Tegra GPU / CUDA** | `runtime: nvidia` | nvidia-container-toolkit injects CUDA libraries |
+| **ZED cameras** | `privileged: true` | pyzed uses libusb to enumerate cameras over USB; requires host device access |
+| **ZED C++ runtime** | `/usr/local/zed` bind-mount (`:ro`) | `libsl_zed.so` must match pyzed 4.2 (ZED SDK 4.2.x on host) |
+| **Serial / USB devices** | `privileged: true` | `/dev/ttyUSB*`, `/dev/ttyACM*` accessible without explicit listing |
+| **PLC LAN + ROS 2 DDS** | `network_mode: host` | Container shares the Jetson's network stack; no port mapping needed |
+
+### Switching chassis
+
+```bash
+# Edit once — no rebuild needed
+# Option A: environment variable
+ROBOT_CHASSIS=jackal docker compose up
+
+# Option B: edit docker-compose.yml
+#   environment:
+#     - ROBOT_CHASSIS=jackal
+
+# Option C: edit config/active_chassis.yaml (bind-mounted)
+echo "chassis: jackal" > config/active_chassis.yaml
+docker compose up
+```
+
+### Updating the JetPack PyTorch wheel
+
+If you upgrade JetPack or move to a different Jetson model, update the wheel URLs in `Dockerfile`:
+
+```dockerfile
+ARG TORCH_WHL=https://developer.download.nvidia.com/compute/redist/jp/v61/pytorch/torch-...whl
+ARG TORCHVISION_WHL=https://developer.download.nvidia.com/compute/redist/jp/v61/pytorch/torchvision-...whl
+```
+
+Find the correct wheel filenames at `https://developer.download.nvidia.com/compute/redist/jp/`. Override at build time without editing the file:
+
+```bash
+docker build \
+  --build-arg TORCH_WHL=<url> \
+  --build-arg TORCHVISION_WHL=<url> \
+  -t dual-robot-dashboard .
+```
+
+### Running without a Jetson (x86, demo mode)
+
+The dashboard starts on any Linux machine with Docker. No hardware is required — cameras, GPS, and robot control show as "disconnected" but the full web UI is functional.
+
+```bash
+# CPU-only build (torch from PyPI, no pyzed GPU, no ZED cameras)
+docker build \
+  --build-arg TORCH_WHL="" \
+  --build-arg TORCHVISION_WHL="" \
+  -t dual-robot-dashboard-demo .
+
+docker run --rm -p 8766:8766 dual-robot-dashboard-demo
+# Open http://localhost:8766
+```
+
+> On non-Jetson hardware, remove `runtime: nvidia` and `privileged: true` from `docker-compose.yml`, and comment out the `/usr/local/zed` volume entry.
 
 ---
 
