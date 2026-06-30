@@ -198,8 +198,11 @@ dashboard path uses `robot_base_node` directly.
 
 ## Shared subsystems (both chassis)
 
-- **GNSS** — `scripts/gnss_p9_read.py` (Columbus P-9 Race). Auto-detects port,
-  writes `/tmp/gnss_coords.json` atomically; polled by `serve.py`.
+- **GNSS** — `scripts/gnss_rtu608bt_read.py` (GeoAstra RTU608BT — GPS+BeiDou+GLONASS+Galileo,
+  38400 baud, USB or Bluetooth). Auto-detects port (`/dev/gnss` symlink preferred, then
+  `/dev/ttyUSB*`, `/dev/ttyACM*`, `/dev/rfcomm*`). For BT: pair device (name "Geoastra",
+  PIN 1234) then `sudo rfcomm bind 0 <MAC>`. Writes `/tmp/gnss_coords.json` atomically;
+  polled by `serve.py`.
 - **Cameras** — `serve.py` opens both ZED 2i cameras directly via the pyzed SDK
   (front index 0, rear index 1) with `DEPTH_MODE.PERFORMANCE` on both. MJPEG is
   streamed to the UI at 20 fps. The chassis ROS camera topic is only used as a

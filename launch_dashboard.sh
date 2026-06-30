@@ -160,18 +160,18 @@ fi
 # ── Shared: start the GNSS reader (best-effort; skipped if no receiver) ────────
 start_gnss() {
   local dev=""
-  for _p in /dev/gnss /dev/ttyACM0 /dev/ttyACM1 /dev/ttyUSB1; do
+  for _p in /dev/gnss /dev/ttyUSB0 /dev/ttyUSB1 /dev/ttyACM0 /dev/ttyACM1 /dev/rfcomm0; do
     [[ -e "$_p" ]] && { dev="$_p"; break; }
   done
   mkdir -p "$SCRIPT_DIR/logs/gnss"
   if [[ -n "$dev" ]]; then
     [[ -r "$dev" && -w "$dev" ]] || sudo chmod a+rw "$dev" 2>/dev/null || true
     log "Starting GNSS reader on $dev"
-    python3 -u "$SCRIPT_DIR/scripts/gnss_p9_read.py" "$dev" "$SCRIPT_DIR/logs/gnss" \
+    python3 -u "$SCRIPT_DIR/scripts/gnss_rtu608bt_read.py" "$dev" "$SCRIPT_DIR/logs/gnss" \
       2>>"$LOG_FILE" >/dev/null &
     sleep 1
   else
-    log "GNSS receiver not found — GPS map will show 'No Data' (plug in P-9 Race to enable)"
+    log "GNSS receiver not found — GPS map will show 'No Data' (plug in GeoAstra RTU608BT via USB or Bluetooth to enable)"
   fi
 }
 

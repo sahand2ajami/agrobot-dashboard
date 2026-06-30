@@ -1,5 +1,5 @@
 """
-Tests for scripts/gnss_p9_read.py — NMEA parsing, checksum validation,
+Tests for scripts/gnss_rtu608bt_read.py — NMEA parsing, checksum validation,
 and JSON coordinate output.
 """
 import sys
@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 import pytest
-from gnss_p9_read import (
+from gnss_rtu608bt_read import (
     nmea_to_decimal,
     parse_gngga,
     parse_gnrmc,

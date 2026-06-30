@@ -40,7 +40,7 @@ graph TD
     subgraph Jetson ["NVIDIA Jetson (Ubuntu 22.04 + ROS 2 Humble)"]
         Server["dashboard/serve.py\nHTTP :8766\n(robot-agnostic)"]
         Chassis["dashboard/chassis.py\nloads config/chassis/&lt;active&gt;.yaml"]
-        GNSS["scripts/gnss_p9_read.py\n/tmp/gnss_coords.json"]
+        GNSS["scripts/gnss_rtu608bt_read.py\n/tmp/gnss_coords.json"]
         PLC["dashboard/plc_client.py\nModbus TCP client"]
 
         subgraph ROS ["ROS 2 Executor (4 threads)"]
@@ -126,7 +126,7 @@ dual-robot-dashboard/
 │   └── index_wide.html             ← wide-angle UI variant
 │
 ├── scripts/
-│   ├── gnss_p9_read.py             ← Columbus P-9 Race GPS reader → /tmp/gnss_coords.json
+│   ├── gnss_rtu608bt_read.py       ← GeoAstra RTU608BT GPS reader → /tmp/gnss_coords.json
 │   └── object_detector.py          ← legacy ROS detection node (not launched; detection runs in serve.py)
 │
 ├── src/avatar_robot_base/          ← agrobot Modbus driver (ROS 2 Python package)
@@ -200,7 +200,7 @@ source install/setup.bash
 |---|:---:|:---:|
 | ZED SDK (Stereolabs) + two ZED 2i cameras | ✓ | — |
 | USB-serial adapter at `/dev/ttyUSB0` | ✓ | — |
-| Columbus P-9 Race GNSS receiver (optional) | ✓ | ✓ |
+| GeoAstra RTU608BT GNSS receiver (optional) | ✓ | ✓ |
 | `ultralytics` + GPU for YOLOv8 | ✓ | ✓ |
 | LAN cable to robot | — | ✓ |
 
@@ -674,7 +674,7 @@ All tests run **without ROS or hardware**. Coverage:
 | **Chassis Battery** shows "No data" | No `Float32` on `/avatar_robot/battery`, or voltage outside the 30–70 V validity window. Confirm chassis is powered. |
 | Front or rear camera blank | ZED SDK not installed, or camera not plugged in to USB 3.0. Test: `python3 -c "import pyzed.sl as sl; print('ok')"`. Check `[cam]` lines in the launch log. |
 | Detection is slow or crashes | YOLOv8 needs `ultralytics` and CUDA. Check `nvidia-smi` and the detection log lines on startup. |
-| GPS map shows "No Data" | Plug in the Columbus P-9; the reader auto-detects `/dev/ttyACM*` and `/dev/ttyUSB1`. Check `logs/gnss/`. |
+| GPS map shows "No Data" | Plug in the GeoAstra RTU608BT (USB) or bind Bluetooth (`sudo rfcomm bind 0 <MAC>`); the reader auto-detects `/dev/ttyUSB*`, `/dev/ttyACM*`, `/dev/rfcomm0`. Check `logs/gnss/`. |
 | PLC shows "Gateway offline" | Normal when the PLC is powered off or unreachable. Driving is unaffected. Check `ping 192.168.1.2`. |
 | Port already in use | Launch with `--port 8080` (or any free port). |
 | `agrobot` helper scripts refuse to run | `start_all.sh`, `start.sh`, `teleop.sh` are agrobot-only and exit early when the active chassis is `jackal`. |
