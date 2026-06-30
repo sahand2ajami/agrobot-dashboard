@@ -251,7 +251,7 @@ ROBOT_CHASSIS=jackal ./launch_dashboard.sh
 | LS Electric PLC integration | ✓ | — |
 | ZED 2i front camera (pyzed) | ✓ | — |
 | ROS camera topic | — | ✓ |
-| Rear camera (ZED 2i / webcam) | ✓ | ✓ |
+| Rear camera | ✓ (ZED 2i via pyzed) | ✓ (RealSense via ROS topic) |
 | YOLOv8 person detection | ✓ | ✓ |
 | GNSS map | ✓ | ✓ |
 | Session recording | ✓ | ✓ |
@@ -271,7 +271,7 @@ Everything chassis-specific lives in `config/chassis/<name>.yaml`. The server an
 | `battery_topic` | agrobot | `Float32` pack voltage from `robot_base_node` |
 | `battery_min_v`, `battery_max_v` | agrobot | Voltage range → 0–100 % gauge (default 42–58 V for 14S pack) |
 | `camera_topic` | jackal | ROS camera image topic |
-| `rear_camera` | both | `zed` \| `webcam` \| `none` |
+| `rear_camera` | both | `zed` \| `realsense` \| `webcam` \| `none`. `zed` = pyzed SDK (agrobot default). `realsense` = ROS camera topic (jackal default). `webcam` = direct V4L2. `none` = rear view disabled. |
 | `rear_camera_device` | both | Optional explicit V4L2 device (e.g. `/dev/video2`) |
 | `serial_port`, `baud`, `slave_id` | agrobot | Modbus serial settings |
 | `chassis_variant` | agrobot | `T3` \| `T13` \| `T17E` — wheel geometry for odometry |
@@ -672,7 +672,8 @@ All tests run **without ROS or hardware**. Coverage:
 | Dashboard loads but driving does nothing | Is ROS sourced? agrobot: is `robot_base_node` up and `/dev/ttyUSB0` accessible? Jackal: `ping 192.168.1.200` and `ros2 topic list \| grep cmd_vel`. |
 | **Chassis Link** stays red (agrobot) | `robot_base_node` not publishing `/avatar_robot/wheel_odom`. Check the serial port and the launch log. |
 | **Chassis Battery** shows "No data" | No `Float32` on `/avatar_robot/battery`, or voltage outside the 30–70 V validity window. Confirm chassis is powered. |
-| Front or rear camera blank | ZED SDK not installed, or camera not plugged in to USB 3.0. Test: `python3 -c "import pyzed.sl as sl; print('ok')"`. Check `[cam]` lines in the launch log. |
+| Front or rear camera blank | ZED SDK not installed, or camera USB-C not seated. Test: `python3 -c "import pyzed.sl as sl; print('ok')"`. Two cameras expected: `lsusb \| grep STEREOLABS`. Check `[cam]` and `[rear-cam]` lines in the launch log. |
+| Connectivity tab shows rear camera "Offline" | Frames may not have arrived yet — wait 5–10 s for both ZED threads to open (front at SDK index 0, rear at index 1). If it stays offline, check the rear USB-C cable and the launch log for `[rear-cam]` errors. |
 | Detection is slow or crashes | YOLOv8 needs `ultralytics` and CUDA. Check `nvidia-smi` and the detection log lines on startup. |
 | GPS map shows "No Data" | Plug in the GeoAstra RTU608BT (USB) or bind Bluetooth (`sudo rfcomm bind 0 <MAC>`); the reader auto-detects `/dev/ttyUSB*`, `/dev/ttyACM*`, `/dev/rfcomm0`. Check `logs/gnss/`. |
 | PLC shows "Gateway offline" | Normal when the PLC is powered off or unreachable. Driving is unaffected. Check `ping 192.168.1.2`. |

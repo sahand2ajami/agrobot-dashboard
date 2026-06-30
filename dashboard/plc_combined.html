@@ -734,7 +734,7 @@ input[type=range] { width: 100%; accent-color: var(--teal); height: 6px; cursor:
           </div>
           <div class="cc">
             <div class="cc-top"><div class="cc-icon" style="background:#e4f4f4;color:#1f8686">CAM</div><span class="cc-name">Rear Camera</span><span class="cc-badge bg-unk" id="cc-cam-b">—</span></div>
-            <div class="cc-detail" id="cc-cam-d">RealSense D435 · /api/camera/stream</div>
+            <div class="cc-detail" id="cc-cam-d">ZED 2i rear · /api/camera/stream</div>
             <div class="cc-ts" id="cc-cam-t">—</div>
           </div>
           <div class="cc">
@@ -744,7 +744,7 @@ input[type=range] { width: 100%; accent-color: var(--teal); height: 6px; cursor:
           </div>
           <div class="cc">
             <div class="cc-top"><div class="cc-icon" style="background:#f0fdf4;color:#15803d">GPS</div><span class="cc-name">GPS / GNSS</span><span class="cc-badge bg-unk" id="cc-gps-b">—</span></div>
-            <div class="cc-detail" id="cc-gps-d">Columbus P-9 Race · /api/gnss</div>
+            <div class="cc-detail" id="cc-gps-d">GeoAstra RTU608BT · /api/gnss</div>
             <div class="cc-ts" id="cc-gps-t">—</div>
           </div>
           <div class="cc">
@@ -1112,7 +1112,7 @@ function _attachStream(imgId, errId, url, camLabel) {
     clearTimeout(img._noFrameTimer);
     if (img.parentNode && err) err.style.display = 'flex';
     if (camLabel) addLog('Camera', 'warn', `${camLabel} camera stream error — retrying in 3s`,
-      'If persistent: check RealSense/ZED USB & driver. Run serve.py to see errors.');
+      'If persistent: check ZED USB-C cable. Run serve.py to see errors.');
     setTimeout(() => { if (img.parentNode) { img.dataset.lastFrame = Date.now(); img.src = url + '?_=' + Date.now(); } }, 3000);
   };
   img.src = url + '?_=' + Date.now();
@@ -1502,7 +1502,7 @@ async function _pollGnss() {
         addLog('GPS', 'warn', 'GPS connected but no fix', 'Outdoors? Wait 30–60s. Check antenna orientation.');
       else
         addLog('GPS', 'err', 'GPS receiver disconnected',
-          'Check USB cable to Columbus P-9 Race. Run gnss_p9_read.py to diagnose.');
+          'Check USB or Bluetooth connection to GeoAstra RTU608BT. Run gnss_rtu608bt_read.py to diagnose.');
       _prevState.gnss = st;
     }
     _set('gvSats', d.sats ?? '—');
@@ -1601,13 +1601,13 @@ async function _connCam() {
       st === 'online' ? `${d.frames_received} frames received` : (d.last_error || 'No frames received'));
     if (st !== _prevState.camera) {
       if (st === 'online') addLog('Camera', 'ok',
-        `Rear camera (RealSense D435) streaming — ${d.frames_received} frames received.`);
+        `Rear camera (ZED 2i) streaming — ${d.frames_received} frames received.`);
       else if (st === 'stale') addLog('Camera', 'warn',
-        `Rear camera (RealSense) STALE — frames stopped arriving (last error: ${d.last_error || 'none'}).`,
-        'Fix: the camera connected but the stream froze. Re-seat the USB-3 cable, then restart the camera node.');
+        `Rear camera (ZED 2i rear) STALE — frames stopped arriving (last error: ${d.last_error || 'none'}).`,
+        'Fix: the camera connected but the stream froze. Re-seat the rear ZED USB-C cable, then restart the dashboard.');
       else addLog('Camera', 'err',
-        `Rear camera (RealSense D435) OFFLINE — ${d.last_error || 'no frames'}.`,
-        'Fix: 1) Re-seat the RealSense USB-3 cable (must be a blue USB-3 port). 2) Run rs-enumerate-devices to confirm the Jetson sees it. 3) Power-cycle the camera if it still does not appear.');
+        `Rear camera (ZED 2i rear) OFFLINE — ${d.last_error || 'no frames'}.`,
+        'Fix: 1) Re-seat the rear ZED 2i USB-C cable. 2) Run: lsusb | grep STEREOLABS — two entries expected. 3) Power-cycle the camera if it still does not appear.');
       _prevState.camera = st;
     }
   } catch { _ccSet('cam', 'bg-off', 'Offline', 'Dashboard request failed'); }
@@ -1616,10 +1616,10 @@ async function _connCam() {
 async function _connZed() {
   try {
     const d = await _fetchWithTimeout('/api/zed/status', {}, 2000).then(r => r.json());
-    const st = d.connected && d.has_frame ? 'online' : 'offline';
-    _ccSet('zed', st === 'online' ? 'bg-on' : 'bg-off',
-      st === 'online' ? 'Online' : 'Offline',
-      st === 'online' ? `${d.frames_received} frames received` : (d.last_error || 'ZED not available'));
+    const st = d.connected && d.has_frame ? 'online' : d.has_frame ? 'stale' : 'offline';
+    _ccSet('zed', st === 'online' ? 'bg-on' : st === 'stale' ? 'bg-par' : 'bg-off',
+      st === 'online' ? 'Online' : st === 'stale' ? 'Stale' : 'Offline',
+      st === 'online' ? `${d.frames_received} frames received` : (d.last_error || 'No frames received'));
     if (st !== _prevState.zed) {
       if (st === 'online') addLog('Camera', 'ok',
         `Front camera (ZED 2i) streaming — ${d.frames_received} frames received.`);
@@ -1648,8 +1648,8 @@ async function _connGps() {
         'GPS receiver connected but has NO satellite fix yet.',
         'Fix: move the robot to open sky and wait 30–90 s for the first fix; concrete/indoor environments block GNSS.');
       else addLog('GPS', 'err',
-        'GPS receiver OFFLINE — the Columbus P-9 is not detected.',
-        'Fix: 1) Re-seat the GPS USB cable. 2) Confirm /tmp/gnss_coords.json is updating (the gnss_p9_read.py reader must be running). 3) Check the USB serial port was auto-detected.');
+        'GPS receiver OFFLINE — GeoAstra RTU608BT not detected.',
+        'Fix: 1) Re-seat the USB cable or re-pair Bluetooth. 2) Confirm /tmp/gnss_coords.json is updating (gnss_rtu608bt_read.py must be running). 3) For BT: run sudo rfcomm bind 0 <MAC> and check /dev/rfcomm0.');
       _prevState.gnss = st;
     }
   } catch { _ccSet('gps', 'bg-off', 'Offline', 'Dashboard request failed'); }

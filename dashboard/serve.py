@@ -483,8 +483,10 @@ class Handler(SimpleHTTPRequestHandler):
             connected = Handler._zed_connected
             count     = Handler._zed_frame_count
             err       = Handler._zed_last_error
+            has_frame = Handler._zed_jpeg is not None
         body = json.dumps({
             "connected":       connected,
+            "has_frame":       has_frame,
             "frames_received": count,
             "last_error":      err,
         }).encode()
