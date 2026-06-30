@@ -37,7 +37,7 @@ class TestChassisLoading:
         assert c.max_linear == 15.0
         assert c.speed_cmd_topic == "/avatar_robot/speed_cmd"
         assert c.wheel_odom_topic == "/avatar_robot/wheel_odom"
-        assert c.camera_topic == "/camera/camera/color/image_raw"
+        assert c.camera_topic == ""  # ZED 2i opened directly via pyzed SDK, no ROS topic
         assert c.battery_topic == "/avatar_robot/battery"
         assert c.battery_min_v == 42.0
         assert c.battery_max_v == 58.0
@@ -114,8 +114,8 @@ class TestResolution:
 # ── rear-camera source (realsense | webcam) ─────────────────────────────────
 
 class TestRearCamera:
-    def test_default_is_realsense(self):
-        assert chassis.load("agrobot").rear_camera == "realsense"
+    def test_default_rear_camera(self):
+        assert chassis.load("agrobot").rear_camera == "zed"       # ZED 2i rear via pyzed SDK
         assert chassis.load("jackal").rear_camera == "realsense"
 
     def test_cli_override(self):
@@ -128,11 +128,11 @@ class TestRearCamera:
 
     def test_default_from_chassis(self, monkeypatch):
         monkeypatch.delenv("REAR_CAMERA", raising=False)
-        assert chassis.resolve_rear_camera(None, chassis.load("agrobot")) == "realsense"
+        assert chassis.resolve_rear_camera(None, chassis.load("agrobot")) == "zed"
 
     def test_invalid_value_falls_back(self, monkeypatch):
         monkeypatch.delenv("REAR_CAMERA", raising=False)
-        assert chassis.resolve_rear_camera("banana", chassis.load("agrobot")) == "realsense"
+        assert chassis.resolve_rear_camera("banana", chassis.load("agrobot")) == "zed"
 
 
 # ── serve.py: chassis-aware HTTP behaviour ──────────────────────────────────

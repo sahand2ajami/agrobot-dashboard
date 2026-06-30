@@ -131,10 +131,10 @@ class Chassis:
         self.battery_min_v    = float(self.cfg.get("battery_min_v", 42.0))
         self.battery_max_v    = float(self.cfg.get("battery_max_v", 58.0))
 
-        # Rear camera source: 'realsense' (D435 color) | 'webcam' (generic USB UVC,
+        # Rear camera source: 'zed' (ZED 2i via pyzed SDK) | 'webcam' (generic USB UVC,
         # e.g. a Logitech webcam). rear_camera_device optionally pins the V4L2 device
         # path or index; auto-detected when omitted.
-        self.rear_camera        = (self.cfg.get("rear_camera") or "realsense")
+        self.rear_camera        = (self.cfg.get("rear_camera") or "zed")
         self.rear_camera_device = self.cfg.get("rear_camera_device")
 
         # Feature flags consumed by the UI and server.
@@ -318,18 +318,18 @@ def resolve_name(cli_name=None):
 
 def resolve_rear_camera(cli_value=None, chassis=None):
     """Resolve the rear-camera source, priority:
-    --rear-camera flag  >  $REAR_CAMERA  >  chassis yaml  >  'realsense'.
+    --rear-camera flag  >  $REAR_CAMERA  >  chassis yaml  >  'zed'.
 
-    Valid sources: 'realsense' | 'webcam' | 'none' (rear view disabled).
+    Valid sources: 'zed' | 'realsense' | 'webcam' | 'none' (rear view disabled).
     'off'/'disabled' are accepted as aliases for 'none'."""
     val = (cli_value
            or os.environ.get("REAR_CAMERA")
            or (chassis.rear_camera if chassis else None)
-           or "realsense")
+           or "zed")
     val = str(val).strip().lower()
     if val in ("none", "off", "disabled", "disable", "no"):
         return "none"
-    return val if val in ("realsense", "webcam", "zed") else "realsense"
+    return val if val in ("zed", "realsense", "webcam") else "zed"
 
 
 def load(name):
