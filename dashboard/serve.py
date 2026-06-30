@@ -13,6 +13,7 @@ Usage:
     python3 dashboard/serve.py [--port 8766] [--gnss /tmp/gnss_coords.json]
 """
 import argparse
+import collections
 import contextlib
 import json
 import logging
@@ -50,6 +51,50 @@ logging.basicConfig(
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
 log = logging.getLogger("dashboard")
+
+# ── Browser-visible event log ──────────────────────────────────────────────
+# Thread-safe ring buffer served via GET /api/events?since=<unix_ts>.
+# Entries: {ts, level, source, message, suggestion}
+_event_log      = collections.deque(maxlen=500)
+_event_log_lock = threading.Lock()
+# Debounce: suppress identical (source, key) events within a time window so
+# a permanently-down PLC or disconnected camera doesn't flood the log.
+_event_debounce: dict = {}   # (source, key) → monotonic time of last emission
+
+
+def log_event(level: str, source: str, message: str,
+              suggestion: str = "", _key: str = "", _debounce_s: float = 0.0):
+    """Append a structured event to the browser-visible ring buffer.
+
+    level      : 'INFO' | 'WARN' | 'ERROR'
+    source     : subsystem label ('PLC', 'Camera', 'GNSS', 'ROS', 'System', 'Network')
+    message    : human-readable description
+    suggestion : actionable fix hint shown in the log panel
+    _key       : debounce key; if set with _debounce_s > 0, identical events are
+                 suppressed within that many seconds
+    """
+    if _key and _debounce_s > 0:
+        now = time.monotonic()
+        dk  = (source, _key)
+        if now - _event_debounce.get(dk, 0.0) < _debounce_s:
+            return
+        _event_debounce[dk] = now
+    entry = {
+        "ts":         time.time(),
+        "level":      level.upper(),
+        "source":     source,
+        "message":    message,
+        "suggestion": suggestion,
+    }
+    with _event_log_lock:
+        _event_log.append(entry)
+    lvl = level.upper()
+    if lvl == "ERROR":
+        log.error("[%s] %s", source, message)
+    elif lvl == "WARN":
+        log.warning("[%s] %s", source, message)
+    else:
+        log.info("[%s] %s", source, message)
 
 
 @contextlib.contextmanager
@@ -152,8 +197,18 @@ def _push_seedling(entry: dict):
             log.info("[seedling] Supabase ingest OK: %s", body)
     except urllib.error.HTTPError as exc:
         log.warning("[seedling] Supabase ingest HTTP %s: %s", exc.code, exc.read().decode())
+        log_event("WARN", "GNSS",
+                  f"Seedling cloud upload failed (HTTP {exc.code})",
+                  "Check internet connection and the SUPABASE_KEY value in serve.py. "
+                  "The record is saved locally in logs/planted_seedlings/seedlings.jsonl.",
+                  _key="seedling-push", _debounce_s=60)
     except Exception as exc:
         log.warning("[seedling] Supabase ingest failed: %s", exc)
+        log_event("WARN", "GNSS",
+                  f"Seedling cloud upload error: {exc}",
+                  "Check internet connection. "
+                  "The record is saved locally in logs/planted_seedlings/seedlings.jsonl.",
+                  _key="seedling-push", _debounce_s=60)
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +284,10 @@ class Handler(SimpleHTTPRequestHandler):
     _chassis_batt_smoothed    = 0.0  # median of the last valid window
     _chassis_batt_smoothed_at = 0.0  # when the smoothed value was last computed
 
+    # PLC connection state — track transitions so we only log connect/disconnect
+    # events when the state actually changes, not on every polled request.
+    _plc_last_connected = None   # None=unknown, True=up, False=down
+
     _settings_lock = threading.Lock()
     _settings: dict = {
         'maxLinear':   2.0,    # absolute max forward speed m/s (= Fast preset)
@@ -283,6 +342,8 @@ class Handler(SimpleHTTPRequestHandler):
             self._serve_plc_read('get_banner')
         elif self.path == '/api/plc/tags':
             self._serve_plc_tags()
+        elif self.path.startswith('/api/events'):
+            self._serve_events()
         else:
             # Only serve the dashboard HTML and logo assets; everything else
             # (including serve.py) returns 403 to avoid exposing server internals.
@@ -617,6 +678,13 @@ class Handler(SimpleHTTPRequestHandler):
         if abs(lx) > max_lin or abs(az) > max_ang:
             log.warning("cmd_vel rejected: lin=%.2f ang=%.2f exceeds limits from %s",
                         lx, az, self.client_address[0])
+            log_event("WARN", "ROS",
+                      f"Velocity command rejected: lin={lx:.2f} m/s, ang={az:.2f} rad/s "
+                      f"exceeds chassis limits (max lin={max_lin}, ang={max_ang})",
+                      "Reduce joystick sensitivity or increase max_linear/max_angular "
+                      "in config/chassis/agrobot.yaml (or jackal.yaml). "
+                      "Current hard limits are set in the Advanced Settings panel.",
+                      _key="cmd-vel-reject", _debounce_s=10)
             self._json_response(400, b'{"error":"velocity out of range"}')
             return
 
@@ -700,6 +768,23 @@ class Handler(SimpleHTTPRequestHandler):
             return None
         return command
 
+    def _log_plc_transition(self, result, client):
+        """Log PLC connect/disconnect transitions exactly once on state change."""
+        connected = result.get('connected', True)
+        if Handler._plc_last_connected == connected:
+            return
+        Handler._plc_last_connected = connected
+        if not connected:
+            log_event("ERROR", "PLC",
+                      f"PLC connection lost — {client.target} unreachable",
+                      "Check LAN cable between Jetson and PLC. Verify: ping 192.168.1.2  "
+                      "The PLC CPU Ethernet port must be at 192.168.1.2:502 (not the FEnet card).",
+                      _key="plc-conn", _debounce_s=60)
+        else:
+            log_event("INFO", "PLC",
+                      f"PLC connection restored — {client.target}",
+                      _key="plc-reconn", _debounce_s=5)
+
     def _serve_plc_read(self, method_name):
         """GET — forward a read RPC (get_machine_status / get_sequence_detail /
         get_auger_motor_status) and return its dict as JSON."""
@@ -707,6 +792,7 @@ class Handler(SimpleHTTPRequestHandler):
         if client is None:
             return
         result = getattr(client, method_name)()
+        self._log_plc_transition(result, client)
         self._json_response(200, json.dumps(result).encode())
 
     def _serve_plc_tags(self):
@@ -747,6 +833,13 @@ class Handler(SimpleHTTPRequestHandler):
         if command is None:
             return
         result = getattr(client, method_name)(command)
+        self._log_plc_transition(result, client)
+        if result.get('connected') and not result.get('success'):
+            log_event("WARN", "PLC",
+                      f"PLC write failed: {result.get('message', '')}",
+                      "The Modbus write landed but the PLC did not confirm. "
+                      "Check Auto mode is active and the subsystem is enabled.",
+                      _key="plc-write-fail", _debounce_s=5)
         self._json_response(200, json.dumps(result).encode())
 
     def _serve_plc_command(self, method_name):
@@ -760,6 +853,7 @@ class Handler(SimpleHTTPRequestHandler):
         if command is None:
             return
         result = getattr(client, method_name)(command)
+        self._log_plc_transition(result, client)
         self._json_response(200, json.dumps(result).encode())
 
     def _serve_fwd2m(self):
@@ -1040,6 +1134,20 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _serve_events(self):
+        """GET /api/events?since=<unix_timestamp> — return all log entries newer
+        than `since` (default 0 = all). The browser polls this every 3 s and
+        passes the timestamp of its newest entry to get only fresh events."""
+        try:
+            from urllib.parse import urlparse, parse_qs
+            qs    = parse_qs(urlparse(self.path).query)
+            since = float((qs.get('since', ['0'])[0]) or 0)
+        except Exception:
+            since = 0.0
+        with _event_log_lock:
+            events = [e for e in _event_log if e['ts'] > since]
+        self._json_response(200, json.dumps(events).encode())
+
     def log_message(self, fmt, *args):
         if args and str(args[1]) in ("200", "304"):
             return
@@ -1048,6 +1156,8 @@ class Handler(SimpleHTTPRequestHandler):
         if args and str(args[1]) in ("200", "503", "404") and "/api/detection" in str(args[0]):
             return
         if args and str(args[1]) in ("200", "503") and "/api/zed" in str(args[0]):
+            return
+        if args and str(args[1]) == "200" and "/api/events" in str(args[0]):
             return
         if args and str(args[1]) == "404":
             path = str(args[0])
@@ -1081,6 +1191,10 @@ def _recording_loop():
         import numpy as np
     except ImportError:
         log.error("[record] cv2 not available — cannot record video")
+        log_event("ERROR", "System",
+                  "Video recording failed — OpenCV (cv2) is not installed",
+                  "Install OpenCV: pip3 install opencv-python",
+                  _key="record-cv2", _debounce_s=3600)
         with Handler._rec_lock:
             Handler._rec_active = False
         return
@@ -1448,6 +1562,11 @@ def _start_zed_rear_thread():
                 lost += 1
                 if lost >= ZED_GRAB_LOST_LIMIT:
                     log.warning("[rear-cam] rear ZED grab failing (%s) — releasing to re-open", err)
+                    log_event("WARN", "Camera",
+                              f"Rear ZED camera grab failed ({err}) — reconnecting",
+                              "Unplug and replug the rear ZED 2i USB-C cable. "
+                              "Check: lsusb | grep STEREOLABS",
+                              _key="rear-zed-grab", _debounce_s=30)
                     return
                 time.sleep(retry_sleep)
                 retry_sleep = min(retry_sleep * 2, 5.0)
@@ -1511,6 +1630,11 @@ def _start_zed_rear_thread():
             if attempt <= ZED_SDK_OPEN_RETRIES or attempt % 10 == 0:
                 log.warning("[rear-cam] rear ZED open failed (%s) — retrying in %.1fs",
                             err, delay)
+                log_event("WARN", "Camera",
+                          f"Rear ZED camera unavailable (attempt {attempt}): {err}",
+                          "Check USB-C cable on the rear ZED 2i. "
+                          "Run: lsusb | grep STEREOLABS — two entries expected.",
+                          _key="rear-zed-open", _debounce_s=60)
             time.sleep(delay)
             delay = min(delay * 1.5, 5.0)
 
@@ -1553,6 +1677,12 @@ def _load_yolo(label=""):
         if not torch.cuda.is_available():
             log.error("[yolo] CUDA unavailable — detection will NOT run. "
                       "Check that the Jetson's CUDA drivers are installed.")
+            log_event("ERROR", "Camera",
+                      "YOLO person detection disabled — CUDA GPU not available",
+                      "Check Jetson GPU driver: nvidia-smi. "
+                      "If unavailable, reinstall the Jetson CUDA toolkit. "
+                      "Detection will not run until CUDA is available.",
+                      _key="yolo-cuda", _debounce_s=3600)
             return None, "cpu", False
         dev, half = YOLO_DEVICE, YOLO_HALF
         model = YOLO(YOLO_MODEL)
@@ -1567,6 +1697,11 @@ def _load_yolo(label=""):
         return model, dev, half
     except Exception as exc:
         log.warning("[yolo] model unavailable — %s", exc)
+        log_event("WARN", "Camera",
+                  f"YOLO model failed to load: {exc}",
+                  f"Check that '{YOLO_MODEL}' exists in the project root. "
+                  f"Download with: python3 -c \"from ultralytics import YOLO; YOLO('{YOLO_MODEL}')\"",
+                  _key="yolo-model", _debounce_s=3600)
         return None, "cpu", False
 
 # ZED SDK is the only color path; the OpenCV fallback is grayscale on this Jetson.
@@ -1747,6 +1882,11 @@ def _start_zed_thread():
                 # closes this handle and re-opens (by serial) when it reconnects.
                 if lost >= ZED_GRAB_LOST_LIMIT:
                     log.warning("[zed] grab failing (%s) — releasing to re-open on reconnect", err)
+                    log_event("WARN", "Camera",
+                              f"Front ZED camera grab failed ({err}) — reconnecting",
+                              "Unplug and replug the front ZED 2i USB-C cable. "
+                              "Check: lsusb | grep STEREOLABS",
+                              _key="front-zed-grab", _debounce_s=30)
                     return
                 time.sleep(retry_sleep)
                 retry_sleep = min(retry_sleep * 2, 5.0)
@@ -1940,6 +2080,11 @@ def _start_zed_thread():
             if attempt <= ZED_SDK_OPEN_RETRIES or attempt % 10 == 0:
                 log.warning("[zed] SDK open failed (%s) — retrying in %.1fs (color-only, "
                             "no grayscale)", err, delay)
+                log_event("WARN", "Camera",
+                          f"Front ZED camera unavailable (attempt {attempt}): {err}",
+                          "Check USB-C cable on the front ZED 2i. "
+                          "Run: lsusb | grep STEREOLABS — two entries expected (one per camera).",
+                          _key="front-zed-open", _debounce_s=60)
             time.sleep(delay)
             delay = min(delay * 1.5, 5.0)
 
@@ -2036,6 +2181,12 @@ def main():
                         publish_velocity(cmd[0], cmd[1])
                 except Exception as exc:
                     log.error("[speed_cmd] publish error: %s", exc)
+                    log_event("ERROR", "ROS",
+                              f"Velocity command publish failed: {exc}",
+                              "Check ROS domain ID and DDS configuration. "
+                              "Verify: ros2 topic list | grep cmd_vel  "
+                              "Restart the dashboard if the issue persists.",
+                              _key="vel-publish", _debounce_s=10)
                 dt = time.monotonic() - t0
                 if dt < period:
                     time.sleep(period - dt)
@@ -2080,6 +2231,11 @@ def main():
                     with Handler._cam_lock:
                         Handler._cam_last_error = err
                     log.error("[camera] encode error: %s", err)
+                    log_event("WARN", "Camera",
+                              f"Camera frame encode error: {err}",
+                              "Usually transient. If persistent, check camera USB connection "
+                              "and restart the dashboard.",
+                              _key="cam-encode", _debounce_s=30)
 
             _node.create_subscription(RosImage, CHASSIS.camera_topic,
                                       _on_image, _cam_qos)
@@ -2107,6 +2263,12 @@ def main():
 
     except Exception as exc:
         log.warning("[rclpy] ROS init failed — teleop will not work. Reason: %s", exc)
+        log_event("ERROR", "ROS",
+                  f"ROS 2 initialization failed — robot cannot be driven: {exc}",
+                  "Run: source /opt/ros/humble/setup.bash && source install/setup.bash  "
+                  "then restart the dashboard. If the error persists, check the ROS "
+                  "installation: ros2 doctor",
+                  _key="ros-init", _debounce_s=3600)
 
     if rear_src == "none":
         log.info("[rear-cam] rear_camera=none — rear view disabled, no rear capture")
