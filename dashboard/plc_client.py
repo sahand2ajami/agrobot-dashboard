@@ -189,6 +189,14 @@ _FENET_READ_WORD_BASE  = 1000   # FC04 input reg 0  = PLC %MW1000
 _FENET_WRITE_WORD_BASE = 5000   # FC06 reg 0         = PLC %MW5000
 _FENET_WRITE_COIL_BASE = 1000   # FC05 coil 0        = PLC %MX1000
 
+# HMI banner string addresses — PLC writes the active fault/warning text here.
+# Fault_Result STRING @ %MW1014  → FC04 reg 14  (= 1014 - _FENET_READ_WORD_BASE)
+# Warning_Result STRING @ %MW1030 → FC04 reg 30  (= 1030 - _FENET_READ_WORD_BASE)
+_BANNER_CHARS = 32   # STRING[32]: 2 ASCII chars per 16-bit word, null-padded
+_BANNER_WORDS = 16   # 32 chars / 2
+_FAULT_WORD   = 1014
+_WARNING_WORD = 1030
+
 # ── PLC register map + command tables (ported from the gateway) ──────────────
 # Logical name → LS Electric device address. Only the symbols this dashboard touches;
 # the full table lives in docs/plc/. %MX<n> = M-area bit, %MW<n> = M-area word.
@@ -368,6 +376,24 @@ class PlcClient:
         self._write(name, 0)
         return True, f"pulsed {name}: {press_val} → 0"
 
+    def _read_words_raw(self, plc_addr, count):
+        """Read `count` consecutive FC04 input registers starting at %MW<plc_addr>.
+        Returns a list of unsigned 16-bit ints, or None on Modbus error."""
+        modbus_reg = plc_addr - _FENET_READ_WORD_BASE
+        if modbus_reg < 0:
+            return None
+        res = self._client.read_input_registers(modbus_reg, count=count)
+        return None if res.isError() else list(res.registers)
+
+    @staticmethod
+    def _decode_banner_string(words):
+        """Decode 16-bit words (big-endian: high byte = first char) into an ASCII string."""
+        out = []
+        for w in words:
+            out.append((w >> 8) & 0xFF)
+            out.append(w & 0xFF)
+        return bytes(out)[:_BANNER_CHARS].split(b'\x00', 1)[0].decode('ascii', 'replace').strip()
+
     def _machine_status(self):
         """HMI_IND safety/enable/fault/mode snapshot (caller holds _lock; client live)."""
         rb = lambda n: bool(self._read(n))
@@ -506,6 +532,20 @@ class PlcClient:
                 "velocity_target": ri("AUGER_MOTOR_VEL_TARGET"),
                 "velocity_actual": ri("AUGER_MOTOR_VEL_ACTUAL"),
             }
+        return self._op(fn)
+
+    def get_banner(self):
+        """Read the PLC's active fault and warning banner strings (Fault_Result @
+        %MW1014, Warning_Result @ %MW1030) — the same text the HMI banner shows.
+        An empty fault string means nothing is currently faulted."""
+        def fn():
+            fault_words   = self._read_words_raw(_FAULT_WORD,   _BANNER_WORDS)
+            warning_words = self._read_words_raw(_WARNING_WORD, _BANNER_WORDS)
+            fault   = self._decode_banner_string(fault_words)   if fault_words   else ''
+            warning = self._decode_banner_string(warning_words) if warning_words else ''
+            if fault.lower() in ('no fault', ''):
+                fault = ''
+            return {'success': True, 'message': 'OK', 'fault': fault, 'warning': warning}
         return self._op(fn)
 
     def ping(self):

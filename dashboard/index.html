@@ -343,6 +343,13 @@
     .plc-symtable td.addr { color: #58a6ff; }
     .plc-symtable tr.used td { color: #e6edf3; }
 
+    /* ── PLC alert items (settings panel + PLC reference panel) ── */
+    .plc-alert { display: flex; flex-direction: column; gap: 6px; }
+    .plc-alert-item { padding: 7px 10px; border-radius: 5px; font-size: 13px; line-height: 1.4; border: 1px solid; }
+    .plc-alert-item.fault   { background: #2d0b0a; color: #f85149; border-color: #9e2620; }
+    .plc-alert-item.warning { background: #2d1f00; color: #d29922; border-color: #9e6a03; }
+    .plc-alert-item.ok      { color: #6e7681; font-size: 12px; border-color: transparent; background: none; }
+
     /* ── Action cluster (actuators + 2m + REC) ── */
     /* Flex rows so each row fills the same total width regardless of how many
        buttons it holds — e.g. row 2 with 2 buttons (jackal) still spans the full
@@ -1221,6 +1228,14 @@
       </div>
     </div>
 
+    <!-- PLC Alerts — live fault/warning banner text from the HMI registers. -->
+    <div class="sp-section" data-chassis-feature="plc">
+      <div class="sp-section-title">PLC Alerts</div>
+      <div class="plc-alert" id="plcAlertsBody">
+        <div class="plc-alert-item ok">No active alerts</div>
+      </div>
+    </div>
+
     <!-- Satellite Navigation (GNSS) -->
     <div class="sp-section">
       <div class="sp-section-title">Satellite Navigation</div>
@@ -2052,6 +2067,8 @@ function _toggleActuatorLocal(which) {
 let _plcEnabled         = false;
 let _plcStatus          = { connected: false };
 let _plcStatusPollTimer = null;
+let _plcBanner          = { fault: '', warning: '', connected: false };
+let _plcBannerTimer     = null;
 let _plcSeqPollTimer    = null;
 let _plcSeqDeadline     = 0;       // keep polling sequence state until this time (ms)
 let _augerWasInCycle    = false;   // edge detection for "Auger complete"
@@ -2112,6 +2129,35 @@ function plcRobot(cmd) {
   _plcPost('/api/plc/robot', cmd).then(r => {
     if (_plcToast(r, 'Robot arm: ' + cmd.replace(/_/g, ' '))) _pollPlcStatus();
   });
+}
+
+/* — PLC banner: Fault_Result @ %MW1014 / Warning_Result @ %MW1030 — */
+function _renderPlcBanner() {
+  const connected = _plcBanner.connected !== false;
+  const fault   = (_plcBanner.fault   || '').trim();
+  const warning = (_plcBanner.warning || '').trim();
+  let html;
+  if (!connected) {
+    html = '<div class="plc-alert-item ok">Gateway offline</div>';
+  } else {
+    let h = '';
+    if (fault)   h += '<div class="plc-alert-item fault"><strong>FAULT</strong>: '   + _plcEsc(fault)   + '</div>';
+    if (warning) h += '<div class="plc-alert-item warning"><strong>WARNING</strong>: ' + _plcEsc(warning) + '</div>';
+    html = h || '<div class="plc-alert-item ok">No active alerts</div>';
+  }
+  const settingsEl = document.getElementById('plcAlertsBody');
+  if (settingsEl) settingsEl.innerHTML = html;
+  const refEl = document.getElementById('plcRefBanner');
+  if (refEl)      refEl.innerHTML = html;
+}
+
+async function _pollPlcBanner() {
+  if (!_plcEnabled) return;
+  try {
+    const d = await _fetchWithTimeout('/api/plc/banner', { cache: 'no-store' }, 2500).then(r => r.json());
+    _plcBanner = d || { connected: false };
+  } catch { _plcBanner = { connected: false }; }
+  _renderPlcBanner();
 }
 
 /* — Machine status poll (always on while PLC enabled) — */
@@ -2359,6 +2405,7 @@ function _renderPlcRef() {
   }
   const m = _plcRefMap.map;
   let h = '<div class="plc-ref-conn" id="plcRefConn">● Gateway —</div>';
+  h += '<div class="plc-alert" id="plcRefBanner" style="margin:8px 0 16px"></div>';
 
   // Read groups — each field shows its live value.
   h += '<div class="sp-section"><div class="sp-section-title">Tags we read from the PLC</div>';
@@ -2441,6 +2488,7 @@ function _updatePlcRefLive() {
       }
     });
   });
+  _renderPlcBanner();
 }
 
 let _modbusMasterDragging = false;
@@ -2725,7 +2773,9 @@ function _applyChassisConfig() {
       _plcEnabled = feats.plc === true;
       if (_plcEnabled && !_plcStatusPollTimer) {
         _pollPlcStatus();
+        _pollPlcBanner();
         _plcStatusPollTimer = setInterval(_pollPlcStatus, 1000);
+        _plcBannerTimer     = setInterval(_pollPlcBanner, 5000);
       }
       if (cfg.chassis) {
         document.title = cfg.chassis.charAt(0).toUpperCase() + cfg.chassis.slice(1) +

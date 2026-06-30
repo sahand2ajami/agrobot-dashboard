@@ -279,6 +279,8 @@ class Handler(SimpleHTTPRequestHandler):
             self._serve_plc_read('get_sequence_detail')
         elif self.path == '/api/plc/auger_motor':
             self._serve_plc_read('get_auger_motor_status')
+        elif self.path == '/api/plc/banner':
+            self._serve_plc_read('get_banner')
         elif self.path == '/api/plc/tags':
             self._serve_plc_tags()
         else:

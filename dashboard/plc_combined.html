@@ -432,6 +432,13 @@ header {
 .cs-reg  { font-family: var(--mono); font-weight: 700; color: #1e293b; min-width: 82px; }
 .cs-desc { color: #374151; flex: 1; }
 .cs-vals { font-family: var(--mono); font-size: 12px; color: #6b7280; white-space: nowrap; }
+/* ── PLC alert banner (above Event Log in PLC tab) ── */
+.plc-banner { padding: 6px 16px; display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--border); flex-shrink: 0; }
+.plc-banner-item { padding: 5px 10px; border-radius: 4px; font-size: 13px; font-weight: 600; border: 1px solid; }
+.plc-banner-item.fault   { background: var(--red-lt);   color: var(--red);   border-color: var(--red-bd); }
+.plc-banner-item.warning { background: var(--amber-lt); color: var(--amber); border-color: #fcd34d; }
+.plc-banner-item.ok      { color: var(--dim); font-size: 12px; font-weight: 400; border-color: transparent; background: none; }
+
 .plc-log { flex-shrink: 0; height: 195px; display: flex; flex-direction: column; border-top: 2px solid var(--border); }
 .plc-log-hdr {
   display: flex; align-items: center; gap: 10px; padding: 6px 16px;
@@ -801,6 +808,11 @@ input[type=range] { width: 100%; accent-color: var(--teal); height: 6px; cursor:
           <span class="cs-desc">AMR tells PLC: Robot movement state (auto)</span>
           <span class="cs-vals">bit 0 (1) = Stationary · bit 1 (2) = Moving</span>
         </div>
+      </div>
+
+      <!-- PLC Alerts — active fault/warning banner from %MW1014/%MW1030. -->
+      <div id="plc-banner-box" class="plc-banner">
+        <div class="plc-banner-item ok">No active alerts</div>
       </div>
 
       <div class="plc-log">
@@ -2094,9 +2106,56 @@ _addLog('li', 'Auger/Planter buttons drive %MW5110/5111; auto-release on Cycle C
 
 _syncActuatorButtons();
 
+/* — PLC banner: Fault_Result @ %MW1014 / Warning_Result @ %MW1030 — */
+let _bannerPrev = { fault: '', warning: '' };
+
+function _esc(s) {
+  return String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+}
+
+function _renderBannerBox(d) {
+  const box = _g('plc-banner-box');
+  if (!box) return;
+  const connected = d && d.connected !== false;
+  const fault   = (d?.fault   || '').trim();
+  const warning = (d?.warning || '').trim();
+  let h = '';
+  if (!connected) {
+    h = '<div class="plc-banner-item ok">Gateway offline</div>';
+  } else if (!fault && !warning) {
+    h = '<div class="plc-banner-item ok">No active alerts</div>';
+  } else {
+    if (fault)   h += '<div class="plc-banner-item fault">FAULT: '   + _esc(fault)   + '</div>';
+    if (warning) h += '<div class="plc-banner-item warning">WARNING: ' + _esc(warning) + '</div>';
+  }
+  box.innerHTML = h;
+}
+
+async function _pollBanner() {
+  let d;
+  try { d = await _fetchWithTimeout('/api/plc/banner', {}, 2500).then(r => r.json()); }
+  catch { d = { connected: false, fault: '', warning: '' }; }
+  const fault   = (d?.fault   || '').trim();
+  const warning = (d?.warning || '').trim();
+  // Log state changes to the PLC event log (pipes through to the Logs tab PLC filter)
+  if (d?.connected !== false) {
+    if (fault !== _bannerPrev.fault) {
+      if (fault)   _addLog('le2', 'FAULT: ' + fault);
+      else         _addLog('lc',  'Fault cleared');
+    }
+    if (warning !== _bannerPrev.warning) {
+      if (warning) _addLog('lch', 'WARNING: ' + warning);
+      else         _addLog('li',  'Warning cleared');
+    }
+  }
+  _bannerPrev = { fault, warning };
+  _renderBannerBox(d);
+}
+
 setInterval(_pollPlc,           500);
 setInterval(_pollGnss,         1000);
 setInterval(_pollConn,         5000);
+setInterval(_pollBanner,       5000);
 
 // Battery polling with log-on-change + sidebar gauge update
 let _prevBattPct = null;
@@ -2140,6 +2199,7 @@ setInterval(async () => {
 _pollPlc();
 _pollGnss();
 _pollConn();
+_pollBanner();
 </script>
 </body>
 </html>
