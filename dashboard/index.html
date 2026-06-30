@@ -771,6 +771,107 @@
     .sp-odom-unit  { font-size: 13px; color: #7d8590; }
     .sp-odom-pulse { font-size: 12px; color: #3d444d; font-variant-numeric: tabular-nums; margin-top: 4px; }
 
+    /* ── Event log bell button badge ── */
+    .log-unread-badge {
+      position: absolute; top: 6px; right: 6px;
+      background: #da3633; color: #fff;
+      font-size: 10px; font-weight: 700; line-height: 1;
+      padding: 2px 5px; border-radius: 10px;
+      pointer-events: none;
+    }
+    #logBtn { position: relative; }
+
+    /* ── Event log panel ── */
+    .log-panel {
+      position: fixed;
+      top: 70px; right: 0; bottom: 0;
+      width: 560px; max-width: 100%;
+      background: #0d1117;
+      border-left: 1px solid #30363d;
+      z-index: 2001;
+      transform: translateX(100%);
+      transition: transform .25s cubic-bezier(.4,0,.2,1);
+      display: flex; flex-direction: column;
+      overflow: hidden;
+    }
+    .log-panel.open {
+      transform: translateX(0);
+      box-shadow: -6px 0 24px rgba(0,0,0,.5);
+    }
+    .log-toolbar {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 16px;
+      border-bottom: 1px solid #21262d;
+      flex-shrink: 0;
+    }
+    .log-filter-btn {
+      padding: 4px 10px; border-radius: 5px;
+      background: #161b22; border: 1px solid #30363d;
+      color: #7d8590; font-size: 12px; font-weight: 600;
+      cursor: pointer; transition: all .15s;
+    }
+    .log-filter-btn.active     { background: #1f262e; border-color: #388bfd; color: #58a6ff; }
+    .log-filter-btn.lvl-warn   { border-color: #5a3e00; color: #d29922; }
+    .log-filter-btn.lvl-warn.active { background: #2d1f00; border-color: #d29922; }
+    .log-filter-btn.lvl-error  { border-color: #5a1e1e; color: #f85149; }
+    .log-filter-btn.lvl-error.active { background: #2d0b0a; border-color: #f85149; }
+    .log-clear-btn {
+      margin-left: auto; padding: 4px 10px; border-radius: 5px;
+      background: transparent; border: 1px solid #30363d;
+      color: #7d8590; font-size: 12px; cursor: pointer;
+      transition: all .15s;
+    }
+    .log-clear-btn:hover { background: #21262d; color: #e6edf3; }
+    .log-entries {
+      flex: 1; overflow-y: auto;
+      padding: 8px 0;
+    }
+    .log-empty {
+      padding: 40px 20px; text-align: center;
+      color: #3d444d; font-size: 13px;
+    }
+    .log-entry {
+      padding: 8px 16px;
+      border-bottom: 1px solid #161b22;
+      cursor: pointer;
+      transition: background .1s;
+    }
+    .log-entry:hover { background: #161b22; }
+    .log-entry.expanded .log-suggestion { display: block; }
+    .log-entry-header {
+      display: flex; align-items: baseline; gap: 8px;
+    }
+    .log-ts {
+      font-size: 11px; color: #3d444d;
+      font-variant-numeric: tabular-nums; flex-shrink: 0;
+    }
+    .log-lvl {
+      font-size: 10px; font-weight: 700; letter-spacing: .5px;
+      padding: 1px 5px; border-radius: 3px; flex-shrink: 0;
+    }
+    .log-lvl-INFO  { background: #1c3a5a; color: #58a6ff; }
+    .log-lvl-WARN  { background: #2d1f00; color: #d29922; }
+    .log-lvl-ERROR { background: #2d0b0a; color: #f85149; }
+    .log-src {
+      font-size: 11px; color: #7d8590; flex-shrink: 0;
+    }
+    .log-msg {
+      font-size: 13px; color: #e6edf3;
+      flex: 1; min-width: 0;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .log-entry.expanded .log-msg { white-space: normal; }
+    .log-suggestion {
+      display: none;
+      margin-top: 6px; padding: 7px 10px;
+      background: #161b22; border-left: 2px solid #388bfd;
+      border-radius: 0 4px 4px 0;
+      font-size: 12px; color: #8b949e; line-height: 1.5;
+    }
+    @media (max-width: 768px) {
+      .log-panel { top: 52px; width: 100%; max-width: 100%; }
+    }
+
     /* ── Toast ── */
     .toast {
       position: fixed; bottom: 24px; left: 50%;
@@ -903,6 +1004,7 @@
          onerror="this.style.display='none';document.getElementById('logoText').style.display='block'">
     <span id="logoText" style="display:none;font-size:18px;font-weight:700;color:#e6edf3;letter-spacing:.5px">AGROBOT ROBOTICS</span>
     <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+      <button class="gear-btn" id="logBtn" onclick="openLog()" title="Event Log"><i class="ti ti-bell" aria-hidden="true"></i></button>
       <button class="gear-btn" id="plcRefBtn" data-chassis-feature="plc" onclick="openPlcPanel()" title="PLC Reference &amp; Diagnostics"><i class="ti ti-cpu" aria-hidden="true"></i></button>
       <button class="gear-btn" id="gearBtn" onclick="openSettings()" title="Advanced Settings"><i class="ti ti-settings" aria-hidden="true"></i></button>
     </div>
@@ -1068,6 +1170,9 @@
 
   </div><!-- /main -->
 </div><!-- /dash -->
+
+<!-- ── Log overlay ── -->
+<div class="settings-overlay" id="logOverlay" onclick="closeLog()"></div>
 
 <!-- ── Settings overlay ── -->
 <div class="settings-overlay" id="settingsOverlay" onclick="closeSettings()"></div>
@@ -1280,6 +1385,23 @@
   </div>
 </div>
 
+<!-- Event log panel -->
+<div class="log-panel" id="logPanel">
+  <div class="sp-header">
+    <span class="sp-title"><i class="ti ti-bell" aria-hidden="true"></i> Event Log</span>
+    <button class="sp-close" onclick="closeLog()" title="Close"><i class="ti ti-x" aria-hidden="true"></i></button>
+  </div>
+  <div class="log-toolbar">
+    <button class="log-filter-btn active"    id="lfAll"   onclick="_setLogFilter('ALL')">All</button>
+    <button class="log-filter-btn lvl-warn"  id="lfWarn"  onclick="_setLogFilter('WARN')">Warn</button>
+    <button class="log-filter-btn lvl-error" id="lfError" onclick="_setLogFilter('ERROR')">Error</button>
+    <button class="log-clear-btn" onclick="_clearLog()"><i class="ti ti-trash" style="font-size:13px"></i> Clear</button>
+  </div>
+  <div class="log-entries" id="logEntries">
+    <div class="log-empty" id="logEmpty">No events yet</div>
+  </div>
+</div>
+
 <!-- Toast notification -->
 <div class="toast" id="toast"></div>
 
@@ -1344,8 +1466,22 @@ function publishCmdVel(lin, ang) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ linear_x: lin, angular_z: ang }),
-  }).then(r => { _setServerStatus(r.ok || r.status < 500); })
-    .catch(() => { _setServerStatus(false); });
+  }).then(r => {
+    _setServerStatus(r.ok || r.status < 500);
+    if (r.status === 400) {
+      addLogEntry('WARN', 'Network',
+        `Velocity command rejected by server (lin=${lin.toFixed(2)}, ang=${ang.toFixed(2)})`,
+        'The command exceeded chassis velocity limits. ' +
+        'Reduce speed in Advanced Settings or check max_linear/max_angular in the chassis YAML.');
+    }
+  }).catch(() => {
+    _setServerStatus(false);
+    _debounceLog('cmdvel-timeout', 'WARN', 'Network',
+      'Lost contact with dashboard server (cmd_vel timeout)',
+      'Check that the Jetson is on and the network cable is connected. ' +
+      'The robot will stop automatically via the 0.5 s deadman timeout.',
+      15);
+  });
 }
 function publishStop() { publishCmdVel(0, 0); }
 
@@ -1827,7 +1963,12 @@ function toggleTrackRecord() {
     fetch('/api/record/start', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ started_at: _trackStartedAt }),
-    }).then(r=>r.json()).then(d=>{ if(d.dir) console.log(`[record] → ${d.dir}`); }).catch(()=>{});
+    }).then(r=>r.json()).then(d=>{ if(d.dir) console.log(`[record] → ${d.dir}`); })
+      .catch(() => {
+        addLogEntry('ERROR', 'System',
+          'Failed to start video recording on the server',
+          'Check server logs for details. Verify logs/ directory permissions on the Jetson.');
+      });
   } else {
     _trackRecording = false;
     btn.classList.remove('recording'); lbl.textContent = 'REC';
@@ -1837,7 +1978,12 @@ function toggleTrackRecord() {
       fetch('/api/track/save', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ points:_trackPoints, started_at:_trackStartedAt, ended_at:endedAt }),
-      }).then(r=>r.json()).then(d=>{ if(d.saved) console.log(`[track] saved → ${d.saved} (${d.points} pts)`); }).catch(()=>{});
+      }).then(r=>r.json()).then(d=>{ if(d.saved) console.log(`[track] saved → ${d.saved} (${d.points} pts)`); })
+        .catch(() => {
+          addLogEntry('WARN', 'GNSS',
+            `GPS track save failed (${_trackPoints.length} points lost)`,
+            'Check server logs for details. Verify logs/recordings/ directory exists and is writable.');
+        });
     }
     // Release trace after 2s, show only location dot (Google Maps style)
     _trackClearTimer = setTimeout(() => {
@@ -1899,6 +2045,11 @@ async function pollGNSS() {
   } catch (_) {
     if (++gnssMissCount === 3) {
       _gnssHasFix = false; _updateLocateBtn();
+      addLogEntry('WARN', 'GNSS',
+        'GPS receiver unreachable — 3 consecutive poll failures',
+        'Check that gnss_rtu608bt_read.py is running. ' +
+        'Verify serial port: ls /dev/gnss /dev/ttyUSB* /dev/rfcomm*  ' +
+        'For Bluetooth: ensure the device is paired and rfcomm is bound.');
     }
   }
 }
@@ -2021,7 +2172,13 @@ function _recordPlant() {
       alt:        g.alt ?? null,
     }),
   }).then(() => showToast(`Seedling #${_plantCount} logged`))
-    .catch(() => showToast('Seedling logged locally (server unreachable)', true));
+    .catch(() => {
+      showToast('Seedling logged locally (server unreachable)', true);
+      addLogEntry('WARN', 'GNSS',
+        `Seedling #${_plantCount} could not be saved to server`,
+        'The plant count was incremented locally but the log entry may be lost on page reload. ' +
+        'Check server connectivity and manually record this planting if needed.');
+    });
 }
 
 // Brief press feedback so momentary buttons visibly "release themselves".
@@ -2156,6 +2313,22 @@ async function _pollPlcBanner() {
   try {
     const d = await _fetchWithTimeout('/api/plc/banner', { cache: 'no-store' }, 2500).then(r => r.json());
     _plcBanner = d || { connected: false };
+    if (d && d.connected !== false) {
+      if (d.fault && d.fault.trim()) {
+        _debounceLog('plc-banner-fault', 'ERROR', 'PLC',
+          `PLC fault: ${d.fault.trim()}`,
+          'This is the HMI fault banner text from the PLC. ' +
+          'Resolve the cause, then press FAULT RESET in Machine Setup.',
+          60);
+      }
+      if (d.warning && d.warning.trim()) {
+        _debounceLog('plc-banner-warn', 'WARN', 'PLC',
+          `PLC warning: ${d.warning.trim()}`,
+          'This is the HMI warning banner text from the PLC. ' +
+          'Review machine state before continuing.',
+          60);
+      }
+    }
   } catch { _plcBanner = { connected: false }; }
   _renderPlcBanner();
 }
@@ -2166,6 +2339,47 @@ async function _pollPlcStatus() {
   try { d = await _fetchWithTimeout('/api/plc/status', { cache: 'no-store' }, 2500).then(r => r.json()); }
   catch { d = { connected: false }; }
   _plcStatus = d;
+
+  // Log PLC connection state transitions
+  const connected = d && d.connected !== false;
+  if (_logPlcWasConnected !== connected) {
+    if (_logPlcWasConnected !== null) {
+      if (!connected) {
+        addLogEntry('ERROR', 'PLC',
+          'PLC connection lost',
+          'Check LAN cable between Jetson (eno1) and PLC CPU Ethernet port (192.168.1.2:502). ' +
+          'Verify: ping 192.168.1.2');
+      } else {
+        addLogEntry('INFO', 'PLC', 'PLC connection restored');
+      }
+    }
+    _logPlcWasConnected = connected;
+  }
+
+  // Log safety state changes
+  if (connected) {
+    if (d.faulted) {
+      _debounceLog('plc-fault', 'WARN', 'PLC',
+        'PLC fault active — machine halted',
+        'Check the fault banner in the PLC status strip. ' +
+        'Resolve the root cause, then press FAULT RESET in Machine Setup.',
+        30);
+    }
+    if (!d.estop_ok) {
+      _debounceLog('plc-estop', 'WARN', 'PLC',
+        'E-stop is active — robot motion disabled',
+        'Check all E-stop buttons and safety interlocks. ' +
+        'Release the E-stop button then verify estop_ok turns green before resuming.',
+        30);
+    }
+    if (!d.gate_ok) {
+      _debounceLog('plc-gate', 'WARN', 'PLC',
+        'Safety gate is open — sequence start blocked',
+        'Close and latch the safety gate before starting a planting sequence.',
+        30);
+    }
+  }
+
   _renderPlcStatus(d);
 }
 
@@ -2595,6 +2809,10 @@ function applySettings() {
     })
     .catch(e => {
       showToast('Failed — ' + (e.message || 'unknown'), true);
+      addLogEntry('WARN', 'System',
+        'Settings apply failed: ' + (e.message || 'server rejected'),
+        'Check the server terminal for validation errors. ' +
+        'Verify maxLinear (0.05–15), maxAngular (0.05–15), modbusSpeed (0–32767).');
     })
     .finally(() => {
       setTimeout(() => {
@@ -2618,6 +2836,171 @@ function saveSeedlingType() {
     .then(() => showToast(seedlingType ? `Seedling type set: ${seedlingType}` : 'Seedling type cleared'))
     .catch(() => showToast('Failed to save seedling type', true));
 }
+
+/* ── Event Log ──────────────────────────────────────────────────────── */
+let _logEntries    = [];          // all entries (client + server)
+let _logFilter     = 'ALL';       // 'ALL' | 'WARN' | 'ERROR'
+let _logUnread     = 0;           // unread error/warn count while panel closed
+let _logOpen       = false;
+let _logLastTs     = 0;           // newest server event ts seen so far
+let _logPollTimer  = null;
+let _logAutoScroll = true;        // auto-scroll unless user scrolled up
+
+// State tracking to generate client-side transition events
+let _logPlcWasConnected  = null;
+let _logOdomWasConnected = null;
+let _logGnssWasMissing   = false;
+
+// Client-side debounce map: key → last-logged timestamp (seconds)
+const _logDebounce = {};
+
+function _debounceLog(key, level, source, message, suggestion, debounceS) {
+  const now = Date.now() / 1000;
+  if (_logDebounce[key] && (now - _logDebounce[key]) < debounceS) return;
+  _logDebounce[key] = now;
+  addLogEntry(level, source, message, suggestion);
+}
+
+function addLogEntry(level, source, message, suggestion) {
+  const entry = { ts: Date.now() / 1000, level, source, message, suggestion: suggestion || '' };
+  _logEntries.push(entry);
+  if (_logEntries.length > 500) _logEntries.shift();
+  _renderLogEntry(entry);
+  if (!_logOpen && (level === 'WARN' || level === 'ERROR')) {
+    _logUnread++;
+    _updateLogBadge();
+  }
+  // Error toasts also write to the log — showToast already handles display.
+}
+
+function _renderLogEntry(entry) {
+  if (_logFilter !== 'ALL' && entry.level !== _logFilter) return;
+  const el    = document.getElementById('logEntries');
+  const empty = document.getElementById('logEmpty');
+  if (empty) empty.style.display = 'none';
+
+  const d   = new Date(entry.ts * 1000);
+  const hms = d.toTimeString().slice(0, 8);
+
+  const row = document.createElement('div');
+  row.className = 'log-entry';
+  row.innerHTML =
+    `<div class="log-entry-header">` +
+      `<span class="log-ts">${hms}</span>` +
+      `<span class="log-lvl log-lvl-${entry.level}">${entry.level}</span>` +
+      `<span class="log-src">${entry.source}</span>` +
+      `<span class="log-msg">${_esc(entry.message)}</span>` +
+    `</div>` +
+    (entry.suggestion
+      ? `<div class="log-suggestion">💡 ${_esc(entry.suggestion)}</div>`
+      : '');
+  if (entry.suggestion) {
+    row.addEventListener('click', () => {
+      row.classList.toggle('expanded');
+    });
+  }
+  el.appendChild(row);
+  if (_logAutoScroll) el.scrollTop = el.scrollHeight;
+}
+
+function _esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function _rebuildLog() {
+  const el = document.getElementById('logEntries');
+  const empty = document.getElementById('logEmpty');
+  // Remove all entry rows (keep the empty placeholder)
+  [...el.querySelectorAll('.log-entry')].forEach(r => r.remove());
+  const visible = _logFilter === 'ALL'
+    ? _logEntries
+    : _logEntries.filter(e => e.level === _logFilter);
+  if (empty) empty.style.display = visible.length ? 'none' : '';
+  visible.forEach(e => _renderLogEntry(e));
+}
+
+function _setLogFilter(f) {
+  _logFilter = f;
+  const ids = { ALL: 'lfAll', WARN: 'lfWarn', ERROR: 'lfError' };
+  Object.keys(ids).forEach(k => {
+    const btn = document.getElementById(ids[k]);
+    if (btn) btn.classList.toggle('active', k === f);
+  });
+  _rebuildLog();
+}
+
+function _clearLog() {
+  _logEntries = [];
+  const el = document.getElementById('logEntries');
+  [...el.querySelectorAll('.log-entry')].forEach(r => r.remove());
+  const empty = document.getElementById('logEmpty');
+  if (empty) empty.style.display = '';
+  _logUnread = 0;
+  _updateLogBadge();
+}
+
+function _updateLogBadge() {
+  let badge = document.getElementById('logUnreadBadge');
+  if (_logUnread > 0) {
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.id = 'logUnreadBadge';
+      badge.className = 'log-unread-badge';
+      document.getElementById('logBtn').appendChild(badge);
+    }
+    badge.textContent = _logUnread > 99 ? '99+' : _logUnread;
+  } else if (badge) {
+    badge.remove();
+  }
+}
+
+function openLog() {
+  document.getElementById('logOverlay').classList.add('open');
+  document.getElementById('logPanel').classList.add('open');
+  document.getElementById('logBtn').classList.add('open');
+  _logOpen = true;
+  _logUnread = 0;
+  _updateLogBadge();
+  const el = document.getElementById('logEntries');
+  el.scrollTop = el.scrollHeight;
+  el.onscroll = () => {
+    _logAutoScroll = (el.scrollTop + el.clientHeight >= el.scrollHeight - 20);
+  };
+}
+
+function closeLog() {
+  document.getElementById('logOverlay').classList.remove('open');
+  document.getElementById('logPanel').classList.remove('open');
+  document.getElementById('logBtn').classList.remove('open');
+  _logOpen = false;
+}
+
+// Poll /api/events every 3 s for server-side events
+async function _pollEvents() {
+  try {
+    const data = await _fetchWithTimeout(
+      `/api/events?since=${_logLastTs}`, { cache: 'no-store' }, 4000
+    ).then(r => r.ok ? r.json() : []);
+    if (!Array.isArray(data) || data.length === 0) return;
+    data.forEach(e => {
+      _logLastTs = Math.max(_logLastTs, e.ts);
+      _logEntries.push(e);
+      if (_logEntries.length > 500) _logEntries.shift();
+      if (_logFilter === 'ALL' || e.level === _logFilter) _renderLogEntry(e);
+      if (!_logOpen && (e.level === 'WARN' || e.level === 'ERROR')) {
+        _logUnread++;
+      }
+    });
+    _updateLogBadge();
+  } catch (_) { /* server unreachable — retry next cycle */ }
+}
+
+function _startEventsPoll() {
+  if (_logPollTimer) return;
+  _pollEvents();   // immediate first fetch
+  _logPollTimer = setInterval(_pollEvents, 3000);
+}
+_startEventsPoll();
 
 function showToast(msg, isErr) {
   const t = document.getElementById('toast');
@@ -2692,6 +3075,14 @@ async function _pollSpStatus() {
   // Wheel odom → chassis status + distance traveled
   try {
     const d = await _fetchWithTimeout('/api/wheel_odom', { cache:'no-store' }).then(r => r.json());
+    if (_logOdomWasConnected !== null && _logOdomWasConnected && !d.connected) {
+      addLogEntry('WARN', 'ROS',
+        'Wheel odometry stopped updating — robot_base_node may have crashed',
+        'Check: ros2 node list | grep robot_base  ' +
+        'Restart: ros2 run avatar_robot_base robot_base_node  ' +
+        'Verify Modbus RTU connection on /dev/ttyUSB0 (38400 baud).');
+    }
+    _logOdomWasConnected = d.connected;
     document.getElementById('stChassis').innerHTML = d.connected
       ? _spBadge('sp-badge-ok',  '● Connected')
       : _spBadge('sp-badge-err', '● Disconnected');
@@ -2719,6 +3110,17 @@ async function _pollSpStatus() {
         const minV = range.minV ?? 42.0, maxV = range.maxV ?? 58.0;
         const pct = Math.round(Math.max(0, Math.min(100, (v - minV) / (maxV - minV) * 100)));
         const cls = pct >= 30 ? 'sp-badge-ok' : pct >= 15 ? 'sp-badge-warn' : 'sp-badge-err';
+        if (pct < 15) {
+          _debounceLog('batt-crit', 'ERROR', 'System',
+            `Battery critically low: ${pct}% (${v.toFixed(1)} V)`,
+            'Stop all operations and return to the charging station immediately.',
+            120);
+        } else if (pct < 30) {
+          _debounceLog('batt-low', 'WARN', 'System',
+            `Battery low: ${pct}% (${v.toFixed(1)} V)`,
+            'Plan to return to the charging station soon.',
+            300);
+        }
         battEl.innerHTML = _spBadge(cls, '● ' + pct + '%') +
           `<span style="color:#7d8590;font-size:11px;margin-left:6px">${v.toFixed(1)} V</span>`;
       } else {
@@ -2787,7 +3189,12 @@ function _applyChassisConfig() {
         _loadCameras(_camDetOn);
       }
     })
-    .catch(() => {});
+    .catch(() => {
+      addLogEntry('ERROR', 'System',
+        'Failed to load chassis configuration from /api/config',
+        'The UI may show incorrect limits or hide the wrong panels. Refresh the page. ' +
+        'If the server is running, check the terminal for startup errors.');
+    });
 }
 _applyChassisConfig();
 </script>
