@@ -118,13 +118,16 @@ cleanup() {
   exec >/dev/tty 2>&1 || exec >/dev/null 2>&1
   echo ""
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Stopping services..."
-  for proc in "dashboard/serve" "gnss_p9_read.py" "object_detector.py" \
-              "robot_base_node" "realsense2_camera_node" "rosbridge_websocket"; do
+  # This list must match what this script actually launches — a previous
+  # revision killed gnss_p9_read.py (never launched) and leaked the real GNSS
+  # reader, leaving it holding the serial port after every exit.
+  for proc in "dashboard/serve" "gnss_rtu608bt_read.py" \
+              "robot_base_node" "rosbridge_websocket"; do
     pkill -TERM -f "$proc" 2>/dev/null || true
   done
   sleep 2
-  for proc in "dashboard/serve" "gnss_p9_read.py" "object_detector.py" \
-              "robot_base_node" "realsense2_camera_node" "rosbridge_websocket"; do
+  for proc in "dashboard/serve" "gnss_rtu608bt_read.py" \
+              "robot_base_node" "rosbridge_websocket"; do
     pkill -KILL -f "$proc" 2>/dev/null || true
   done
   exit 0

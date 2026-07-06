@@ -76,9 +76,12 @@ def log_event(level: str, source: str, message: str,
     if _key and _debounce_s > 0:
         now = time.monotonic()
         dk  = (source, _key)
-        if now - _event_debounce.get(dk, 0.0) < _debounce_s:
-            return
-        _event_debounce[dk] = now
+        # log_event is called from capture threads, ROS callbacks and HTTP
+        # request threads concurrently — the check-then-set must be atomic.
+        with _event_log_lock:
+            if now - _event_debounce.get(dk, 0.0) < _debounce_s:
+                return
+            _event_debounce[dk] = now
     entry = {
         "ts":         time.time(),
         "level":      level.upper(),
@@ -112,9 +115,13 @@ def _quiet_stderr():
 
 DASHBOARD_DIR        = Path(__file__).parent
 
-# Supabase ingest endpoint for planted-seedling records.
-_SUPABASE_INGEST_URL = "https://ingest.invalid/functions/v1/ingest"
-_SUPABASE_AGROBOT_KEY   = "3b26ae50466743e6a780ef28e2cd6a54d7ea765c5ec24ae666521f977a7708d3"
+# Supabase ingest endpoint for planted-seedling records.  The write key MUST
+# come from the environment — a previous revision committed it to source, so
+# that key is considered leaked and needs rotation on the Supabase side.
+_SUPABASE_INGEST_URL = os.environ.get(
+    "AGROBOT_SUPABASE_URL",
+    "https://ingest.invalid/functions/v1/ingest")
+_SUPABASE_AGROBOT_KEY   = os.environ.get("AGROBOT_SUPABASE_KEY", "")
 GNSS_FILE_DEFAULT    = "/tmp/gnss_coords.json"
 DETECTIONS_FILE      = "/tmp/object_detections.json"
 ZED_DEVICE           = "/dev/zed2i"    # symlink used by the OpenCV grayscale fallback only
@@ -157,6 +164,12 @@ def twist_to_wheel_speeds(linear_x: float, angular_z: float):
       left     A: [-speed, +speed]   (positive angular_z = turn left in ROS)
       right    D: [+speed, -speed]
     """
+    ch = Handler.chassis
+    if ch is not None:
+        # The active chassis's scaling (config/chassis/*.yaml) is the single
+        # source of truth; the module constants below are only the fallback
+        # for chassis-less use (unit tests, standalone import).
+        return ch.twist_to_wheel_speeds(linear_x, angular_z)
     lin = int(linear_x  * LINEAR_SCALE)
     ang = int(angular_z * ANGULAR_SCALE)
     left  = max(-SPEED_MAX, min(SPEED_MAX, lin - ang))
@@ -181,6 +194,13 @@ def _dms(value, is_lat):
 def _push_seedling(entry: dict):
     """POST a planted-seedling record to the Supabase ingest endpoint.
     Runs in a daemon thread so it never blocks the HTTP response."""
+    if not _SUPABASE_AGROBOT_KEY:
+        log_event("WARN", "GNSS",
+                  "Seedling cloud upload skipped — AGROBOT_SUPABASE_KEY is not set",
+                  "Export AGROBOT_SUPABASE_KEY before launching the dashboard. "
+                  "The record is saved locally in logs/planted_seedlings/seedlings.jsonl.",
+                  _key="seedling-push", _debounce_s=3600)
+        return
     payload = json.dumps({"source": "robot", "records": [entry]}).encode()
     req = urllib.request.Request(
         _SUPABASE_INGEST_URL,
@@ -287,6 +307,7 @@ class Handler(SimpleHTTPRequestHandler):
     # PLC connection state — track transitions so we only log connect/disconnect
     # events when the state actually changes, not on every polled request.
     _plc_last_connected = None   # None=unknown, True=up, False=down
+    _plc_state_lock     = threading.Lock()
 
     _settings_lock = threading.Lock()
     _settings: dict = {
@@ -491,6 +512,17 @@ class Handler(SimpleHTTPRequestHandler):
             "last_error":      err,
         }).encode()
         self._json_response(200, body)
+
+    @classmethod
+    def _set_zed_status(cls, connected: bool, error=None):
+        """Update the front-ZED connectivity flags under _zed_lock.
+
+        The capture threads used to write these flags directly while
+        _serve_zed_status read them under the lock — every status write must
+        go through here so reads and writes are actually synchronized."""
+        with cls._zed_lock:
+            cls._zed_connected  = connected
+            cls._zed_last_error = error
 
     @classmethod
     def _mark_detection_wanted(cls):
@@ -773,9 +805,12 @@ class Handler(SimpleHTTPRequestHandler):
     def _log_plc_transition(self, result, client):
         """Log PLC connect/disconnect transitions exactly once on state change."""
         connected = result.get('connected', True)
-        if Handler._plc_last_connected == connected:
-            return
-        Handler._plc_last_connected = connected
+        # Concurrent PLC requests race on this transition flag — without the
+        # lock a flap can be logged twice or a transition missed entirely.
+        with Handler._plc_state_lock:
+            if Handler._plc_last_connected == connected:
+                return
+            Handler._plc_last_connected = connected
         if not connected:
             log_event("ERROR", "PLC",
                       f"PLC connection lost — {client.target} unreachable",
@@ -875,6 +910,12 @@ class Handler(SimpleHTTPRequestHandler):
             self._json_response(400, json.dumps({"error": str(exc)}).encode())
             return
 
+        # Encoder calibration comes from the active chassis config; the module
+        # constant is only the fallback when no chassis is loaded (tests).
+        ppm = Handler.chassis.pulse_per_m if Handler.chassis is not None else PULSE_PER_M
+        target_pulses = 2.0 * ppm   # the full 2 m drive
+        slow_pulses   = 0.5 * ppm   # final 0.5 m: crawl to kill coasting
+
         with Handler._odom_lock:
             start_l   = Handler._odom_l
             start_r   = Handler._odom_r
@@ -905,12 +946,12 @@ class Handler(SimpleHTTPRequestHandler):
                     cur_r = Handler._odom_r
                 traveled = ((cur_l - start_l) + (cur_r - start_r)) / 2.0
 
-                if traveled >= FWD_2M_PULSES:
+                if traveled >= target_pulses:
                     break
 
                 # Two-phase: slow crawl for the final 0.5 m to eliminate coasting overshoot
-                remaining  = FWD_2M_PULSES - traveled
-                next_speed = FWD_SLOW_SPEED if remaining <= FWD_SLOW_PULSES else speed
+                remaining  = target_pulses - traveled
+                next_speed = FWD_SLOW_SPEED if remaining <= slow_pulses else speed
 
                 with Handler._vel_lock:
                     # Abort if an external command overrode our last commanded speed
@@ -927,9 +968,9 @@ class Handler(SimpleHTTPRequestHandler):
                 Handler._vel_active = True
                 Handler._vel_last   = time.monotonic()
 
-        done   = (not aborted) and (traveled >= FWD_2M_PULSES)
+        done   = (not aborted) and (traveled >= target_pulses)
         result = {"done": done, "aborted": aborted,
-                  "traveled_m": round(traveled / PULSE_PER_M, 3)}
+                  "traveled_m": round(traveled / ppm, 3)}
         self._json_response(200, json.dumps(result).encode())
 
     def _serve_track_save(self):
@@ -1845,8 +1886,7 @@ def _start_zed_thread():
                 # get_data() returns BGRA (4-channel); drop alpha
                 left = image_mat.get_data()[:, :, :3]
 
-                Handler._zed_connected  = True
-                Handler._zed_last_error = None
+                Handler._set_zed_status(True)
                 retry_sleep = 1.0
                 lost        = 0
 
@@ -1877,8 +1917,7 @@ def _start_zed_thread():
             elif err == sl.ERROR_CODE.END_OF_SVOFILE_REACHED:
                 zed.set_svo_position(0)
             else:
-                Handler._zed_connected  = False
-                Handler._zed_last_error = f"grab error: {err}"
+                Handler._set_zed_status(False, f"grab error: {err}")
                 lost += 1
                 # Camera unplugged / hung: stop grabbing and return so the caller
                 # closes this handle and re-opens (by serial) when it reconnects.
@@ -1970,13 +2009,11 @@ def _start_zed_thread():
                 with _quiet_stderr():
                     cap = cv2.VideoCapture(_device_index())
                 if cap.isOpened():
-                    Handler._zed_connected  = True
-                    Handler._zed_last_error = None
+                    Handler._set_zed_status(True)
                     retry_sleep = 1.0
                     log.info("[zed] Opened %s via OpenCV (grayscale)", ZED_DEVICE)
                 else:
-                    Handler._zed_connected  = False
-                    Handler._zed_last_error = f"{ZED_DEVICE} not available"
+                    Handler._set_zed_status(False, f"{ZED_DEVICE} not available")
                     time.sleep(retry_sleep)
                     retry_sleep = min(retry_sleep * 2, 5.0)
                     continue
@@ -1984,8 +2021,7 @@ def _start_zed_thread():
             with _quiet_stderr():
                 ret, frame = cap.read()
             if not ret:
-                Handler._zed_connected  = False
-                Handler._zed_last_error = "Frame read failed — reconnecting"
+                Handler._set_zed_status(False, "Frame read failed — reconnecting")
                 cap.release()
                 cap = None
                 time.sleep(retry_sleep)
@@ -2065,13 +2101,13 @@ def _start_zed_thread():
                     # capture loop exited (camera unplugged) — release and re-open below
                     err = "camera lost"
                 else:
-                    Handler._zed_last_error = f"SDK open: {err}"
+                    Handler._set_zed_status(False, f"SDK open: {err}")
             except Exception as exc:
                 err = exc
-                Handler._zed_last_error = f"SDK open: {exc}"
+                Handler._set_zed_status(False, f"SDK open: {exc}")
 
             with Handler._zed_lock:
-                Handler._zed_connected = False
+                Handler._zed_connected = False   # keep the last error message for /api/zed/status
             try:
                 if zed is not None:
                     zed.close()   # release before retrying so the next open can detect it

@@ -909,6 +909,8 @@ const CFG = {
   maxLinear:    0.5,
   maxLinearBack: 0.5,
   maxAngular:   0.5,
+  hardMaxLinear:  null,   // chassis ceilings from /api/config — commands are
+  hardMaxAngular: null,   // clamped to these so the server never rejects with 400
   camStreamUrl:     '/api/camera/stream',
   zedStreamUrl:     '/api/zed/stream',
   detStreamUrl:     '/api/detection/stream',
@@ -924,8 +926,8 @@ const TARGET_PULSES = 2.0 * PULSE_PER_M;
 let _battRange = { minV: 42, maxV: 58 };
 
 fetch('/api/config').then(r => r.ok ? r.json() : {}).then(c => {
-  if (c.limits?.maxLinear  != null) { CFG.maxLinear = c.limits.maxLinear; CFG.maxLinearBack = c.limits.maxLinear; }
-  if (c.limits?.maxAngular != null) CFG.maxAngular = c.limits.maxAngular;
+  if (c.limits?.maxLinear  != null) { CFG.maxLinear = c.limits.maxLinear; CFG.maxLinearBack = c.limits.maxLinear; CFG.hardMaxLinear = c.limits.maxLinear; }
+  if (c.limits?.maxAngular != null) { CFG.maxAngular = c.limits.maxAngular; CFG.hardMaxAngular = c.limits.maxAngular; }
   if (c.battery?.minV != null) _battRange.minV = c.battery.minV;
   if (c.battery?.maxV != null) _battRange.maxV = c.battery.maxV;
 }).catch(() => {});
@@ -953,8 +955,16 @@ function showToast(msg, isErr) {
   t._tid = setTimeout(() => t.classList.remove('show'), 2500);
 }
 
+function publishCmdVel(lin, ang) {
+  // Clamp to the active chassis ceilings — same guard as index.html; this file
+  // previously bypassed it and could command past the chassis hard limits.
+  if (CFG.hardMaxLinear  != null) lin = Math.max(-CFG.hardMaxLinear,  Math.min(CFG.hardMaxLinear,  lin));
+  if (CFG.hardMaxAngular != null) ang = Math.max(-CFG.hardMaxAngular, Math.min(CFG.hardMaxAngular, ang));
+  return _post('/api/cmd_vel', { linear_x: lin, angular_z: ang });
+}
+
 function publishStop() {
-  _post('/api/cmd_vel', { linear_x: 0, angular_z: 0 }).catch(() => {});
+  publishCmdVel(0, 0).catch(() => {});
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1309,7 +1319,7 @@ function _ku(k) {
     delete _kuT[k]; pressed.delete(k);
     _g(KMAP[k])?.classList.remove('active');
     _calcVel();
-    if (!pressed.size) _post('/api/cmd_vel', { linear_x: 0, angular_z: 0 }).catch(() => {});
+    if (!pressed.size) publishStop();
   }, 120);
 }
 
@@ -1324,7 +1334,7 @@ document.addEventListener('keyup', e => { const k = e.key.toLowerCase(); if (KMA
 // 50 Hz drive loop
 setInterval(() => {
   if (!pressed.size) return;
-  _post('/api/cmd_vel', { linear_x: linVel, angular_z: angVel }).catch(() => {});
+  publishCmdVel(linVel, angVel).catch(() => {});
 }, 50);
 
 // AMR badge
