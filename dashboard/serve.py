@@ -309,86 +309,105 @@ class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(DASHBOARD_DIR), **kwargs)
 
-    def do_GET(self):
-        if self.path == "/api/wheel_odom":
-            self._serve_wheel_odom()
-        elif self.path == "/api/chassis_battery":
-            self._serve_chassis_battery()
-        elif self.path == "/api/gnss":
-            self._serve_gnss()
-        elif self.path == "/api/camera/status":
-            self._serve_camera_status()
-        elif self.path.startswith("/api/camera/stream"):
-            self._serve_camera_stream()
-        elif self.path.startswith("/api/camera"):
-            self._serve_camera()
-        elif self.path == "/api/zed/status":
-            self._serve_zed_status()
-        elif self.path.startswith("/api/zed/stream"):
-            self._serve_zed_stream()
-        elif self.path.startswith("/api/zed"):
-            self._serve_zed()
-        elif self.path == "/api/detection/data":
-            self._serve_detection_data()
-        elif self.path.startswith("/api/detection/stream"):
-            self._serve_detection_stream()
-        elif self.path.startswith("/api/detection/rear_stream"):
-            self._serve_rear_detection_stream()
-        elif self.path == "/api/detection/rear_data":
-            self._serve_rear_detection_data()
-        elif self.path.startswith("/api/detection"):
-            self._serve_detection_image()
-        elif self.path == '/api/settings':
-            self._serve_settings_get()
-        elif self.path == '/api/config':
-            self._serve_config()
-        elif self.path == '/api/plc/status':
-            self._serve_plc_read('get_machine_status')
-        elif self.path == '/api/plc/sequence':
-            self._serve_plc_read('get_sequence_detail')
-        elif self.path == '/api/plc/auger_motor':
-            self._serve_plc_read('get_auger_motor_status')
-        elif self.path == '/api/plc/banner':
-            self._serve_plc_read('get_banner')
-        elif self.path == '/api/plc/tags':
-            self._serve_plc_tags()
-        elif self.path.startswith('/api/events'):
-            self._serve_events()
+    # ── Declarative routing ──────────────────────────────────────────────────
+    # Exact paths are matched first, then prefixes longest-first — so route
+    # registration order can never shadow another route (the old if/elif
+    # ladders silently depended on their ordering).
+    #
+    # A route spec is a method-name string, a (method-name, *args) tuple, or a
+    # plain callable taking the handler instance (used by extensions).
+    INDEX_FILE = "index.html"   # what "/" serves; overridden by serve_plc.py
+    STATIC_PREFIXES = ("/logo/",)
+
+    GET_EXACT = {
+        "/api/wheel_odom":         "_serve_wheel_odom",
+        "/api/chassis_battery":    "_serve_chassis_battery",
+        "/api/gnss":               "_serve_gnss",
+        "/api/camera/status":      "_serve_camera_status",
+        "/api/zed/status":         "_serve_zed_status",
+        "/api/detection/data":     "_serve_detection_data",
+        "/api/detection/rear_data": "_serve_rear_detection_data",
+        "/api/settings":           "_serve_settings_get",
+        "/api/config":             "_serve_config",
+        "/api/plc/status":         ("_serve_plc_read", "get_machine_status"),
+        "/api/plc/sequence":       ("_serve_plc_read", "get_sequence_detail"),
+        "/api/plc/auger_motor":    ("_serve_plc_read", "get_auger_motor_status"),
+        "/api/plc/banner":         ("_serve_plc_read", "get_banner"),
+        "/api/plc/tags":           "_serve_plc_tags",
+    }
+    GET_PREFIX = {
+        "/api/detection/rear_stream": "_serve_rear_detection_stream",
+        "/api/detection/stream":      "_serve_detection_stream",
+        "/api/camera/stream":         "_serve_camera_stream",
+        "/api/zed/stream":            "_serve_zed_stream",
+        "/api/detection":             "_serve_detection_image",
+        "/api/events":                "_serve_events",
+        "/api/camera":                "_serve_camera",
+        "/api/zed":                   "_serve_zed",
+    }
+    POST_EXACT = {
+        "/api/cmd_vel":      "_serve_cmd_vel",
+        "/api/track/save":   "_serve_track_save",
+        "/api/plant":        "_serve_plant_log",
+        "/api/record/start": "_serve_record_start",
+        "/api/record/stop":  "_serve_record_stop",
+        "/api/settings":     "_serve_settings_post",
+        "/api/fwd2m":        "_serve_fwd2m",
+        "/api/plc/auger":    ("_serve_plc_sequence", "control_auger"),
+        "/api/plc/planter":  ("_serve_plc_sequence", "control_planter"),
+        "/api/plc/both":     ("_serve_plc_sequence", "control_both"),
+        "/api/plc/machine":  ("_serve_plc_command", "machine_command"),
+        "/api/plc/robot":    ("_serve_plc_command", "control_robot"),
+    }
+
+    @classmethod
+    def add_route(cls, method, path, spec, prefix=False):
+        """Register an extra route (used by serve_plc.py instead of the old
+        monkey-patching of do_GET/do_POST). `spec` may be a Handler method
+        name or a callable taking the handler instance."""
+        if method == "GET":
+            (cls.GET_PREFIX if prefix else cls.GET_EXACT)[path] = spec
+        elif method == "POST":
+            cls.POST_EXACT[path] = spec
         else:
-            # Only serve the dashboard HTML and logo assets; everything else
-            # (including serve.py) returns 403 to avoid exposing server internals.
-            p = self.path.split('?')[0].split('#')[0]
-            if p in ('/', '/index.html') or p.startswith('/logo/'):
-                super().do_GET()
-            else:
-                log.warning("Blocked static path %s from %s", p, self.client_address[0])
-                self.send_error(403)
+            raise ValueError(f"unsupported method {method!r}")
+
+    def _run_route(self, spec):
+        if callable(spec):
+            spec(self)
+        elif isinstance(spec, tuple):
+            getattr(self, spec[0])(*spec[1:])
+        else:
+            getattr(self, spec)()
+
+    def do_GET(self):
+        path = self.path.split('?')[0].split('#')[0]
+        spec = self.GET_EXACT.get(path)
+        if spec is None:
+            for prefix in sorted(self.GET_PREFIX, key=len, reverse=True):
+                if path.startswith(prefix):
+                    spec = self.GET_PREFIX[prefix]
+                    break
+        if spec is not None:
+            self._run_route(spec)
+            return
+        # Static fallback: only the dashboard page and whitelisted asset
+        # directories; everything else (including serve.py itself) is 403
+        # to avoid exposing server internals.
+        if path in ('/', '/index.html', f'/{self.INDEX_FILE}'):
+            self.path = f'/{self.INDEX_FILE}'
+            super().do_GET()
+        elif any(path.startswith(p) for p in self.STATIC_PREFIXES):
+            super().do_GET()
+        else:
+            log.warning("Blocked static path %s from %s", path, self.client_address[0])
+            self.send_error(403)
 
     def do_POST(self):
-        if self.path == "/api/cmd_vel":
-            self._serve_cmd_vel()
-        elif self.path == "/api/track/save":
-            self._serve_track_save()
-        elif self.path == "/api/plant":
-            self._serve_plant_log()
-        elif self.path == "/api/record/start":
-            self._serve_record_start()
-        elif self.path == "/api/record/stop":
-            self._serve_record_stop()
-        elif self.path == '/api/settings':
-            self._serve_settings_post()
-        elif self.path == '/api/fwd2m':
-            self._serve_fwd2m()
-        elif self.path == '/api/plc/auger':
-            self._serve_plc_sequence('control_auger')
-        elif self.path == '/api/plc/planter':
-            self._serve_plc_sequence('control_planter')
-        elif self.path == '/api/plc/both':
-            self._serve_plc_sequence('control_both')
-        elif self.path == '/api/plc/machine':
-            self._serve_plc_command('machine_command')
-        elif self.path == '/api/plc/robot':
-            self._serve_plc_command('control_robot')
+        path = self.path.split('?')[0].split('#')[0]
+        spec = self.POST_EXACT.get(path)
+        if spec is not None:
+            self._run_route(spec)
         else:
             self.send_error(404)
 

@@ -21,20 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import serve as _serve  # noqa: E402
 
 # ── 1. Serve index_wide.html instead of index.html ────────────────────────────
-
-_orig_do_GET = _serve.Handler.do_GET
-
-
-def _wide_do_GET(self):
-    p = self.path.split('?')[0].split('#')[0]
-    if p in ('/', '/index.html', '/index_wide.html'):
-        self.path = '/index_wide.html'
-        SimpleHTTPRequestHandler.do_GET(self)
-    else:
-        _orig_do_GET(self)
-
-
-_serve.Handler.do_GET = _wide_do_GET
+_serve.Handler.INDEX_FILE = "index_wide.html"
 
 
 # ── 2. ZED 2i at HD2K (full sensor FOV) ───────────────────────────────────────

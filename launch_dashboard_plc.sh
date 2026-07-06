@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # launch_dashboard_plc.sh — Combined AMR teleoperation + PLC handshake dashboard.
 #
-# Merges launch_dashboard (camera, WASD, GPS, full chassis stack) with
-# launch_plc2 (AMR ↔ PLC handshake registers) into a single 4-tab web page:
+# The full chassis stack (camera, WASD, GPS) plus the AMR ↔ PLC handshake
+# registers, in a single 4-tab web page:
 #
 #   📷  Camera       — live camera stream + W/A/S/D keyboard controls
 #   🗺  GPS          — OpenStreetMap with live position + coordinate details
@@ -13,8 +13,8 @@
 #   2 (Bit 1 set) → AMR Moving      (WASD or joystick active)
 #   1 (Bit 0 set) → AMR Stationary  (no recent velocity command)
 #
-# The PLC handshake uses the same host/port as the main PLC (from agrobot.yaml).
-# No separate server or port is needed — everything runs on port 8766 (default).
+# The PLC handshake uses the same host/port — and the same Modbus socket — as
+# the main PLC client (from agrobot.yaml). Default HTTP port: 8769.
 #
 # Usage (same flags as launch_dashboard.sh):
 #   ./launch_dashboard_plc.sh
@@ -29,7 +29,7 @@
 #   --rear-camera <src> Pass through to serve.py
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Default to port 8769 (unique: 8766=dashboard/wide, 8767=plc, 8768=plc2).
+# Default to port 8769 so it can run alongside the main dashboard (8766).
 # User can override with --port N; since launch_dashboard.sh takes the last --port
 # it sees, prepending means the user's explicit flag always wins.
 SERVE_PY="dashboard/serve_plc.py" exec "$SCRIPT_DIR/launch_dashboard.sh" --port 8769 "$@"

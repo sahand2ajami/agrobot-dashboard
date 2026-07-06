@@ -361,3 +361,64 @@ class TestPlantLog:
         status, body = _post(port, "/api/plant", {"lat": 1.0})
         assert status == 400
         assert "error" in body
+
+
+# ── Declarative routing (replaces the old if/elif ladders) ─────────────────────
+
+class TestRouting:
+    def test_exact_beats_prefix(self, server):
+        # /api/detection/rear_data is exact; /api/detection is a prefix route.
+        # A wrong resolution order would return a JPEG/503 instead of JSON.
+        port, _ = server
+        status, body, _ = _get(port, "/api/detection/rear_data")
+        assert status == 200
+        assert json.loads(body)["count"] == 0
+
+    def test_longest_prefix_wins(self, server):
+        # /api/events?since=0 must hit the events route, not fall to static 403.
+        port, _ = server
+        status, body, _ = _get(port, "/api/events?since=0")
+        assert status == 200
+        assert isinstance(json.loads(body), list)
+
+    def test_query_string_stripped_for_exact_match(self, server):
+        port, _ = server
+        status, _, _ = _get(port, "/api/config?x=1")
+        assert status == 200
+
+    def test_add_route_callable(self, server):
+        port, _ = server
+        def probe(handler):
+            handler._json_response(200, b'{"probe":true}')
+        serve.Handler.add_route("GET", "/api/_test_probe", probe)
+        try:
+            status, body, _ = _get(port, "/api/_test_probe")
+            assert status == 200
+            assert json.loads(body)["probe"] is True
+        finally:
+            del serve.Handler.GET_EXACT["/api/_test_probe"]
+
+    def test_unknown_post_is_404(self, server):
+        # send_error(404) returns an HTML body, so don't use the JSON helper.
+        port, _ = server
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/nope",
+                                     data=b"{}", method="POST")
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(req, timeout=3)
+        assert exc.value.code == 404
+
+    def test_amr_routes_registered_by_serve_plc(self, server):
+        # Importing serve_plc registers /api/amr/* on the shared Handler;
+        # with no PLC client they must degrade to 503, not 403/404.
+        port, _ = server
+        import serve_plc
+        serve_plc._register()
+        try:
+            status, body, _ = _get(port, "/api/amr/poll")
+            assert status == 503
+            assert json.loads(body)["connected"] is False
+        finally:
+            serve.Handler.INDEX_FILE = "index.html"
+            del serve.Handler.GET_EXACT["/api/amr/poll"]
+            del serve.Handler.GET_EXACT["/api/amr/ping"]
+            del serve.Handler.POST_EXACT["/api/amr/write"]

@@ -132,29 +132,38 @@ PLC_TAG_MAP = {
             "commands": sorted(ROBOT_COMMANDS),
         },
         {
-            "symbol": "AMR_2_PLC[0]", "address": "%MW100", "type": "WORD (bit 0 = AMR_2_PLC[0].0)",
+            "symbol": "AMR_CMD_AUGER", "address": "%MW5110", "type": "WORD (bit 0 = Start Sequence)",
             "rpc": "—", "api": "/api/plc/auger",
-            "desc": "Auger button → latches AMR_2_PLC[0].0 (write word 1/0, toggles). AMR→PLC handshake.",
+            "desc": "Auger button → writes %MW5110 bit 0 (1 = start, 0 = clear). AMR→PLC handshake.",
             "commands": sorted(SEQUENCE_COMMANDS),
         },
         {
-            "symbol": "AMR_2_PLC[1]", "address": "%MW101", "type": "WORD (bit 0 = AMR_2_PLC[1].0)",
+            "symbol": "AMR_CMD_PLANTER", "address": "%MW5111", "type": "WORD (bit 0 = Start Sequence)",
             "rpc": "—", "api": "/api/plc/planter",
-            "desc": "Planter button → latches AMR_2_PLC[1].0 (write word 1/0, toggles). AMR→PLC handshake.",
+            "desc": "Planter button → writes %MW5111 bit 0 (1 = start, 0 = clear). AMR→PLC handshake.",
             "commands": sorted(SEQUENCE_COMMANDS),
+        },
+        {
+            "symbol": "AMR_STATE", "address": "%MW5112", "type": "WORD (1 = Stationary, 2 = Moving)",
+            "rpc": "—", "api": "/api/amr/write",
+            "desc": "AMR movement state, auto-written on every moving/stationary transition.",
+            "commands": [],
         },
     ],
     "reserved": [
-        {"symbol": "PLC_2_AMR", "address": "%MW200", "type": "ARRAY[0..9] OF WORD",
-         "desc": "Reserved PLC→AMR handshake — declared in the PLC, not referenced in this ladder build."},
+        {"symbol": "AMR_STATUS_AUGER", "address": "%MW5100", "type": "WORD",
+         "desc": "PLC→AMR auger status: bit 0 Sequence Start Handshake, bit 1 Clear of Ground, bit 2 Cycle Complete. Read via /api/amr/poll."},
+        {"symbol": "AMR_STATUS_PLANTER", "address": "%MW5101", "type": "WORD",
+         "desc": "PLC→AMR planter status: same bit layout as %MW5100. Read via /api/amr/poll."},
     ],
     "notes": {
-        "verified": "Structs and %MW/%MX addresses verified against the PLC global symbol table.",
+        "verified": "Structs and %MW/%MX addresses verified against the PLC global symbol table; "
+                    "handshake block %MW5100–5112 confirmed on the bench (the older %MW100/101 map was wrong — "
+                    "those addresses sit below the FEnet write base and cannot be written over Modbus).",
         "open_items": [
             "Exact bit index within each shared word (e.g. SET_AUTO / START / ENABLE_* in HMI_PB) is packed in the binary UDT — bench-confirm in XG5000.",
-            "Modbus address base: the PLC's Modbus-TCP server must expose %MW/%MX at offset 0 (so %MW100 bit 0 = coil 1600) — bench-confirm.",
         ],
-        "amr_bits": "The auger/planter buttons drive AMR_2_PLC[0].0 / [1].0 directly over Modbus TCP (no gRPC gateway). AugerSeq/PlanterSeq reads above are unchanged.",
+        "amr_bits": "The auger/planter buttons drive %MW5110/%MW5111 bit 0 directly over Modbus TCP. AugerSeq/PlanterSeq reads above are unchanged.",
     },
 }
 
@@ -189,6 +198,17 @@ _FENET_READ_WORD_BASE  = 1000   # FC04 input reg 0  = PLC %MW1000
 _FENET_WRITE_WORD_BASE = 5000   # FC06 reg 0         = PLC %MW5000
 _FENET_WRITE_COIL_BASE = 1000   # FC05 coil 0        = PLC %MX1000
 
+# AMR ↔ PLC handshake block. One contiguous FC04 read covers the whole region:
+# %MW5100–5112 (13 registers; 5102–5109 unused but read through).
+#   PLC → AMR: %MW5100 auger status, %MW5101 planter status
+#              (bit 0 Sequence Start Handshake, bit 1 Clear of Ground, bit 2 Cycle Complete)
+#   AMR → PLC: %MW5110 auger cmd, %MW5111 planter cmd (bit 0 Start Sequence),
+#              %MW5112 AMR state (1 = Stationary, 2 = Moving)
+_AMR_HS_BASE   = 5100
+_AMR_HS_COUNT  = 13
+_AMR_HS_KEYS   = ("mw5100", "mw5101", "mw5110", "mw5111", "mw5112")
+AMR_WRITABLE   = frozenset({5110, 5111, 5112})   # the only AMR-owned words
+
 # HMI banner string addresses — PLC writes the active fault/warning text here.
 # Fault_Result STRING @ %MW1014  → FC04 reg 14  (= 1014 - _FENET_READ_WORD_BASE)
 # Warning_Result STRING @ %MW1030 → FC04 reg 30  (= 1030 - _FENET_READ_WORD_BASE)
@@ -201,12 +221,15 @@ _WARNING_WORD = 1030
 # Logical name → LS Electric device address. Only the symbols this dashboard touches;
 # the full table lives in docs/plc/. %MX<n> = M-area bit, %MW<n> = M-area word.
 _REG = {
-    # ── auger / planter activation words — AMR_2_PLC handshake (AMR→PLC @ %MW100) ──
-    # AMR_2_PLC is ARRAY[0..9] OF WORD; element k = %MW(100+k). We (the AMR) own this array,
-    # so we write the whole WORD register (FC16): value 1 sets bit 0 (= AMR_2_PLC[k].0), 0
-    # clears it. Word/register access works where individual-coil bit writes don't on this PLC.
-    "AUGER_AMR_WORD":   "%MW100",   # AMR_2_PLC[0]  — write 1 → bit 0 (AMR_2_PLC[0].0) set
-    "PLANTER_AMR_WORD": "%MW101",   # AMR_2_PLC[1]  — write 1 → bit 0 (AMR_2_PLC[1].0) set
+    # ── auger / planter start-sequence words — AMR↔PLC handshake @ %MW5110/5111 ──
+    # Confirmed register block (bench + field): PLC→AMR status at %MW5100/5101,
+    # AMR→PLC commands at %MW5110–5112. We own the command words: writing 1 sets
+    # bit 0 (Start Sequence), 0 clears it. An older map used %MW100/101 — those
+    # addresses sit below the FEnet write base (%MW5000) and can never be written
+    # over Modbus, so they were wrong; do not reintroduce them.
+    "AUGER_AMR_WORD":   "%MW5110",   # AMR→PLC: bit 0 = Auger Start Sequence
+    "PLANTER_AMR_WORD": "%MW5111",   # AMR→PLC: bit 0 = Planter Start Sequence
+    "AMR_STATE_WORD":   "%MW5112",   # AMR→PLC: 1 = Stationary, 2 = Moving
     # ── machine / robot pushbutton words (writes) — pulsed: write value → 100 ms → 0 ──
     "HMI_PB_MachineCtrl":  "%MW5000",   # machine PB word (bit values below)
     "HMI_PB_MachineCtrl2": "%MW5001",   # machine PB word 2 (ResetPlanterSeq/robot/AMR)
@@ -431,7 +454,7 @@ class PlcClient:
                 return {"connected": False, "success": False, "message": str(exc)}
 
     # -- write operations -----------------------------------------------------
-    # START → write 1 to the AMR_2_PLC word (sets bit 0); STOP → write 0 (clears it).
+    # START → write 1 to the handshake word (sets bit 0); STOP → write 0 (clears it).
     # No read-first toggle: the JS caller already decides START vs STOP based on
     # auger_in_cycle, so writing unconditionally is correct and avoids writing the
     # wrong value when the register was left non-zero from a prior session.
@@ -439,8 +462,8 @@ class PlcClient:
         new = 0 if (command or "").upper() == "STOP" else 1
         def fn():
             ok = self._write("AUGER_AMR_WORD", new)
-            log.debug("Auger: write %MW100=%d ok=%s", new, ok)
-            return {"success": ok, "message": f"Auger: AMR_2_PLC[0].0 → {new}",
+            log.debug("Auger: write %%MW5110=%d ok=%s", new, ok)
+            return {"success": ok, "message": f"Auger: %MW5110 bit 0 → {new}",
                     "auger_active": bool(new), "planter_active": False}
         return self._op(fn)
 
@@ -448,8 +471,8 @@ class PlcClient:
         new = 0 if (command or "").upper() == "STOP" else 1
         def fn():
             ok = self._write("PLANTER_AMR_WORD", new)
-            log.debug("Planter: write %MW101=%d ok=%s", new, ok)
-            return {"success": ok, "message": f"Planter: AMR_2_PLC[1].0 → {new}",
+            log.debug("Planter: write %%MW5111=%d ok=%s", new, ok)
+            return {"success": ok, "message": f"Planter: %MW5111 bit 0 → {new}",
                     "auger_active": False, "planter_active": bool(new)}
         return self._op(fn)
 
@@ -458,9 +481,9 @@ class PlcClient:
         def fn():
             ok_a = self._write("AUGER_AMR_WORD", new)
             ok_p = self._write("PLANTER_AMR_WORD", new)
-            log.debug("Both: write %MW100/%MW101=%d ok=%s/%s", new, ok_a, ok_p)
+            log.debug("Both: write %%MW5110/%%MW5111=%d ok=%s/%s", new, ok_a, ok_p)
             return {"success": (ok_a and ok_p),
-                    "message": f"Both: AMR_2_PLC[0].0/[1].0 → {new}",
+                    "message": f"Both: %MW5110/%MW5111 bit 0 → {new}",
                     "auger_active": bool(new), "planter_active": bool(new)}
         return self._op(fn)
 
@@ -547,6 +570,64 @@ class PlcClient:
                 fault = ''
             return {'success': True, 'message': 'OK', 'fault': fault, 'warning': warning}
         return self._op(fn)
+
+    # -- AMR handshake block (%MW5100–5112) ------------------------------------
+    def amr_poll(self):
+        """Read the whole AMR↔PLC handshake block in one FC04 read.
+        Response shape matches the old standalone handshake server so
+        plc_combined.html works unchanged: {connected, latency_ms, host, port,
+        error, mw5100, mw5101, mw5110, mw5111, mw5112}."""
+        t0 = time.perf_counter()
+        def fn():
+            vals = self._read_words_raw(_AMR_HS_BASE, _AMR_HS_COUNT)
+            latency_ms = round((time.perf_counter() - t0) * 1000, 1)
+            if vals is None:
+                return {"success": False, "latency_ms": latency_ms,
+                        "error": f"FC04 read error at %MW{_AMR_HS_BASE}",
+                        **{k: None for k in _AMR_HS_KEYS}}
+            return {"success": True, "latency_ms": latency_ms, "error": None,
+                    "mw5100": vals[0], "mw5101": vals[1],
+                    "mw5110": vals[10], "mw5111": vals[11], "mw5112": vals[12]}
+        out = self._op(fn)
+        if not out.get("connected"):
+            out.setdefault("error", out.get("message"))
+            out["latency_ms"] = None
+            for k in _AMR_HS_KEYS:
+                out.setdefault(k, None)
+        out["host"] = self.host
+        out["port"] = self.port
+        return out
+
+    def amr_write(self, plc_addr, value):
+        """FC06 write one AMR-owned handshake word, then read it back to confirm.
+        Only %MW5110/5111/5112 are writable — everything else is PLC-owned."""
+        try:
+            plc_addr = int(plc_addr)
+            value    = int(value) & 0xFFFF
+        except (TypeError, ValueError):
+            return {"connected": True, "success": False,
+                    "message": "'reg' and 'value' must be integers"}
+        if plc_addr not in AMR_WRITABLE:
+            return {"connected": True, "success": False,
+                    "message": f"%MW{plc_addr} is not a writable handshake register"}
+        def fn():
+            reg = plc_addr - _FENET_WRITE_WORD_BASE
+            res = self._client.write_register(reg, value)
+            ok  = not res.isError()
+            rb  = self._read_words_raw(plc_addr, 1)
+            readback = rb[0] if rb else None
+            return {"success": ok,
+                    "message": (f"wrote %MW{plc_addr} = {value} (FC06 reg {reg})"
+                                if ok else f"FC06 error at reg {reg}: {res}"),
+                    "reg":           f"%MW{plc_addr}",
+                    "value_written": value,
+                    "readback":      readback,
+                    "confirmed":     (readback == value) if readback is not None else None}
+        return self._op(fn)
+
+    def amr_set_moving(self, moving):
+        """Write the AMR movement state word (%MW5112): 2 = Moving, 1 = Stationary."""
+        return self.amr_write(5112, 2 if moving else 1)
 
     def ping(self):
         """Lightweight connectivity check — connect and read one register (FC04 reg 0 =
