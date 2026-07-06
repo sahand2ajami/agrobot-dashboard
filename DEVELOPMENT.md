@@ -213,7 +213,7 @@ dashboard path uses `robot_base_node` directly.
   turns without GPU contention. Detection is active only while the browser's Det view
   is open (`DET_IDLE_TIMEOUT = 3.0 s`). Each detected person gets a confidence score
   and a depth-derived distance from the ZED stereo depth map. The status bar shows
-  **Front: N persons  X m | Rear: N persons  Y m**. See [detection.md](detection.md)
+  **Front: N persons  X m | Rear: N persons  Y m**. See [detection.md](docs/detection.md)
   for full setup and tuning. `scripts/object_detector.py` is a legacy ROS node that
   is no longer launched — detection now lives entirely in the dashboard.
 - **Recording / track / plant logging** — under `logs/`.

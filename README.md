@@ -131,12 +131,14 @@ dual-robot-dashboard/
 │   ├── amr_plc.html                ← AMR-PLC handshake UI
 │   ├── plc_hmi.html                ← standalone PLC HMI UI
 │   ├── index_wide.html             ← wide-angle UI variant
-│   └── plc/                        ← obsolete gRPC stubs (replaced by direct Modbus TCP; not used)
+│   └── plc_combined.html           ← 4-tab combined PLC UI
 │
 ├── scripts/
 │   ├── setup_jetson_host.sh        ← one-time Jetson OS setup: Tailscale, NoMachine, WiFi priorities  ★
 │   ├── gnss_rtu608bt_read.py       ← GeoAstra RTU608BT GPS reader → /tmp/gnss_coords.json  ★
 │   ├── gnss_p9_read.py             ← alternative GPS reader for P9 modules
+│   ├── plc_read.py                 ← CLI utility: read PLC registers interactively
+│   ├── plc_test.py                 ← CLI utility: send PLC test commands
 │   ├── mock_plc_gateway.py         ← obsolete gRPC mock (replaced by pymodbus simulator; not used)
 │   └── object_detector.py          ← legacy ROS detection node (not launched; detection runs in serve.py)
 │
@@ -151,18 +153,26 @@ dual-robot-dashboard/
 │   ├── test_serve_endpoints.py     ← HTTP endpoint behaviour
 │   └── test_gnss_parsing.py        ← NMEA sentence parsing
 │
-├── docs/plc/                       ← PLC symbol table + XG5000 project
-├── documents/                      ← Modbus and ROS 2 protocol references
+├── docs/                           ← all project documentation
+│   ├── plc/                        ← PLC symbol table, XG5000 project, protocol CSV
+│   │   ├── GTS_Tree_Planter_26006_20260608.xgwx
+│   │   ├── GTS_Tree_Planter_26006_20260608.csv
+│   │   ├── GTS_Tree_Planter_symbols.csv
+│   │   └── README.md
+│   ├── detection.md                ← YOLO detection setup and GPU tuning
+│   ├── plc.md                      ← PLC integration deep-dive
+│   ├── modbus_protocol.md          ← Modbus register/protocol reference
+│   └── ros2_protocol.md            ← ROS 2 topic/message reference
+│
+├── models/                         ← YOLO model weights
+│   ├── yolov8n.pt                  ← nano model (default; used by serve.py)
+│   └── yolov8s.pt                  ← small model (optional; higher accuracy)
 │
 ├── launch_dashboard.sh             ← unified launcher (chassis-aware)  ★
 ├── launch_dashboard_plc.sh         ← launcher: full dashboard + PLC handshake tab
 ├── launch_dashboard_wide.sh        ← launcher: wide-angle UI
 ├── launch_plc.sh                   ← launcher: standalone PLC HMI (port 8767)
 ├── launch_plc2.sh                  ← launcher: AMR-PLC bridge (port 8768)
-├── plc_read.py                     ← CLI utility: read PLC registers interactively
-├── plc_test.py                     ← CLI utility: send PLC test commands
-├── yolov8n.pt                      ← YOLOv8 nano model weights (default; used by serve.py)
-├── yolov8s.pt                      ← YOLOv8 small model weights (optional; higher accuracy)
 ├── requirements.txt                ← Python deps (ROS msgs come from apt, not pip)
 ├── Dockerfile                      ← 3-stage build: ROS base → pip deps → app
 ├── docker-compose.yml              ← Jetson deployment (GPU, host networking, ZED)
@@ -649,7 +659,7 @@ person  87%  1.3 m
 
 A status bar below the stream reads **Front: 1 person  1.3 m | Rear: 0 persons**.
 
-See [detection.md](detection.md) for setup, tuning, and GPU performance notes.
+See [detection.md](docs/detection.md) for setup, tuning, and GPU performance notes.
 
 ### GNSS map & recording
 
@@ -805,7 +815,7 @@ flowchart TB
         DF["Front detection thread\n(on demand only)"]
         DR["Rear detection thread\n(on demand only)"]
         LOCK["_YOLO_INFER_LOCK\nserialises GPU access"]
-        MODEL["yolov8n.pt\nGPU FP16 singleton\n(loaded once at startup)"]
+        MODEL["models/yolov8n.pt\nGPU FP16 singleton\n(loaded once at startup)"]
     end
 
     subgraph Endpoints

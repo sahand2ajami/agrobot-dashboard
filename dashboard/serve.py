@@ -1654,7 +1654,7 @@ def _start_zed_rear_thread():
 # "NMS time limit exceeded" warning seen with the larger model+resolution.
 # max_det=20: further caps NMS work (unlikely to see >20 people at once).
 # At 10 Hz throttle and ~30-80 ms GPU inference, detection lag ≈ 100-200 ms.
-YOLO_MODEL        = 'yolov8n.pt'   # nano: 3-4× faster than small, GPU FP16
+YOLO_MODEL        = str(DASHBOARD_DIR.parent / 'models' / 'yolov8n.pt')   # nano: 3-4× faster than small, GPU FP16
 YOLO_CONFIDENCE   = 0.5
 YOLO_PERSON_CLASS = 0
 YOLO_THROTTLE_HZ  = 10.0           # 10 Hz — achievable now that inference is fast
