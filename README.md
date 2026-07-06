@@ -118,65 +118,60 @@ dual-robot-dashboard/
 │   ├── fastdds_unicast.xml         ← generic FastDDS unicast profile
 │   └── object_detection_params.yaml
 │
+├── agrobot_dashboard/                 ← installable Python package (pyproject.toml)  ★
+│   ├── domain/                     ← pure business logic: kinematics, odometry,
+│   │                                  battery filter, fwd2m planner, geo (no I/O)
+│   ├── services/                   ← telemetry.py (TelemetryStore — ALL shared state),
+│   │                                  events.py, detection.py (YOLO), recording.py
+│   └── adapters/                   ← cameras.py (ZED/webcam capture), cloud.py (Supabase)
+│
 ├── dashboard/
-│   ├── serve.py                    ← robot-agnostic HTTP server + ROS bridge  ★
-│   ├── serve_plc.py                ← extends serve.py: AMR↔PLC handshake regs + 4-tab UI
-│   ├── serve_wide.py               ← extends serve.py: ZED HD2K + no-crop layout
-│   ├── amr_plc_serve.py            ← standalone AMR-PLC bridge server (port 8768)
-│   ├── plc_hmi_serve.py            ← standalone PLC HMI server (port 8767)
+│   ├── serve.py                    ← HTTP layer + composition root (main)  ★
+│   ├── serve_plc.py                ← registers /api/amr/* routes + %MW5112 auto-write
 │   ├── chassis.py                  ← chassis abstraction layer  ★
-│   ├── plc_client.py               ← Modbus TCP client for LS Electric PLC  ★
+│   ├── plc_client.py               ← the ONE Modbus TCP client for the LS Electric PLC  ★
 │   ├── index.html                  ← main dashboard UI (adaptive)
 │   ├── plc_combined.html           ← 4-tab UI (Camera · GPS · Connectivity · PLC)
-│   ├── amr_plc.html                ← AMR-PLC handshake UI
-│   ├── plc_hmi.html                ← standalone PLC HMI UI
-│   ├── index_wide.html             ← wide-angle UI variant
-│   └── plc_combined.html           ← 4-tab combined PLC UI
+│   └── js/teleop.js                ← shared teleop transport (velocity clamp)
 │
 ├── scripts/
 │   ├── setup_jetson_host.sh        ← one-time Jetson OS setup: Tailscale, NoMachine, WiFi priorities  ★
 │   ├── gnss_rtu608bt_read.py       ← GeoAstra RTU608BT GPS reader → /tmp/gnss_coords.json  ★
-│   ├── gnss_p9_read.py             ← alternative GPS reader for P9 modules
-│   ├── plc_read.py                 ← CLI utility: read PLC registers interactively
-│   ├── plc_test.py                 ← CLI utility: send PLC test commands
-│   ├── mock_plc_gateway.py         ← obsolete gRPC mock (replaced by pymodbus simulator; not used)
-│   └── object_detector.py          ← legacy ROS detection node (not launched; detection runs in serve.py)
+│   ├── plc_read.py                 ← bench utility: read PLC registers interactively
+│   └── plc_test.py                 ← bench utility: send PLC test commands
 │
 ├── src/avatar_robot_base/          ← agrobot Modbus driver (ROS 2 Python package)
+│   ├── launch/robot_launch.py      ← parameterized: car_type:=T3|T13|T17E
 │   └── avatar_robot_base/
 │       ├── robot_base_node.py      ← Modbus RTU driver, sensor reader, odom publisher
-│       └── odom_calculation.py     ← per-variant wheel geometry (T3/T13/T17E)
+│       ├── protocol.py             ← pure Modbus frame build/parse (tested without rclpy)
+│       └── odom_calculation.py     ← per-variant wheel geometry (car_type ROS param)
 │
 ├── tests/                          ← pytest suite (no ROS / no hardware)
-│   ├── test_robot_base.py          ← motor math, encoder sign-extension, odom
+│   ├── test_domain.py              ← pure-logic units (kinematics, odometry, battery…)
+│   ├── test_robot_base.py          ← real protocol frames, encoder sign-extension
+│   ├── test_plc_client.py          ← PLC register-map integrity + validation
 │   ├── test_chassis_config.py      ← dual-chassis config, limits, feature flags
-│   ├── test_serve_endpoints.py     ← HTTP endpoint behaviour
+│   ├── test_serve_endpoints.py     ← HTTP endpoints, routing, traversal guard
 │   └── test_gnss_parsing.py        ← NMEA sentence parsing
 │
 ├── docs/                           ← all project documentation
+│   ├── architecture.md             ← THE map: layers, how to understand/extend, risks  ★
 │   ├── plc/                        ← PLC symbol table, XG5000 project, protocol CSV
-│   │   ├── GTS_Tree_Planter_26006_20260608.xgwx
-│   │   ├── GTS_Tree_Planter_26006_20260608.csv
-│   │   ├── GTS_Tree_Planter_symbols.csv
-│   │   └── README.md
 │   ├── detection.md                ← YOLO detection setup and GPU tuning
 │   ├── plc.md                      ← PLC integration deep-dive
 │   ├── modbus_protocol.md          ← Modbus register/protocol reference
 │   └── ros2_protocol.md            ← ROS 2 topic/message reference
 │
-├── models/                         ← YOLO model weights
-│   ├── yolov8n.pt                  ← nano model (default; used by serve.py)
-│   └── yolov8s.pt                  ← small model (optional; higher accuracy)
+├── models/                         ← YOLO model weights (yolov8n.pt default)
 │
 ├── launch_dashboard.sh             ← unified launcher (chassis-aware)  ★
-├── launch_dashboard_plc.sh         ← launcher: full dashboard + PLC handshake tab
-├── launch_dashboard_wide.sh        ← launcher: wide-angle UI
-├── launch_plc.sh                   ← launcher: standalone PLC HMI (port 8767)
-├── launch_plc2.sh                  ← launcher: AMR-PLC bridge (port 8768)
+├── launch_dashboard_plc.sh         ← launcher: full dashboard + PLC handshake tabs (8769)
+├── launch_dashboard_wide.sh        ← launcher: serve.py --wide (HD2K, letterboxed UI)
+├── pyproject.toml                  ← agrobot_dashboard packaging + pytest config
 ├── requirements.txt                ← Python deps (ROS msgs come from apt, not pip)
 ├── Dockerfile                      ← 3-stage build: ROS base → pip deps → app
 ├── docker-compose.yml              ← Jetson deployment (GPU, host networking, ZED)
-├── .dockerignore
 └── DEVELOPMENT.md                       ← detailed developer / implementation guide
 ```
 
@@ -969,7 +964,7 @@ All tests run **without ROS or hardware**. Coverage:
 | GPS map shows "No Data" | Plug in the GeoAstra RTU608BT (USB) or bind Bluetooth (`sudo rfcomm bind 0 <MAC>`); the reader auto-detects `/dev/ttyUSB*`, `/dev/ttyACM*`, `/dev/rfcomm0`. Check `logs/gnss/`. |
 | PLC shows "Gateway offline" | Normal when the PLC is powered off or unreachable. Driving is unaffected. Check `ping 192.168.1.2`. |
 | Port already in use | Launch with `--port 8080` (or any free port). |
-| `agrobot` helper scripts refuse to run | `start_all.sh`, `start.sh`, `teleop.sh` are agrobot-only and exit early when the active chassis is `jackal`. |
+| `agrobot` helper scripts refuse to run | `start_all.sh` and `teleop.sh` are agrobot-only and exit early when the active chassis is `jackal`. |
 | Jackal sees no ROS topics | Check `ROS_DOMAIN_ID=0` is set and the LAN cable is live. Try `ros2 topic list` on the Jackal itself. |
 
 ---
