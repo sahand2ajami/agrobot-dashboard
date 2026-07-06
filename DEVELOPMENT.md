@@ -292,7 +292,7 @@ ladder). There is no longer a Python gRPC emulator; the old `mock_plc_gateway.py
   fallback, so the dashboard and tests work even without PyYAML installed.
 - The static-file whitelist in `serve.py` allows only `/`, `/index.html`,
   `/index_wide.html` (wide), and `/logo/`. Add new static assets explicitly.
-- `dashboard/logo/` and `reference/` are gitignored.
+- `reference/` is gitignored.
 - `serve_wide.py` inherits all chassis behaviour from `serve.py` by importing it
   and monkey-patching only the HTML served and the ZED resolution.
 - `serve_plc.py` inherits from `serve.py` the same way and adds `/api/amr/*` routes

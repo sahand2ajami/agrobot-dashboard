@@ -22,9 +22,6 @@ logs/
 # ── Reference clones (read-only; not needed in the image) ────────────────────
 reference/
 
-# ── Brand assets (gitignored; not needed for the dashboard to run) ────────────
-dashboard/logo/
-
 # ── Development / editor files ───────────────────────────────────────────────
 .env
 .env.*

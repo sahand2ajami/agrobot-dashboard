@@ -29,9 +29,6 @@ dist/
 .editor/settings.local.json
 .editor/worktrees/
 
-# Brand assets (kept local, not distributed with the repo)
-dashboard/logo/
-
 # Read-only upstream clones, kept for traceability — never modified, never committed
 reference/
 

@@ -146,7 +146,7 @@ if command -v fuser &>/dev/null && ss -ltn 2>/dev/null | grep -q ":$PORT "; then
   sleep 1
 fi
 
-# ── Logo (gitignored brand asset — copy from Downloads if present) ────────────
+# ── Logo (copy from Downloads if a newer version is present) ─────────────────
 LOGO_SRC="$HOME/Downloads/logo_agrobot_robotics/svg/white_transparent.svg"
 LOGO_DST="$SCRIPT_DIR/dashboard/logo/svg/white_transparent.svg"
 if [[ ! -f "$LOGO_DST" && -f "$LOGO_SRC" ]]; then
