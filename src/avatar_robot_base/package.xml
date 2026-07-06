@@ -3,9 +3,10 @@
 <package format="3">
   <name>avatar_robot_base</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
-  <maintainer email="vboxuser@todo.todo">vboxuser</maintainer>
-  <license>TODO: License declaration</license>
+  <description>Agrobot chassis base: Modbus RTU driver, dead-reckoning odometry,
+  path trace and keyboard teleop for the T3/T13/T17E variants</description>
+  <maintainer email="sahand.ajami@gmail.com">Agrobot</maintainer>
+  <license>Apache-2.0</license>
 
   <depend>rclpy</depend>
   <depend>std_msgs</depend>
@@ -13,9 +14,6 @@
   <depend>tf2_ros</depend>
   <depend>geometry_msgs</depend>
 
-  <test_depend>ament_copyright</test_depend>
-  <test_depend>ament_flake8</test_depend>
-  <test_depend>ament_pep257</test_depend>
   <test_depend>python3-pytest</test_depend>
 
   <export>

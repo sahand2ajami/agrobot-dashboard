@@ -18,9 +18,10 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='vboxuser',
-    maintainer_email='vboxuser@todo.todo',
-    description='ROS2 robot base package',
+    maintainer='Agrobot',
+    maintainer_email='sahand.ajami@gmail.com',
+    description='Agrobot chassis base: Modbus RTU driver, dead-reckoning odometry, '
+                'path trace and keyboard teleop for the T3/T13/T17E variants',
     license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={
@@ -28,7 +29,6 @@ setup(
             'robot_base_node = avatar_robot_base.robot_base_node:main',
             'odom_calculation = avatar_robot_base.odom_calculation:main',
             'path_publisher = avatar_robot_base.path_publisher:main',
-            'reset_service = avatar_robot_base.reset_service:main',
             'teleop_keyboard = avatar_robot_base.teleop_keyboard:main',
         ],
     },

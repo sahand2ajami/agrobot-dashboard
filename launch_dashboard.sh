@@ -43,20 +43,21 @@ CLI_CHASSIS=""
 CLI_REAR=""
 CLI_HEADLESS=""          # "" = not set on the CLI; falls back to $DASHBOARD_HEADLESS
 PORT=8766
-prev=""
-for arg in "$@"; do
-  case "$arg" in
-    --chassis=*)      CLI_CHASSIS="${arg#--chassis=}" ;;
-    --port=*)         PORT="${arg#--port=}" ;;
-    --rear-camera=*)  CLI_REAR="${arg#--rear-camera=}" ;;
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --chassis)        CLI_CHASSIS="${2:?--chassis needs a value}"; shift ;;
+    --chassis=*)      CLI_CHASSIS="${1#--chassis=}" ;;
+    --port)           PORT="${2:?--port needs a value}"; shift ;;
+    --port=*)         PORT="${1#--port=}" ;;
+    --rear-camera)    CLI_REAR="${2:?--rear-camera needs a value}"; shift ;;
+    --rear-camera=*)  CLI_REAR="${1#--rear-camera=}" ;;
     --headless)       CLI_HEADLESS=1 ;;
     --no-headless)    CLI_HEADLESS=0 ;;
-    --headless=*)     CLI_HEADLESS="${arg#--headless=}" ;;
+    --headless=*)     CLI_HEADLESS="${1#--headless=}" ;;
+    *) echo "unknown option: $1 (expected --chassis/--port/--rear-camera/--headless)" >&2
+       exit 2 ;;
   esac
-  [[ "$prev" == "--chassis" ]]     && CLI_CHASSIS="$arg"
-  [[ "$prev" == "--port"    ]]     && PORT="$arg"
-  [[ "$prev" == "--rear-camera" ]] && CLI_REAR="$arg"
-  prev="$arg"
+  shift
 done
 
 # Resolve headless mode: CLI flag > $DASHBOARD_HEADLESS env > default (0 = open a
@@ -212,7 +213,7 @@ if [[ "$CHASSIS" == "agrobot" ]]; then
     sudo chmod a+rw /dev/ttyUSB0 2>/dev/null || true
   fi
   pkill -f robot_base_node 2>/dev/null && sleep 1 || true
-  CAR_TYPE="${CH_VARIANT:-T13}" ros2 run avatar_robot_base robot_base_node &
+  ros2 run avatar_robot_base robot_base_node &
   sleep 2
 
   log "[agrobot] Starting rosbridge_websocket on ws://localhost:9090"
@@ -250,7 +251,6 @@ fi
 
 # ── Dashboard HTTP server ─────────────────────────────────────────────────────
 URL="http://localhost:${PORT}"
-NET_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 log "Starting dashboard server → $URL  (chassis=$CHASSIS${CLI_REAR:+, rear-camera=$CLI_REAR})"
 if [[ -n "$CLI_REAR" ]]; then
   # shellcheck disable=SC2086  # SERVE_EXTRA is intentionally word-split (e.g. "--wide")

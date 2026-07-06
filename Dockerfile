@@ -109,7 +109,8 @@ source /opt/ros/humble/setup.bash
 # ZED SDK C++ runtime (bind-mounted from /usr/local/zed on the host)
 export LD_LIBRARY_PATH="/usr/local/zed/lib:/usr/local/cuda-12.6/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 
-export PYTHONPATH="/app/dashboard:/app/scripts${PYTHONPATH:+:${PYTHONPATH}}"
+# /app first: the agrobot_dashboard package lives at the repo root.
+export PYTHONPATH="/app:/app/dashboard:/app/scripts${PYTHONPATH:+:${PYTHONPATH}}"
 exec "$@"
 EOF
 RUN chmod +x /entrypoint.sh
