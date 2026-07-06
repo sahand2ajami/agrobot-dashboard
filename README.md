@@ -16,19 +16,20 @@ One web dashboard that drives **two different robot platforms** from a single in
 
 1. [System Overview](#system-overview)
 2. [Repository Layout](#repository-layout)
-3. [Install & Build](#install--build)
-4. [Docker Deployment](#docker-deployment)
-5. [Chassis Configuration](#chassis-configuration)
-6. [Quick Start](#quick-start)
-7. [Using the Dashboard](#using-the-dashboard)
-8. [PLC Integration (agrobot)](#plc-integration-agrobot)
-9. [Network Topology](#network-topology)
-10. [Camera & Detection Pipeline](#camera--detection-pipeline)
-11. [HTTP API Reference](#http-api-reference)
-12. [Adding a Third Chassis](#adding-a-third-chassis)
-13. [Tests](#tests)
-14. [Logs](#logs)
-15. [Troubleshooting](#troubleshooting)
+3. [First-Time Jetson Setup](#first-time-jetson-setup)
+4. [Install & Build](#install--build)
+5. [Docker Deployment](#docker-deployment)
+6. [Chassis Configuration](#chassis-configuration)
+7. [Quick Start](#quick-start)
+8. [Using the Dashboard](#using-the-dashboard)
+9. [PLC Integration (agrobot)](#plc-integration-agrobot)
+10. [Network Topology](#network-topology)
+11. [Camera & Detection Pipeline](#camera--detection-pipeline)
+12. [HTTP API Reference](#http-api-reference)
+13. [Adding a Third Chassis](#adding-a-third-chassis)
+14. [Tests](#tests)
+15. [Logs](#logs)
+16. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -113,21 +114,30 @@ dual-robot-dashboard/
 │   ├── chassis/
 │   │   ├── agrobot.yaml               ← Modbus chassis: limits, scaling, serial, battery, PLC, features
 │   │   └── jackal.yaml             ← ROS-Twist chassis: limits, topics, LAN, features
-│   ├── fastdds_jackal.xml          ← FastDDS unicast profile for field networks
+│   ├── fastdds_jackal.xml          ← FastDDS unicast profile for Jackal field networks
+│   ├── fastdds_unicast.xml         ← generic FastDDS unicast profile
 │   └── object_detection_params.yaml
 │
 ├── dashboard/
 │   ├── serve.py                    ← robot-agnostic HTTP server + ROS bridge  ★
 │   ├── serve_plc.py                ← extends serve.py: AMR↔PLC handshake regs + 4-tab UI
 │   ├── serve_wide.py               ← extends serve.py: ZED HD2K + no-crop layout
+│   ├── amr_plc_serve.py            ← standalone AMR-PLC bridge server (port 8768)
+│   ├── plc_hmi_serve.py            ← standalone PLC HMI server (port 8767)
 │   ├── chassis.py                  ← chassis abstraction layer  ★
 │   ├── plc_client.py               ← Modbus TCP client for LS Electric PLC  ★
 │   ├── index.html                  ← main dashboard UI (adaptive)
 │   ├── plc_combined.html           ← 4-tab UI (Camera · GPS · Connectivity · PLC)
-│   └── index_wide.html             ← wide-angle UI variant
+│   ├── amr_plc.html                ← AMR-PLC handshake UI
+│   ├── plc_hmi.html                ← standalone PLC HMI UI
+│   ├── index_wide.html             ← wide-angle UI variant
+│   └── plc/                        ← obsolete gRPC stubs (replaced by direct Modbus TCP; not used)
 │
 ├── scripts/
-│   ├── gnss_rtu608bt_read.py       ← GeoAstra RTU608BT GPS reader → /tmp/gnss_coords.json
+│   ├── setup_jetson_host.sh        ← one-time Jetson OS setup: Tailscale, NoMachine, WiFi priorities  ★
+│   ├── gnss_rtu608bt_read.py       ← GeoAstra RTU608BT GPS reader → /tmp/gnss_coords.json  ★
+│   ├── gnss_p9_read.py             ← alternative GPS reader for P9 modules
+│   ├── mock_plc_gateway.py         ← obsolete gRPC mock (replaced by pymodbus simulator; not used)
 │   └── object_detector.py          ← legacy ROS detection node (not launched; detection runs in serve.py)
 │
 ├── src/avatar_robot_base/          ← agrobot Modbus driver (ROS 2 Python package)
@@ -147,6 +157,12 @@ dual-robot-dashboard/
 ├── launch_dashboard.sh             ← unified launcher (chassis-aware)  ★
 ├── launch_dashboard_plc.sh         ← launcher: full dashboard + PLC handshake tab
 ├── launch_dashboard_wide.sh        ← launcher: wide-angle UI
+├── launch_plc.sh                   ← launcher: standalone PLC HMI (port 8767)
+├── launch_plc2.sh                  ← launcher: AMR-PLC bridge (port 8768)
+├── plc_read.py                     ← CLI utility: read PLC registers interactively
+├── plc_test.py                     ← CLI utility: send PLC test commands
+├── yolov8n.pt                      ← YOLOv8 nano model weights (default; used by serve.py)
+├── yolov8s.pt                      ← YOLOv8 small model weights (optional; higher accuracy)
 ├── requirements.txt                ← Python deps (ROS msgs come from apt, not pip)
 ├── Dockerfile                      ← 3-stage build: ROS base → pip deps → app
 ├── docker-compose.yml              ← Jetson deployment (GPU, host networking, ZED)
@@ -155,6 +171,144 @@ dual-robot-dashboard/
 ```
 
 Files marked ★ are the best starting points for understanding the codebase.
+
+---
+
+## First-Time Jetson Setup
+
+> **Who this section is for:** anyone deploying on a physical NVIDIA Jetson for the first time. If you are only exploring the code or running a demo on a laptop, skip to [Install & Build](#install--build).
+
+This section sets up the host operating system — remote access and WiFi. It needs to be done **once** on a fresh Jetson. It is completely separate from installing the dashboard software.
+
+```bash
+# Run from the project root — interactive, takes about 5–10 minutes
+bash scripts/setup_jetson_host.sh
+```
+
+The script walks you through three steps and is safe to re-run (already-installed components are detected and skipped).
+
+| Step | What it installs / configures | Why you need it |
+|------|-------------------------------|-----------------|
+| 1 | **Tailscale VPN** | Assigns the Jetson a permanent IP address (`100.x.x.x`) that is reachable from any device on your Tailscale network, even across different WiFi networks or over the internet. |
+| 2 | **NoMachine remote desktop server** | Lets you see and control the Jetson's full desktop from your laptop without a physical monitor — useful for debugging, running terminals, and watching the dashboard browser. |
+| 3 | **WiFi network (WPA2 personal)** | Saves a named network with a priority so the Jetson connects automatically on boot and prefers the right network when multiple are in range. |
+
+> **Docker note:** This script configures the host OS. The Docker container uses `network_mode: host`, so it automatically inherits whatever network configuration the host has. Run this script on the bare Jetson regardless of whether you use Docker or the native install.
+
+---
+
+### Connecting via NoMachine
+
+NoMachine is a remote desktop tool — it streams the Jetson's screen to your laptop. Once connected you can open a terminal on the Jetson, watch the dashboard in a browser, and manage files, all without being physically next to the robot.
+
+**Jetson connection details:**
+
+| Field | Value |
+|-------|-------|
+| Host | `100.82.69.98` |
+| Port | `4000` |
+| Protocol | `NX` |
+
+The host address `100.82.69.98` is the Jetson's **Tailscale IP** — it stays the same regardless of which WiFi network the Jetson is currently on. To confirm or look up the current Tailscale IP at any time:
+
+```bash
+tailscale ip -4
+```
+
+**Step-by-step to connect from your laptop:**
+
+1. Download and install the **NoMachine client** on your laptop from [nomachine.com/download](https://www.nomachine.com/download). It is available for Windows, macOS, and Linux and is free.
+2. Open NoMachine. Click **Add** (or **New Connection**).
+3. Set **Protocol** to `NX`, **Host** to `100.82.69.98`, **Port** to `4000`. Save and connect.
+4. Log in with the Jetson's Ubuntu **username and password** (the same credentials you use to log in locally).
+5. You will see the Jetson's desktop. Open a terminal and continue with the steps in [Quick Start](#quick-start).
+
+> **First-time only:** On the first connection, NoMachine may ask on the Jetson screen to allow the remote session. If the Jetson has no monitor attached, the session is created automatically and you can proceed.
+
+---
+
+### WiFi priority
+
+The Jetson uses **NetworkManager** to manage WiFi. Each saved network has a `priority` number. When multiple known networks are within range at the same time, the Jetson connects to the one with the **highest priority** (larger number wins). Networks with the same priority are handled by NetworkManager's internal order.
+
+**Recommended priority values:**
+
+| Network | Suggested priority | Typical use |
+|---------|--------------------|-------------|
+| Sahand (home / lab) | `100` | Default — always preferred |
+| Field hotspot / mobile phone | `50` | Used outdoors when Sahand is out of range |
+| University / eduroam | `20` | Lowest — only when nothing else is available |
+
+**Check all saved networks and their current priorities:**
+
+```bash
+nmcli -f NAME,DEVICE,AUTOCONNECT-PRIORITY con show
+```
+
+**Add a second WiFi network** (e.g. a field hotspot):
+
+```bash
+# Option A — run the setup script again; it prompts for SSID, password, and priority
+bash scripts/setup_jetson_host.sh
+
+# Option B — add directly with nmcli (standard WPA2 personal network):
+sudo nmcli con add \
+  type wifi \
+  con-name "FieldHotspot" \
+  ssid "FieldHotspot" \
+  wifi-sec.key-mgmt wpa-psk \
+  wifi-sec.psk "the-password" \
+  connection.autoconnect yes \
+  connection.autoconnect-priority 50
+```
+
+> Replace `"FieldHotspot"` and `"the-password"` with the actual SSID and password. The `con-name` is just a local label — it can match the SSID or be anything you like.
+
+**Change the priority of an existing network:**
+
+```bash
+sudo nmcli con mod "Sahand" connection.autoconnect-priority 100
+```
+
+**Add eduroam** (enterprise WPA2 — used at many universities):
+
+```bash
+sudo nmcli con add \
+  type wifi \
+  con-name "eduroam" \
+  ssid "eduroam" \
+  wifi-sec.key-mgmt wpa-eap \
+  802-1x.eap peap \
+  802-1x.phase2-auth mschapv2 \
+  802-1x.identity "your-username@institution.edu" \
+  802-1x.password "your-password" \
+  connection.autoconnect yes \
+  connection.autoconnect-priority 20
+```
+
+> Different institutions configure eduroam differently. Some require a CA certificate (`.pem` file). If the command above fails, check your institution's eduroam setup guide — they usually provide a configuration profile or exact nmcli instructions.
+
+**Remove a saved network:**
+
+```bash
+sudo nmcli con delete "NetworkName"
+```
+
+---
+
+### Updating the NoMachine version
+
+The script pins a specific NoMachine version so the download is reproducible. When NoMachine releases a new version and you want to upgrade:
+
+1. Visit [nomachine.com/download/linux&id=30&s=Arm](https://www.nomachine.com/download/linux&id=30&s=Arm) and note the latest ARM64 `.deb` filename. It looks like `nomachine_8.16.1_1_arm64.deb`.
+2. Open `scripts/setup_jetson_host.sh` and update **two lines** near the top:
+
+```bash
+NX_VERSION="8.16.1"   # ← new version, e.g. the number before the build digit
+NX_BUILD="1"          # ← build number (the digit between the version and _arm64)
+```
+
+3. Run the script again. It detects the version mismatch and asks whether to upgrade.
 
 ---
 
@@ -178,6 +332,11 @@ source /opt/ros/humble/setup.bash
 #    Includes: ultralytics, opencv-python, pyserial, pyyaml, pymodbus, pytest
 #    (rclpy and ROS message packages MUST come from apt, never pip)
 pip3 install -r requirements.txt
+
+# agrobot chassis — ZED cameras (skip for jackal):
+#   1. Install ZED SDK 4.2.x from https://www.stereolabs.com/developers
+#   2. pip3 install pyzed
+# Without this both camera feeds are unavailable, but the dashboard still starts.
 
 # 3. Install ROS apt packages — common to both chassis
 sudo apt install -y \
@@ -229,7 +388,7 @@ A `Dockerfile` and `docker-compose.yml` are included for containerised deploymen
 ### Quick start
 
 ```bash
-# First run — downloads base image (~1.5 GB) and builds all layers
+# First run — downloads base image and builds all layers (~4 GB total)
 docker compose build
 
 # Start — dashboard at http://<jetson-ip>:8766
@@ -239,7 +398,7 @@ docker compose up
 docker compose down
 ```
 
-The image build takes 5–10 minutes on a Jetson (downloading the ROS base + PyTorch wheel). Subsequent `docker compose up` calls start in a few seconds using the cached image.
+The image build takes 10–20 minutes on a Jetson — the ROS base, NVIDIA JetPack PyTorch wheel (~2 GB alone), and pyzed all download during the first build. Subsequent `docker compose up` calls start in a few seconds using the cached image.
 
 ### What the container includes
 
@@ -403,7 +562,7 @@ source install/setup.bash
 What the launcher starts, in order:
 
 ```
-ZED 2i cameras (pyzed) → GNSS reader → robot_base_node (Modbus) → rosbridge → HTTP server
+GNSS reader → robot_base_node (Modbus) → rosbridge → HTTP server (serve.py opens ZED cameras internally on startup)
 ```
 
 You should see **Chassis Link** go green, **Chassis Battery** show a voltage, and both camera feeds appear. Drive with **W A S D**.
@@ -428,19 +587,23 @@ ros2 topic list | grep jackal
 ./launch_dashboard.sh --chassis jackal
 ```
 
-The launcher sets `ROS_DOMAIN_ID=0` and adds `192.168.1.100/24` on `eno1`. The agrobot-only panels (battery, oil, wheel odom, 2 m drive, Modbus slider, PLC) are hidden automatically.
+The launcher sets `ROS_DOMAIN_ID=0` and adds the `host_ip` from `config/chassis/jackal.yaml` (default `192.168.1.100/24`) on `host_iface` (default `eno1`). The agrobot-only panels (battery, oil, wheel odom, 2 m drive, Modbus slider, PLC) are hidden automatically.
 
 ### Remote / headless (drive from a laptop)
 
 ```bash
 ./launch_dashboard.sh --chassis agrobot --headless
-# The terminal prints every address the Jetson is reachable on:
-#   →  http://192.168.1.100:8766   (wired LAN)
-#   →  http://10.x.x.x:8766        (WiFi)
-#   →  http://100.x.x.x:8766       (Tailscale, if configured)
+# The terminal prints the main LAN/WiFi address:
+#   →  http://10.x.x.x:8766        (WiFi/LAN)
+
+# For the Tailscale address, run separately:
+tailscale ip -4
+#   → 100.x.x.x  →  open http://100.x.x.x:8766 from any Tailscale-connected device
 ```
 
 Open whichever address shares a network with your laptop. The full UI works in any modern browser. This removes the Jetson's browser-rendering cost, leaving more CPU for cameras and control loops.
+
+> **Note:** The launcher omits `192.168.*` (PLC/Jackal subnet) **and** `100.*` (Tailscale) from the printed list — only the main WiFi/LAN address appears. Use `tailscale ip -4` to find the Tailscale address. If your laptop is on the same `192.168.1.*` LAN (e.g. connected to the same switch), open `http://192.168.1.100:8766` directly — the dashboard is reachable there, it's just not printed.
 
 ### Common flags
 
@@ -575,13 +738,24 @@ Then **Planter / Auger / Both** buttons drive the real sequence.
 Point `plc.host` in `agrobot.yaml` at a Modbus-TCP simulator:
 
 ```bash
-# pymodbus simulator (any machine on the LAN)
+# pymodbus 3.x simulator (any machine on the LAN)
 pip install pymodbus
-python3 -m pymodbus.server --host 0.0.0.0 --port 502
+python3 - <<'EOF'
+from pymodbus.server import StartTcpServer
+from pymodbus.datastore import ModbusSlaveContext, ModbusServerContext
+from pymodbus.datastore import ModbusSequentialDataBlock
+store = ModbusSlaveContext(
+    hr=ModbusSequentialDataBlock(0, [0] * 10000),  # holding registers (%MW)
+    co=ModbusSequentialDataBlock(0, [0] * 65536),  # coils (%MX)
+)
+StartTcpServer(ModbusServerContext(store, single=True), address=("0.0.0.0", 502))
+EOF
 
 # Or use LS Electric XG5000 (Windows) — runs the real PLC ladder, highest fidelity.
 # Change plc.host in agrobot.yaml to the Windows machine's IP.
 ```
+
+> **Note:** `python3 -m pymodbus.server` is not supported in pymodbus 3.x. Use the script above, or install pymodbus 2.x if you need the old CLI.
 
 ---
 
