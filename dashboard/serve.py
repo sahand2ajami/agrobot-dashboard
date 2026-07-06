@@ -45,6 +45,9 @@ except ImportError:
     from dashboard.plc_client import (SEQUENCE_COMMANDS, MACHINE_COMMANDS, ROBOT_COMMANDS,
                                       PLC_TAG_MAP, symbol_roles)
 
+# Pure business logic (importing chassis above put the repo root on sys.path).
+from agrobot_dashboard.domain import auto_drive, geo, kinematics
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -167,28 +170,14 @@ def twist_to_wheel_speeds(linear_x: float, angular_z: float):
     ch = Handler.chassis
     if ch is not None:
         # The active chassis's scaling (config/chassis/*.yaml) is the single
-        # source of truth; the module constants below are only the fallback
-        # for chassis-less use (unit tests, standalone import).
+        # source of truth; the module constants are only the fallback for
+        # chassis-less use (unit tests, standalone import).
         return ch.twist_to_wheel_speeds(linear_x, angular_z)
-    lin = int(linear_x  * LINEAR_SCALE)
-    ang = int(angular_z * ANGULAR_SCALE)
-    left  = max(-SPEED_MAX, min(SPEED_MAX, lin - ang))
-    right = max(-SPEED_MAX, min(SPEED_MAX, lin + ang))
-    return left, right
+    return kinematics.twist_to_wheel_speeds(
+        linear_x, angular_z, LINEAR_SCALE, ANGULAR_SCALE, SPEED_MAX)
 
 
-def _dms(value, is_lat):
-    """Format a decimal-degree coordinate as degrees-minutes-seconds with a
-    hemisphere suffix, e.g. 51.5074 -> 51°30'26.64\"N.  Returns "" for None."""
-    if value is None:
-        return ""
-    hemi = ("N" if value >= 0 else "S") if is_lat else ("E" if value >= 0 else "W")
-    v = abs(float(value))
-    deg = int(v)
-    minutes_full = (v - deg) * 60.0
-    minutes = int(minutes_full)
-    seconds = (minutes_full - minutes) * 60.0
-    return f"{deg}°{minutes:02d}'{seconds:05.2f}\"{hemi}"
+_dms = geo.dms
 
 
 def _push_seedling(entry: dict):
@@ -946,12 +935,10 @@ class Handler(SimpleHTTPRequestHandler):
                     cur_r = Handler._odom_r
                 traveled = ((cur_l - start_l) + (cur_r - start_r)) / 2.0
 
-                if traveled >= target_pulses:
+                next_speed = auto_drive.plan_speed(
+                    traveled, target_pulses, slow_pulses, speed, FWD_SLOW_SPEED)
+                if next_speed is None:   # target distance reached
                     break
-
-                # Two-phase: slow crawl for the final 0.5 m to eliminate coasting overshoot
-                remaining  = target_pulses - traveled
-                next_speed = FWD_SLOW_SPEED if remaining <= slow_pulses else speed
 
                 with Handler._vel_lock:
                     # Abort if an external command overrode our last commanded speed

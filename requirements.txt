@@ -16,9 +16,9 @@ numpy>=1.21
 # Serial communication — GNSS receiver (scripts/gnss_rtu608bt_read.py)
 pyserial>=3.5
 
-# Chassis YAML config (config/chassis/*.yaml). dashboard/chassis.py has a minimal
-# built-in fallback parser, so this is optional but strongly recommended.
-pyyaml>=5.3
+# Chassis YAML config (config/chassis/*.yaml). Required — the old hand-rolled
+# fallback parser was removed (it silently mis-parsed anything non-trivial).
+pyyaml>=6.0
 
 # Modbus TCP — direct PLC communication (dashboard/plc_client.py, dashboard/amr_plc_serve.py).
 # Imported lazily; the dashboard and tests run without a live PLC.

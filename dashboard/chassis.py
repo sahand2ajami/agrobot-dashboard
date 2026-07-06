@@ -23,6 +23,7 @@ The Chassis object itself is pure-Python and import-safe without ROS, so it can
 be unit-tested anywhere. ROS message types are imported lazily inside setup_ros().
 """
 import os
+import sys
 from pathlib import Path
 
 REPO_ROOT       = Path(__file__).resolve().parent.parent
@@ -31,70 +32,23 @@ ACTIVE_FILE     = CONFIG_DIR / "active_chassis.yaml"
 CHASSIS_DIR     = CONFIG_DIR / "chassis"
 DEFAULT_CHASSIS = "agrobot"
 
+# Transitional (until this module moves into the agrobot_dashboard package):
+# make the repo root importable so `agrobot_dashboard` resolves when running
+# straight from a checkout without an installed package.
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-# ---------------------------------------------------------------------------
-# YAML loading (PyYAML when available; tiny fallback parser otherwise)
-# ---------------------------------------------------------------------------
+import yaml  # PyYAML is a hard dependency (pyproject.toml); a hand-rolled
+             # fallback parser used to live here and silently mis-parsed
+             # anything beyond the exact shape of our config files.
+
+from agrobot_dashboard.domain import kinematics
+from agrobot_dashboard.domain.battery import MedianVoltageFilter
+from agrobot_dashboard.domain.odometry import OdometryAccumulator
+
+
 def _load_yaml(path):
-    """Parse a YAML file. Prefer PyYAML; fall back to a minimal parser that
-    understands the simple key/value + one-level-nested structure used by our
-    chassis config files, so the dashboard and tests work even on a bare Python
-    install without PyYAML."""
-    text = Path(path).read_text(encoding="utf-8")
-    try:
-        import yaml  # type: ignore
-        return yaml.safe_load(text) or {}
-    except ImportError:
-        return _minimal_yaml(text)
-
-
-def _coerce(token):
-    t = token.strip()
-    if len(t) >= 2 and t[0] in "\"'" and t[-1] == t[0]:
-        return t[1:-1]
-    low = t.lower()
-    if low in ("true", "yes"):
-        return True
-    if low in ("false", "no"):
-        return False
-    if low in ("null", "~", ""):
-        return None
-    try:
-        return int(t)
-    except ValueError:
-        pass
-    try:
-        return float(t)
-    except ValueError:
-        pass
-    return t
-
-
-def _minimal_yaml(text):
-    """Parse the limited YAML subset our config files use: comments, scalar
-    key/value pairs, and one level of nested mapping (e.g. `features:`)."""
-    root = {}
-    stack = [(-1, root)]   # (indent, container)
-    for raw in text.splitlines():
-        line = raw.split("#", 1)[0].rstrip()   # our configs never use '#' in values
-        if not line.strip():
-            continue
-        indent = len(line) - len(line.lstrip(" "))
-        key, sep, val = line.strip().partition(":")
-        if not sep:
-            continue
-        key = key.strip()
-        val = val.strip()
-        while stack and indent <= stack[-1][0]:
-            stack.pop()
-        parent = stack[-1][1]
-        if val == "":
-            child = {}
-            parent[key] = child
-            stack.append((indent, child))
-        else:
-            parent[key] = _coerce(val)
-    return root
+    return yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
 
 
 # ---------------------------------------------------------------------------
@@ -165,17 +119,11 @@ class Chassis:
         return bool(self.features.get(key, False))
 
     def twist_to_wheel_speeds(self, linear_x, angular_z):
-        """Convert Twist (m/s, rad/s) to [left, right] wheel speed integers.
-
-        Differential-drive convention (matches teleop_keyboard.py):
-          forward  W: [+,+]   backward S: [-,-]
-          left     A: [-,+]   right    D: [+,-]   (positive angular_z = left)
-        """
-        lin = int(linear_x  * self.linear_scale)
-        ang = int(angular_z * self.angular_scale)
-        left  = max(-self.speed_max, min(self.speed_max, lin - ang))
-        right = max(-self.speed_max, min(self.speed_max, lin + ang))
-        return left, right
+        """Convert Twist (m/s, rad/s) to (left, right) wheel speed integers
+        using this chassis's configured scaling."""
+        return kinematics.twist_to_wheel_speeds(
+            linear_x, angular_z,
+            self.linear_scale, self.angular_scale, self.speed_max)
 
     def to_browser_config(self):
         """Payload for GET /api/config — lets the web UI adapt to the chassis."""
@@ -230,64 +178,44 @@ class Chassis:
 
         handler.speed_cmd_pub = pub
 
-        # Optional wheel-odometry feedback (agrobot only).
+        # Optional wheel-odometry feedback (agrobot only). The accumulation rules
+        # (outlier rejection, reconnect reset) live in domain.odometry; this
+        # callback only feeds it and mirrors the result onto the handler
+        # fields the HTTP endpoints read.
         if self.wheel_odom_topic:
             from std_msgs.msg import Int32MultiArray
 
             # Max plausible encoder delta per cycle (~10 Hz). Robot top speed ~1 m/s
             # ≈ 3211 pulses/m → ~321 pulses/cycle; 3000 gives a comfortable 9× margin.
-            MAX_ODOM_DELTA = 3000
+            odom = OdometryAccumulator(max_delta=3000, reconnect_gap_s=5.0)
 
             def _on_wheel_odom(msg):
                 if len(msg.data) >= 2:
-                    l, r = int(msg.data[0]), int(msg.data[1])
                     now = time.monotonic()
                     with handler._odom_lock:
-                        prev_last = handler._odom_last
-                        # Reconnect: if the chassis was offline >5 s, treat as a fresh
-                        # session and reset accumulated mileage to start from 0.
-                        if prev_last > 0 and (now - prev_last) > 5.0:
-                            handler._odom_mileage = 0.0
-                            handler._odom_prev_l  = None
-                            handler._odom_prev_r  = None
-                        if handler._odom_prev_l is not None:
-                            dl = l - handler._odom_prev_l
-                            dr = r - handler._odom_prev_r
-                            # Skip outlier deltas (bad Modbus read / register jump).
-                            if abs(dl) < MAX_ODOM_DELTA and abs(dr) < MAX_ODOM_DELTA:
-                                handler._odom_mileage += abs((dl + dr) / 2.0)
-                        handler._odom_prev_l = l
-                        handler._odom_prev_r = r
-                        handler._odom_l    = l
-                        handler._odom_r    = r
-                        handler._odom_last = now
+                        odom.update(int(msg.data[0]), int(msg.data[1]), now)
+                        handler._odom_l       = odom.left
+                        handler._odom_r       = odom.right
+                        handler._odom_mileage = odom.mileage_pulses
+                        handler._odom_last    = odom.last_update
 
             node.create_subscription(Int32MultiArray, self.wheel_odom_topic,
                                      _on_wheel_odom, 10)
 
         # Optional chassis battery voltage (agrobot only — gated by the `battery`
-        # feature). Raw Float32 readings are accumulated in a 15 s window, outliers
-        # (≤0 V, or outside 30-70 V) are discarded, and the median is recomputed
-        # every 10 s so the gauge is steady. The HTTP handler reads the smoothed value.
+        # feature). The median smoothing lives in domain.battery; this callback
+        # feeds it and mirrors the smoothed value for GET /api/chassis_battery.
         if self.has_feature("battery") and self.battery_topic:
             from std_msgs.msg import Float32
+
+            batt = MedianVoltageFilter()
 
             def _on_chassis_battery(msg):
                 now = time.monotonic()
                 with handler._chassis_batt_lock:
-                    handler._chassis_batt_last = now
-                    if msg.data > 0:
-                        handler._chassis_batt_window.append((now, msg.data))
-                    cutoff = now - 15.0
-                    handler._chassis_batt_window = [
-                        (t, v) for t, v in handler._chassis_batt_window if t > cutoff
-                    ]
-                    if now - handler._chassis_batt_smoothed_at >= 10.0:
-                        valid = sorted(v for _, v in handler._chassis_batt_window
-                                       if 30.0 < v < 70.0)
-                        if valid:
-                            handler._chassis_batt_smoothed = valid[len(valid) // 2]
-                            handler._chassis_batt_smoothed_at = now
+                    batt.add(float(msg.data), now)
+                    handler._chassis_batt_last     = batt.last_reading
+                    handler._chassis_batt_smoothed = batt.smoothed
 
             node.create_subscription(Float32, self.battery_topic,
                                      _on_chassis_battery, 10)

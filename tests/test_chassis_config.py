@@ -4,7 +4,6 @@ chassis-aware behaviour of dashboard/serve.py.
 
 Runs without ROS or hardware:
   - chassis config loading (agrobot | jackal), feature flags, limits, topics
-  - the minimal YAML fallback parser
   - chassis selection precedence (cli > env > active_chassis.yaml > default)
   - Twist -> wheel-speed conversion parity with serve.twist_to_wheel_speeds
   - GET /api/config reflects the active chassis
@@ -102,13 +101,6 @@ class TestResolution:
         monkeypatch.setenv("ROBOT_CHASSIS", "jackal")
         assert chassis.resolve_name() == "jackal"
 
-    def test_minimal_yaml_parser(self):
-        parsed = chassis._minimal_yaml(
-            "name: x\ncomms: ros_twist\nmax_linear: 3.0\n"
-            "features:\n  battery: false\n  fwd2m: true\n")
-        assert parsed["name"] == "x"
-        assert parsed["max_linear"] == 3.0
-        assert parsed["features"] == {"battery": False, "fwd2m": True}
 
 
 # ── rear-camera source (realsense | webcam) ─────────────────────────────────

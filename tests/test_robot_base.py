@@ -64,12 +64,14 @@ class TestTwistToWheelSpeeds:
         assert isinstance(r, int)
 
 
-# ── Int32 sign-extension logic from robot_base_node._publish ─────────────────
-# We extract the formula into a standalone function for testability.
+# ── Int32 sign-extension from the real protocol module ──────────────────────
+# This used to test a hand-copied duplicate of the formula, which could pass
+# while the node's copy drifted. It now imports the exact code the node runs.
 
-def _sign_extend_32(raw: int) -> int:
-    """Replicate the sign-extension logic in robot_base_node._publish."""
-    return raw if raw < 0x8000_0000 else raw - 0x1_0000_0000
+sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "avatar_robot_base"))
+
+from avatar_robot_base.protocol import sign_extend_32 as _sign_extend_32
+from avatar_robot_base.protocol import parse_sensor_regs, write_speed_frame, crc16
 
 
 class TestOdomSignExtension:
@@ -115,3 +117,34 @@ class TestOdomSignExtension:
     def test_register_combinations(self, hi, lo, expected):
         raw = (hi << 16) | lo
         assert _sign_extend_32(raw) == expected
+
+
+# ── Sensor register block decoding (layout fixed by passive bus capture) ────
+
+class TestParseSensorRegs:
+    def test_full_block(self):
+        # odom_L = 100, odom_R = -1, battery 48.35 V, fault 3, oil 87 %
+        regs = (0x0000, 0x0064, 0xFFFF, 0xFFFF, 4835, 3, 87)
+        s = parse_sensor_regs(regs)
+        assert s["odom_l"] == 100
+        assert s["odom_r"] == -1
+        assert s["battery_v"] == pytest.approx(48.35)
+        assert s["error_code"] == 3
+        assert s["oil_pct"] == 87
+
+    def test_battery_is_centivolts(self):
+        # regs[4] is volts × 100 — NOT regs[5]/10 as the pre-battery-2 layout had.
+        regs = (0, 0, 0, 0, 5210, 0, 0)
+        assert parse_sensor_regs(regs)["battery_v"] == pytest.approx(52.10)
+
+
+class TestSpeedFrame:
+    def test_frame_layout(self):
+        f = write_speed_frame(500, -500)
+        assert f[0] == 0x01 and f[1] == 0x10          # slave, FC16
+        assert f[2:4] == b"\x00\x16"                  # speed register 0x0016
+        assert f[-2:] == crc16(f[:-2])                # trailing CRC
+
+    def test_zero_stop_frame(self):
+        f = write_speed_frame(0, 0)
+        assert f[7:13] == b"\x00\x00\x00\x00\x00\x00"

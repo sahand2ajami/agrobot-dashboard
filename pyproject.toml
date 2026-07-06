@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agrobot-dashboard"
+version = "1.0.0"
+description = "Dual-robot (agrobot / jackal) teleoperation dashboard"
+requires-python = ">=3.10"
+# Hard dependencies only — the dashboard degrades gracefully without cameras,
+# YOLO, or a PLC, but config parsing is not optional.
+dependencies = [
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+# Full field runtime (Jetson). rclpy and ROS msgs come from ros-humble-* apt
+# packages, never pip — they are intentionally NOT listed here.
+robot = [
+    "pyserial>=3.5",
+    "pymodbus>=3.0",
+    "opencv-python>=4.5",
+    "numpy",
+]
+dev = [
+    "pytest>=7.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["agrobot_dashboard*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Transitional import paths until Phase 2 moves dashboard/*.py and scripts/
+# into the agrobot_dashboard package; "." makes `import agrobot_dashboard` work
+# without an editable install.
+pythonpath = [".", "dashboard", "scripts", "src/avatar_robot_base"]
