@@ -85,15 +85,13 @@ def _amr_state_loop():
         if plc is None:
             continue
 
-        with _serve.Handler._vel_lock:
-            lx     = _serve.Handler._vel_lin
-            az     = _serve.Handler._vel_ang
-            active = _serve.Handler._vel_active
-            last_t = _serve.Handler._vel_last
+        vel = _serve.TELEM.vel
+        with vel.lock:
+            lx, az, active, last_t = vel.lin, vel.ang, vel.active, vel.last
 
         moving = (active
                   and (abs(lx) > 1e-4 or abs(az) > 1e-4)
-                  and (time.monotonic() - last_t) < _serve.Handler.VEL_TIMEOUT)
+                  and (time.monotonic() - last_t) < vel.timeout)
 
         if moving == moving_prev:
             continue   # no state change — skip the Modbus write

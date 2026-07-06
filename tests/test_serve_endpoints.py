@@ -251,27 +251,27 @@ class TestCmdVelBounds:
 class TestSensorAbsent:
     def test_camera_returns_503_when_no_frame(self, server):
         port, _ = server
-        # No camera thread running → Handler._cam_jpeg is None
-        serve.Handler._cam_jpeg = None
+        # No camera thread running → no rear-cam frame in the store
+        serve.TELEM.rear_cam.jpeg = None
         status, _, _ = _get(port, "/api/camera")
         assert status == 503
 
     def test_zed_returns_503_when_no_frame(self, server):
         port, _ = server
-        serve.Handler._zed_jpeg = None
+        serve.TELEM.front_zed.jpeg = None
         status, _, _ = _get(port, "/api/zed")
         assert status == 503
 
     def test_detection_returns_503_when_no_frame(self, server):
         port, _ = server
-        serve.Handler._det_jpeg = None
+        serve.TELEM.front_det.jpeg = None
         status, _, _ = _get(port, "/api/detection")
         assert status == 503
 
     def test_camera_status_json_when_no_frame(self, server):
         port, _ = server
-        serve.Handler._cam_jpeg  = None
-        serve.Handler._cam_last_error = "test-error"
+        serve.TELEM.rear_cam.jpeg = None
+        serve.TELEM.rear_cam.last_error = "test-error"
         status, body, _ = _get(port, "/api/camera/status")
         assert status == 200
         data = json.loads(body)
@@ -280,8 +280,6 @@ class TestSensorAbsent:
 
     def test_wheel_odom_returns_zeros_initially(self, server):
         port, _ = server
-        serve.Handler._odom_l = 0
-        serve.Handler._odom_r = 0
         status, body, _ = _get(port, "/api/wheel_odom")
         assert status == 200
         data = json.loads(body)
@@ -294,9 +292,10 @@ class TestSensorAbsent:
 class TestChassisBattery:
     def test_no_data_reports_disconnected(self, server):
         port, _ = server
-        with serve.Handler._chassis_batt_lock:
-            serve.Handler._chassis_batt_last     = 0.0
-            serve.Handler._chassis_batt_smoothed = 0.0
+        batt = serve.TELEM.battery
+        with batt.lock:
+            batt.filter.last_reading = 0.0
+            batt.filter.smoothed     = 0.0
         status, body, _ = _get(port, "/api/chassis_battery")
         assert status == 200
         data = json.loads(body)
@@ -305,9 +304,10 @@ class TestChassisBattery:
 
     def test_fresh_reading_reports_voltage(self, server):
         port, _ = server
-        with serve.Handler._chassis_batt_lock:
-            serve.Handler._chassis_batt_last     = time.monotonic()
-            serve.Handler._chassis_batt_smoothed = 51.4
+        batt = serve.TELEM.battery
+        with batt.lock:
+            batt.filter.last_reading = time.monotonic()
+            batt.filter.smoothed     = 51.4
         status, body, _ = _get(port, "/api/chassis_battery")
         assert status == 200
         data = json.loads(body)
@@ -316,9 +316,10 @@ class TestChassisBattery:
 
     def test_stale_reading_reports_disconnected(self, server):
         port, _ = server
-        with serve.Handler._chassis_batt_lock:
-            serve.Handler._chassis_batt_last     = time.monotonic() - 60.0
-            serve.Handler._chassis_batt_smoothed = 51.4
+        batt = serve.TELEM.battery
+        with batt.lock:
+            batt.filter.last_reading = time.monotonic() - 60.0
+            batt.filter.smoothed     = 51.4
         status, body, _ = _get(port, "/api/chassis_battery")
         assert status == 200
         data = json.loads(body)

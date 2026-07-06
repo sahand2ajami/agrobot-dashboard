@@ -227,6 +227,20 @@ def _push_seedling(entry: dict):
 
 
 # ---------------------------------------------------------------------------
+# Runtime state — one thread-safe store shared by capture threads, ROS
+# callbacks and HTTP request threads (agrobot_dashboard.services.telemetry).
+# ---------------------------------------------------------------------------
+from agrobot_dashboard.services.telemetry import TelemetryStore
+
+TELEM = TelemetryStore(settings_defaults={
+    'maxLinear':   2.0,    # absolute max forward speed m/s (= Fast preset)
+    'maxAngular':  0.5,    # max turn rate rad/s
+    'modbusSpeed': 1500,   # raw Modbus units for Normal preset (mirrors slLinear/4 * LINEAR_SCALE)
+    'seedlingType': '',    # species label appended to every planted-seedling record
+})
+
+
+# ---------------------------------------------------------------------------
 # HTTP handler
 # ---------------------------------------------------------------------------
 class Handler(SimpleHTTPRequestHandler):
@@ -234,83 +248,7 @@ class Handler(SimpleHTTPRequestHandler):
     speed_cmd_pub    = None   # rclpy publisher, set by main() after rclpy.init()
     chassis          = None   # active chassis.Chassis, set by main(); None in tests
     plc              = None   # plc_client.PlcClient, set by main() on plc-enabled chassis
-
-    _cam_lock            = threading.Lock()
-    _cam_jpeg: bytes     = None
-    _cam_frame           = None   # latest stream-res BGR numpy frame for rear detection compositing
-    _cam_frame_count     = 0
-    _cam_last_error      = None
-    _cam_connected       = False
-    _cam_last_frame_time = 0.0   # kept for MJPEG stream throttling
-
-    _det_lock         = threading.Lock()
-    _det_jpeg: bytes  = None   # kept as fallback when _zed_frame is not yet available
-    _det_boxes        = []     # [(x1,y1,x2,y2,label), ...] at stream-res; under _det_lock
-    _det_payload      = None   # last detection JSON dict; under _det_lock; served by /api/detection/data
-    # On-demand detection: YOLO inference runs ONLY while a client is actively
-    # viewing detections. Each detection request stamps this monotonic time; the
-    # capture loop checks _detection_wanted() and skips inference entirely when the
-    # detection view is closed — so person-detection costs zero CPU/GPU when off.
-    _det_last_request = 0.0
-    DET_IDLE_TIMEOUT  = 3.0   # stop inferring this long after the last detection request
-
-    # Rear camera detection — same pattern as front; under _rear_det_lock.
-    _rear_det_lock    = threading.Lock()
-    _rear_det_boxes   = []
-    _rear_det_payload = None
-    _rear_det_last_request = 0.0
-
-    _zed_lock            = threading.Lock()
-    _zed_jpeg: bytes     = None
-    _zed_frame           = None  # latest stream-res BGR numpy frame for detection compositing
-    _zed_frame_count     = 0
-    _zed_connected       = False
-    _zed_last_error      = None
-    _zed_last_frame_time = 0.0   # monotonic; 0 = no frame ever received
-
-    _rec_lock         = threading.Lock()
-    _rec_active: bool = False
-    _rec_dir          = None
-    _rec_ts           = None
-
-    # Velocity state — written by HTTP handler threads, read by the ROS timer thread.
-    _vel_lock   = threading.Lock()
-    _vel_lin    = 0.0
-    _vel_ang    = 0.0
-    _vel_active = False
-    _vel_last   = 0.0
-    VEL_TIMEOUT = 0.5     # stop if browser goes silent for this long (s)
-
-    # Wheel odometry — written by ROS subscriber, read by HTTP handler threads.
-    _odom_lock     = threading.Lock()
-    _odom_l        = 0
-    _odom_r        = 0
-    _odom_last     = 0.0    # monotonic time of last received message; 0 = never
-    _odom_mileage  = 0.0    # accumulated |center displacement| in pulses
-    _odom_prev_l   = None   # previous encoder values for delta computation
-    _odom_prev_r   = None
-
-    # Chassis battery voltage — written by the ROS subscriber (chassis.setup_ros,
-    # agrobot only), read by HTTP handler threads. Raw readings are median-smoothed
-    # over a 15 s window in the subscriber; the handler just reports the result.
-    _chassis_batt_lock        = threading.Lock()
-    _chassis_batt_window      = []   # [(monotonic_time, voltage_v), ...]
-    _chassis_batt_last        = 0.0  # monotonic time of last received message; 0 = never
-    _chassis_batt_smoothed    = 0.0  # median of the last valid window
-    _chassis_batt_smoothed_at = 0.0  # when the smoothed value was last computed
-
-    # PLC connection state — track transitions so we only log connect/disconnect
-    # events when the state actually changes, not on every polled request.
-    _plc_last_connected = None   # None=unknown, True=up, False=down
-    _plc_state_lock     = threading.Lock()
-
-    _settings_lock = threading.Lock()
-    _settings: dict = {
-        'maxLinear':   2.0,    # absolute max forward speed m/s (= Fast preset)
-        'maxAngular':  0.5,    # max turn rate rad/s
-        'modbusSpeed': 1500,   # raw Modbus units for Normal preset (mirrors slLinear/4 * LINEAR_SCALE)
-        'seedlingType': '',    # species label appended to every planted-seedling record
-    }
+    telemetry        = TELEM  # the TelemetryStore — ALL mutable runtime state lives there
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(DASHBOARD_DIR), **kwargs)
@@ -480,8 +418,8 @@ class Handler(SimpleHTTPRequestHandler):
         self._json_response(200, json.dumps(parsed).encode())
 
     def _serve_camera(self):
-        with Handler._cam_lock:
-            frame = Handler._cam_jpeg
+        with TELEM.rear_cam.lock:
+            frame = TELEM.rear_cam.jpeg
         if frame is None:
             self._json_response(503, b'{"error":"No camera frame available"}')
             return
@@ -493,12 +431,12 @@ class Handler(SimpleHTTPRequestHandler):
         self.wfile.write(frame)
 
     def _serve_camera_status(self):
-        with Handler._cam_lock:
-            connected = Handler._cam_connected
-            last_t    = Handler._cam_last_frame_time
-            count     = Handler._cam_frame_count
-            err       = Handler._cam_last_error
-            has_frame = Handler._cam_jpeg is not None
+        with TELEM.rear_cam.lock:
+            connected = TELEM.rear_cam.connected
+            last_t    = TELEM.rear_cam.last_frame_time
+            count     = TELEM.rear_cam.frame_count
+            err       = TELEM.rear_cam.last_error
+            has_frame = TELEM.rear_cam.jpeg is not None
         # If no frame has arrived in the last 3 s, treat as disconnected regardless
         # of the flag (handles ROS topic going silent without an explicit error).
         if connected and (time.monotonic() - last_t) > 3.0:
@@ -512,8 +450,8 @@ class Handler(SimpleHTTPRequestHandler):
         self._json_response(200, body)
 
     def _serve_zed(self):
-        with Handler._zed_lock:
-            frame = Handler._zed_jpeg
+        with TELEM.front_zed.lock:
+            frame = TELEM.front_zed.jpeg
         if frame is None:
             self._json_response(503, b'{"error":"No ZED frame available"}')
             return
@@ -525,11 +463,11 @@ class Handler(SimpleHTTPRequestHandler):
         self.wfile.write(frame)
 
     def _serve_zed_status(self):
-        with Handler._zed_lock:
-            connected = Handler._zed_connected
-            count     = Handler._zed_frame_count
-            err       = Handler._zed_last_error
-            has_frame = Handler._zed_jpeg is not None
+        with TELEM.front_zed.lock:
+            connected = TELEM.front_zed.connected
+            count     = TELEM.front_zed.frame_count
+            err       = TELEM.front_zed.last_error
+            has_frame = TELEM.front_zed.jpeg is not None
         body = json.dumps({
             "connected":       connected,
             "has_frame":       has_frame,
@@ -538,41 +476,10 @@ class Handler(SimpleHTTPRequestHandler):
         }).encode()
         self._json_response(200, body)
 
-    @classmethod
-    def _set_zed_status(cls, connected: bool, error=None):
-        """Update the front-ZED connectivity flags under _zed_lock.
-
-        The capture threads used to write these flags directly while
-        _serve_zed_status read them under the lock — every status write must
-        go through here so reads and writes are actually synchronized."""
-        with cls._zed_lock:
-            cls._zed_connected  = connected
-            cls._zed_last_error = error
-
-    @classmethod
-    def _mark_detection_wanted(cls):
-        """A client is viewing front detections — keep front YOLO inference running."""
-        cls._det_last_request = time.monotonic()
-
-    @classmethod
-    def _detection_wanted(cls) -> bool:
-        """True while a client has requested front detections recently."""
-        return (time.monotonic() - cls._det_last_request) < cls.DET_IDLE_TIMEOUT
-
-    @classmethod
-    def _mark_rear_detection_wanted(cls):
-        """A client is viewing rear detections — keep rear YOLO inference running."""
-        cls._rear_det_last_request = time.monotonic()
-
-    @classmethod
-    def _rear_detection_wanted(cls) -> bool:
-        """True while a client has requested rear detections recently."""
-        return (time.monotonic() - cls._rear_det_last_request) < cls.DET_IDLE_TIMEOUT
-
     def _serve_detection_image(self):
-        Handler._mark_detection_wanted()
-        with Handler._det_lock:
-            frame = Handler._det_jpeg
+        TELEM.front_det.mark_wanted()
+        with TELEM.front_det.lock:
+            frame = TELEM.front_det.jpeg
         if frame is None:
             self._json_response(503, b'{"error":"No detection frame available"}')
             return
@@ -584,9 +491,9 @@ class Handler(SimpleHTTPRequestHandler):
         self.wfile.write(frame)
 
     def _serve_detection_data(self):
-        Handler._mark_detection_wanted()
-        with Handler._det_lock:
-            payload = Handler._det_payload
+        TELEM.front_det.mark_wanted()
+        with TELEM.front_det.lock:
+            payload = TELEM.front_det.payload
         if payload is None:
             # YOLO hasn't finished its first inference yet — return empty, not an error.
             self._json_response(200, json.dumps(
@@ -640,30 +547,30 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _serve_camera_stream(self):
         def get_frame():
-            with Handler._cam_lock:
-                return Handler._cam_jpeg
+            with TELEM.rear_cam.lock:
+                return TELEM.rear_cam.jpeg
         self._stream_jpeg(get_frame)
 
     def _serve_zed_stream(self):
         def get_frame():
-            with Handler._zed_lock:
-                return Handler._zed_jpeg
+            with TELEM.front_zed.lock:
+                return TELEM.front_zed.jpeg
         self._stream_jpeg(get_frame)
 
     def _serve_detection_stream(self):
-        Handler._mark_detection_wanted()
+        TELEM.front_det.mark_wanted()
         def get_frame():
-            Handler._mark_detection_wanted()
+            TELEM.front_det.mark_wanted()
             # Read live camera frame (stream-res numpy) and latest YOLO boxes independently.
             # This decouples video rate (camera fps) from inference rate (YOLO fps):
             # the stream is always real-time; boxes are drawn from the last YOLO result.
-            with Handler._zed_lock:
-                frame = Handler._zed_frame
+            with TELEM.front_zed.lock:
+                frame = TELEM.front_zed.frame
             if frame is None:
-                with Handler._det_lock:
-                    return Handler._det_jpeg   # fallback before first camera frame
-            with Handler._det_lock:
-                boxes = list(Handler._det_boxes)
+                with TELEM.front_det.lock:
+                    return TELEM.front_det.jpeg   # fallback before first camera frame
+            with TELEM.front_det.lock:
+                boxes = list(TELEM.front_det.boxes)
             try:
                 import cv2
                 if boxes:
@@ -675,21 +582,21 @@ class Handler(SimpleHTTPRequestHandler):
                 ok, enc = cv2.imencode('.jpg', out, [cv2.IMWRITE_JPEG_QUALITY, 60])
                 return enc.tobytes() if ok else None
             except Exception:
-                with Handler._det_lock:
-                    return Handler._det_jpeg
+                with TELEM.front_det.lock:
+                    return TELEM.front_det.jpeg
         self._stream_jpeg(get_frame)
 
     def _serve_rear_detection_stream(self):
         """Rear camera live feed with YOLO boxes composited at stream rate."""
-        Handler._mark_rear_detection_wanted()
+        TELEM.rear_det.mark_wanted()
         def get_frame():
-            Handler._mark_rear_detection_wanted()
-            with Handler._cam_lock:
-                frame = Handler._cam_frame
+            TELEM.rear_det.mark_wanted()
+            with TELEM.rear_cam.lock:
+                frame = TELEM.rear_cam.frame
             if frame is None:
                 return None
-            with Handler._rear_det_lock:
-                boxes = list(Handler._rear_det_boxes)
+            with TELEM.rear_det.lock:
+                boxes = list(TELEM.rear_det.boxes)
             try:
                 import cv2
                 if boxes:
@@ -705,9 +612,9 @@ class Handler(SimpleHTTPRequestHandler):
         self._stream_jpeg(get_frame)
 
     def _serve_rear_detection_data(self):
-        Handler._mark_rear_detection_wanted()
-        with Handler._rear_det_lock:
-            payload = Handler._rear_det_payload
+        TELEM.rear_det.mark_wanted()
+        with TELEM.rear_det.lock:
+            payload = TELEM.rear_det.payload
         if payload is None:
             self._json_response(200, json.dumps(
                 {"ts": time.time(), "count": 0, "detections": []}
@@ -751,17 +658,11 @@ class Handler(SimpleHTTPRequestHandler):
             self._json_response(503, b'{"error":"ROS publisher not ready"}')
             return
 
-        with Handler._vel_lock:
-            Handler._vel_lin    = lx
-            Handler._vel_ang    = az
-            Handler._vel_active = True
-            Handler._vel_last   = time.monotonic()
+        TELEM.vel.set_command(lx, az)
         self._json_response(200, b"{}")
 
     def _serve_wheel_odom(self):
-        with Handler._odom_lock:
-            l, r, last = Handler._odom_l, Handler._odom_r, Handler._odom_last
-            mileage = Handler._odom_mileage
+        l, r, last, mileage = TELEM.odom.snapshot()
         connected = last > 0 and (time.monotonic() - last) < 5.0
         data = json.dumps({"left": l, "right": r, "connected": connected, "mileage": mileage}).encode()
         self._json_response(200, data)
@@ -770,9 +671,7 @@ class Handler(SimpleHTTPRequestHandler):
         """GET /api/chassis_battery — smoothed chassis pack voltage (V) and a
         freshness flag. Populated only on chassis with the `battery` feature
         (agrobot); on others it simply reports voltage 0 / connected false."""
-        with Handler._chassis_batt_lock:
-            v    = Handler._chassis_batt_smoothed
-            last = Handler._chassis_batt_last
+        v, last = TELEM.battery.snapshot()
         connected = last > 0 and (time.monotonic() - last) < 30.0
         data = json.dumps({"voltage_v": v, "connected": connected}).encode()
         self._json_response(200, data)
@@ -833,12 +732,8 @@ class Handler(SimpleHTTPRequestHandler):
     def _log_plc_transition(self, result, client):
         """Log PLC connect/disconnect transitions exactly once on state change."""
         connected = result.get('connected', True)
-        # Concurrent PLC requests race on this transition flag — without the
-        # lock a flap can be logged twice or a transition missed entirely.
-        with Handler._plc_state_lock:
-            if Handler._plc_last_connected == connected:
-                return
-            Handler._plc_last_connected = connected
+        if not TELEM.plc_link.transition(connected):
+            return
         if not connected:
             log_event("ERROR", "PLC",
                       f"PLC connection lost — {client.target} unreachable",
@@ -944,22 +839,15 @@ class Handler(SimpleHTTPRequestHandler):
         target_pulses = 2.0 * ppm   # the full 2 m drive
         slow_pulses   = 0.5 * ppm   # final 0.5 m: crawl to kill coasting
 
-        with Handler._odom_lock:
-            start_l   = Handler._odom_l
-            start_r   = Handler._odom_r
-            last_odom = Handler._odom_last
+        start_l, start_r, last_odom, _ = TELEM.odom.snapshot()
 
         if last_odom == 0 or (time.monotonic() - last_odom) > 3.0:
             self._json_response(503, b'{"error":"Encoder not connected"}')
             return
 
-        cmd_speed = speed   # what we last wrote to vel_lin
+        cmd_speed = speed   # what we last wrote to vel.lin
 
-        with Handler._vel_lock:
-            Handler._vel_lin    = cmd_speed
-            Handler._vel_ang    = 0.0
-            Handler._vel_active = True
-            Handler._vel_last   = time.monotonic()
+        TELEM.vel.set_command(cmd_speed, 0.0)
 
         deadline = time.monotonic() + 30.0
         traveled = 0.0
@@ -969,9 +857,7 @@ class Handler(SimpleHTTPRequestHandler):
             while time.monotonic() < deadline:
                 time.sleep(0.02)                   # 50 Hz encoder check
 
-                with Handler._odom_lock:
-                    cur_l = Handler._odom_l
-                    cur_r = Handler._odom_r
+                cur_l, cur_r, _, _ = TELEM.odom.snapshot()
                 traveled = ((cur_l - start_l) + (cur_r - start_r)) / 2.0
 
                 next_speed = auto_drive.plan_speed(
@@ -979,20 +865,16 @@ class Handler(SimpleHTTPRequestHandler):
                 if next_speed is None:   # target distance reached
                     break
 
-                with Handler._vel_lock:
+                with TELEM.vel.lock:
                     # Abort if an external command overrode our last commanded speed
-                    if abs(Handler._vel_lin - cmd_speed) > 0.01:
+                    if abs(TELEM.vel.lin - cmd_speed) > 0.01:
                         aborted = True
                         break
-                    Handler._vel_lin  = next_speed
-                    Handler._vel_last = time.monotonic()   # keep deadman alive
+                    TELEM.vel.lin  = next_speed
+                    TELEM.vel.last = time.monotonic()   # keep deadman alive
                 cmd_speed = next_speed
         finally:
-            with Handler._vel_lock:
-                Handler._vel_lin    = 0.0
-                Handler._vel_ang    = 0.0
-                Handler._vel_active = True
-                Handler._vel_last   = time.monotonic()
+            TELEM.vel.set_command(0.0, 0.0)   # single stop, then the deadman idles
 
         done   = (not aborted) and (traveled >= target_pulses)
         result = {"done": done, "aborted": aborted,
@@ -1065,8 +947,8 @@ class Handler(SimpleHTTPRequestHandler):
         lat, lon = data["lat"], data["lon"]
         chassis_name = Handler.chassis.name if Handler.chassis else "unknown"
 
-        with Handler._settings_lock:
-            seedling_type = Handler._settings.get('seedlingType', '')
+        with TELEM.settings.lock:
+            seedling_type = TELEM.settings.data.get('seedlingType', '')
 
         slug = '_'.join(seedling_type.lower().split()) or 'unknown'
         seedling_id = f"{slug}_{lat:.4f}_{lon:.4f}"
@@ -1119,8 +1001,8 @@ class Handler(SimpleHTTPRequestHandler):
             self._json_response(400, json.dumps({"error": str(exc)}).encode())
             return
 
-        with Handler._rec_lock:
-            if Handler._rec_active:
+        with TELEM.recording.lock:
+            if TELEM.recording.active:
                 self._json_response(200, json.dumps({"status": "already_recording"}).encode())
                 return
 
@@ -1133,29 +1015,29 @@ class Handler(SimpleHTTPRequestHandler):
 
             rec_dir = DASHBOARD_DIR.parent / "logs" / "recordings" / ts_str
             rec_dir.mkdir(parents=True, exist_ok=True)
-            Handler._rec_active = True
-            Handler._rec_dir    = rec_dir
-            Handler._rec_ts     = ts_str
+            TELEM.recording.active = True
+            TELEM.recording.dir    = rec_dir
+            TELEM.recording.ts     = ts_str
 
         threading.Thread(target=_recording_loop, daemon=True, name="cam-record").start()
         log.info("[record] Started → %s", rec_dir)
         self._json_response(200, json.dumps({"status": "started", "dir": str(rec_dir)}).encode())
 
     def _serve_record_stop(self):
-        with Handler._rec_lock:
-            if not Handler._rec_active:
+        with TELEM.recording.lock:
+            if not TELEM.recording.active:
                 self._json_response(200, json.dumps({"status": "not_recording"}).encode())
                 return
-            Handler._rec_active = False
-            rec_dir = Handler._rec_dir
-            Handler._rec_dir = None
+            TELEM.recording.active = False
+            rec_dir = TELEM.recording.dir
+            TELEM.recording.dir = None
 
         log.info("[record] Stopped → %s", rec_dir)
         self._json_response(200, json.dumps({"status": "stopped", "dir": str(rec_dir)}).encode())
 
     def _serve_settings_get(self):
-        with Handler._settings_lock:
-            body = json.dumps(Handler._settings).encode()
+        with TELEM.settings.lock:
+            body = json.dumps(TELEM.settings.data).encode()
         self._json_response(200, body)
 
     def _serve_settings_post(self):
@@ -1189,9 +1071,9 @@ class Handler(SimpleHTTPRequestHandler):
             st = str(data['seedlingType']).strip()[:100]
             updates['seedlingType'] = st
 
-        with Handler._settings_lock:
-            Handler._settings.update(updates)
-            body = json.dumps(Handler._settings).encode()
+        with TELEM.settings.lock:
+            TELEM.settings.data.update(updates)
+            body = json.dumps(TELEM.settings.data).encode()
 
         log.info("[settings] Updated: %s", updates)
         self._json_response(200, body)
@@ -1264,8 +1146,8 @@ def _recording_loop():
                   "Video recording failed — OpenCV (cv2) is not installed",
                   "Install OpenCV: pip3 install opencv-python",
                   _key="record-cv2", _debounce_s=3600)
-        with Handler._rec_lock:
-            Handler._rec_active = False
+        with TELEM.recording.lock:
+            TELEM.recording.active = False
         return
 
     interval     = 1.0 / max(RECORD_FPS, 0.1)
@@ -1275,14 +1157,14 @@ def _recording_loop():
     rear_frames  = 0
     front_frames = 0
 
-    with Handler._rec_lock:
-        rec_dir = Handler._rec_dir
-        rec_ts  = Handler._rec_ts
+    with TELEM.recording.lock:
+        rec_dir = TELEM.recording.dir
+        rec_ts  = TELEM.recording.ts
 
     if rec_dir is None:
         log.error("[record] rec_dir is None at loop start — aborting")
-        with Handler._rec_lock:
-            Handler._rec_active = False
+        with TELEM.recording.lock:
+            TELEM.recording.active = False
         return
 
     rear_path  = rec_dir / "rear.mp4"
@@ -1290,13 +1172,13 @@ def _recording_loop():
 
     while True:
         t0 = time.monotonic()
-        with Handler._rec_lock:
-            if not Handler._rec_active:
+        with TELEM.recording.lock:
+            if not TELEM.recording.active:
                 break
-        with Handler._cam_lock:
-            rear_jpeg = Handler._cam_jpeg
-        with Handler._zed_lock:
-            front_jpeg = Handler._zed_jpeg
+        with TELEM.rear_cam.lock:
+            rear_jpeg = TELEM.rear_cam.jpeg
+        with TELEM.front_zed.lock:
+            front_jpeg = TELEM.front_zed.jpeg
 
         for jpeg, which in ((rear_jpeg, 'rear'), (front_jpeg, 'front')):
             if jpeg is None:
@@ -1417,7 +1299,7 @@ def _start_rear_camera_thread(source="realsense", device=None):
     UVC, opened MJPG for full frame-rate at 720p). `device` optionally pins the V4L2
     device path/index for the webcam source; auto-detected when None.
 
-    Writes to Handler._cam_jpeg / _cam_frame_count so /api/camera works even when no
+    Writes to TELEM.rear_cam.jpeg / _cam_frame_count so /api/camera works even when no
     ROS camera node is running.  If the ROS subscriber is also active (realsense
     source), both paths write the same buffer; last write wins — harmless, same camera.
     """
@@ -1466,27 +1348,27 @@ def _start_rear_camera_thread(source="realsense", device=None):
                     if not ok_test:
                         cap.release()
                         cap = None
-                        with Handler._cam_lock:
-                            Handler._cam_connected  = False
-                            Handler._cam_last_error = f"{dev} opened but no frames"
+                        with TELEM.rear_cam.lock:
+                            TELEM.rear_cam.connected  = False
+                            TELEM.rear_cam.last_error = f"{dev} opened but no frames"
                         time.sleep(retry_sleep)
                         retry_sleep = min(retry_sleep * 2, 5.0)
                         continue
                     retry_sleep = 1.0
                     log.info("[rear-cam] Opened %s (%s)", dev, label)
                 else:
-                    with Handler._cam_lock:
-                        Handler._cam_connected  = False
-                        Handler._cam_last_error = f"{dev} not available"
+                    with TELEM.rear_cam.lock:
+                        TELEM.rear_cam.connected  = False
+                        TELEM.rear_cam.last_error = f"{dev} not available"
                     time.sleep(retry_sleep)
                     retry_sleep = min(retry_sleep * 2, 5.0)
                     continue
             with _quiet_stderr():
                 ret, frame = cap.read()
             if not ret:
-                with Handler._cam_lock:
-                    Handler._cam_connected  = False
-                    Handler._cam_last_error = "Frame read failed — reconnecting"
+                with TELEM.rear_cam.lock:
+                    TELEM.rear_cam.connected  = False
+                    TELEM.rear_cam.last_error = "Frame read failed — reconnecting"
                 cap.release()
                 cap = None
                 time.sleep(retry_sleep)
@@ -1498,13 +1380,13 @@ def _start_rear_camera_thread(source="realsense", device=None):
                 last_display = now
                 ok, enc = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
                 if ok:
-                    with Handler._cam_lock:
-                        Handler._cam_jpeg            = enc.tobytes()
-                        Handler._cam_frame_count     += 1
-                        Handler._cam_connected       = True
-                        Handler._cam_last_error      = None
-                        Handler._cam_last_frame_time = time.monotonic()
-                        n = Handler._cam_frame_count
+                    with TELEM.rear_cam.lock:
+                        TELEM.rear_cam.jpeg            = enc.tobytes()
+                        TELEM.rear_cam.frame_count     += 1
+                        TELEM.rear_cam.connected       = True
+                        TELEM.rear_cam.last_error      = None
+                        TELEM.rear_cam.last_frame_time = time.monotonic()
+                        n = TELEM.rear_cam.frame_count
                     if n == 1 or n % 300 == 0:
                         log.debug("[rear-cam] %d frames captured (%dx%d)",
                                   n, frame.shape[1], frame.shape[0])
@@ -1575,9 +1457,9 @@ def _start_zed_rear_thread():
                         'count':      len(detections),
                         'detections': detections,
                     }
-                    with Handler._rear_det_lock:
-                        Handler._rear_det_boxes   = boxes_half
-                        Handler._rear_det_payload = det_payload
+                    with TELEM.rear_det.lock:
+                        TELEM.rear_det.boxes   = boxes_half
+                        TELEM.rear_det.payload = det_payload
                 except Exception as exc:
                     log.error("[rear-cam] YOLO error: %s", exc)
 
@@ -1605,15 +1487,15 @@ def _start_zed_rear_thread():
                     small = cv2.resize(frame, (frame.shape[1] // 2, frame.shape[0] // 2))
                     ok, enc = cv2.imencode('.jpg', small, [cv2.IMWRITE_JPEG_QUALITY, 60])
                     if ok:
-                        with Handler._cam_lock:
-                            Handler._cam_jpeg            = enc.tobytes()
-                            Handler._cam_frame           = small   # raw frame for rear detection
-                            Handler._cam_frame_count    += 1
-                            Handler._cam_connected       = True
-                            Handler._cam_last_error      = None
-                            Handler._cam_last_frame_time = time.monotonic()
+                        with TELEM.rear_cam.lock:
+                            TELEM.rear_cam.jpeg            = enc.tobytes()
+                            TELEM.rear_cam.frame           = small   # raw frame for rear detection
+                            TELEM.rear_cam.frame_count    += 1
+                            TELEM.rear_cam.connected       = True
+                            TELEM.rear_cam.last_error      = None
+                            TELEM.rear_cam.last_frame_time = time.monotonic()
 
-                if yolo is not None and Handler._rear_detection_wanted():
+                if yolo is not None and TELEM.rear_det.wanted():
                     if now - last_queue >= _min_infer_interval:
                         last_queue = now
                         zed.retrieve_measure(depth_mat, sl.MEASURE.DEPTH)
@@ -1625,9 +1507,9 @@ def _start_zed_rear_thread():
             elif err == sl.ERROR_CODE.END_OF_SVOFILE_REACHED:
                 zed.set_svo_position(0)
             else:
-                with Handler._cam_lock:
-                    Handler._cam_connected  = False
-                    Handler._cam_last_error = f"rear ZED grab: {err}"
+                with TELEM.rear_cam.lock:
+                    TELEM.rear_cam.connected  = False
+                    TELEM.rear_cam.last_error = f"rear ZED grab: {err}"
                 lost += 1
                 if lost >= ZED_GRAB_LOST_LIMIT:
                     log.warning("[rear-cam] rear ZED grab failing (%s) — releasing to re-open", err)
@@ -1681,15 +1563,15 @@ def _start_zed_rear_thread():
                     _capture_loop(zed, image_mat, depth_mat)
                     err = "camera lost"
                 else:
-                    with Handler._cam_lock:
-                        Handler._cam_last_error = f"rear ZED SDK open: {err}"
+                    with TELEM.rear_cam.lock:
+                        TELEM.rear_cam.last_error = f"rear ZED SDK open: {err}"
             except Exception as exc:
                 err = exc
-                with Handler._cam_lock:
-                    Handler._cam_last_error = f"rear ZED SDK: {exc}"
+                with TELEM.rear_cam.lock:
+                    TELEM.rear_cam.last_error = f"rear ZED SDK: {exc}"
 
-            with Handler._cam_lock:
-                Handler._cam_connected = False
+            with TELEM.rear_cam.lock:
+                TELEM.rear_cam.connected = False
             try:
                 if zed is not None:
                     zed.close()
@@ -1884,9 +1766,9 @@ def _start_zed_thread():
                         'count':      len(detections),
                         'detections': detections,
                     }
-                    with Handler._det_lock:
-                        Handler._det_boxes   = boxes_half
-                        Handler._det_payload = det_payload
+                    with TELEM.front_det.lock:
+                        TELEM.front_det.boxes   = boxes_half
+                        TELEM.front_det.payload = det_payload
                     try:
                         Path(DETECTIONS_FILE).write_text(json.dumps(det_payload))
                     except Exception:
@@ -1912,7 +1794,7 @@ def _start_zed_thread():
                 # get_data() returns BGRA (4-channel); drop alpha
                 left = image_mat.get_data()[:, :, :3]
 
-                Handler._set_zed_status(True)
+                TELEM.front_zed.set_status(True)
                 retry_sleep = 1.0
                 lost        = 0
 
@@ -1924,15 +1806,15 @@ def _start_zed_thread():
                     small = cv2.resize(left, (left.shape[1] // 2, left.shape[0] // 2))
                     ok, enc = cv2.imencode('.jpg', small, [cv2.IMWRITE_JPEG_QUALITY, 60])
                     if ok:
-                        with Handler._zed_lock:
-                            Handler._zed_jpeg            = enc.tobytes()
-                            Handler._zed_frame           = small   # raw frame for detection compositing
-                            Handler._zed_frame_count    += 1
-                            Handler._zed_last_frame_time = time.monotonic()
+                        with TELEM.front_zed.lock:
+                            TELEM.front_zed.jpeg            = enc.tobytes()
+                            TELEM.front_zed.frame           = small   # raw frame for detection compositing
+                            TELEM.front_zed.frame_count    += 1
+                            TELEM.front_zed.last_frame_time = time.monotonic()
 
                 # Queue a frame for the YOLO worker (non-blocking — never stalls grab).
                 # retrieve_measure is fast (buffer copy, computed at grab time).
-                if yolo is not None and Handler._detection_wanted():
+                if yolo is not None and TELEM.front_det.wanted():
                     if now - last_queue >= _min_infer_interval:
                         last_queue = now
                         zed.retrieve_measure(depth_mat, sl.MEASURE.DEPTH)
@@ -1943,7 +1825,7 @@ def _start_zed_thread():
             elif err == sl.ERROR_CODE.END_OF_SVOFILE_REACHED:
                 zed.set_svo_position(0)
             else:
-                Handler._set_zed_status(False, f"grab error: {err}")
+                TELEM.front_zed.set_status(False, f"grab error: {err}")
                 lost += 1
                 # Camera unplugged / hung: stop grabbing and return so the caller
                 # closes this handle and re-opens (by serial) when it reconnects.
@@ -1999,9 +1881,9 @@ def _start_zed_thread():
                     det_payload = {
                         'ts': time.time(), 'count': len(detections), 'detections': detections,
                     }
-                    with Handler._det_lock:
-                        Handler._det_boxes   = boxes_half
-                        Handler._det_payload = det_payload
+                    with TELEM.front_det.lock:
+                        TELEM.front_det.boxes   = boxes_half
+                        TELEM.front_det.payload = det_payload
                     try:
                         Path(DETECTIONS_FILE).write_text(json.dumps(det_payload))
                     except Exception:
@@ -2035,11 +1917,11 @@ def _start_zed_thread():
                 with _quiet_stderr():
                     cap = cv2.VideoCapture(_device_index())
                 if cap.isOpened():
-                    Handler._set_zed_status(True)
+                    TELEM.front_zed.set_status(True)
                     retry_sleep = 1.0
                     log.info("[zed] Opened %s via OpenCV (grayscale)", ZED_DEVICE)
                 else:
-                    Handler._set_zed_status(False, f"{ZED_DEVICE} not available")
+                    TELEM.front_zed.set_status(False, f"{ZED_DEVICE} not available")
                     time.sleep(retry_sleep)
                     retry_sleep = min(retry_sleep * 2, 5.0)
                     continue
@@ -2047,7 +1929,7 @@ def _start_zed_thread():
             with _quiet_stderr():
                 ret, frame = cap.read()
             if not ret:
-                Handler._set_zed_status(False, "Frame read failed — reconnecting")
+                TELEM.front_zed.set_status(False, "Frame read failed — reconnecting")
                 cap.release()
                 cap = None
                 time.sleep(retry_sleep)
@@ -2063,13 +1945,13 @@ def _start_zed_thread():
                 small = cv2.resize(left, (left.shape[1] // 2, left.shape[0] // 2))
                 ok, enc = cv2.imencode('.jpg', small, [cv2.IMWRITE_JPEG_QUALITY, 60])
                 if ok:
-                    with Handler._zed_lock:
-                        Handler._zed_jpeg            = enc.tobytes()
-                        Handler._zed_frame           = small
-                        Handler._zed_frame_count    += 1
-                        Handler._zed_last_frame_time = time.monotonic()
+                    with TELEM.front_zed.lock:
+                        TELEM.front_zed.jpeg            = enc.tobytes()
+                        TELEM.front_zed.frame           = small
+                        TELEM.front_zed.frame_count    += 1
+                        TELEM.front_zed.last_frame_time = time.monotonic()
 
-            if yolo is not None and Handler._detection_wanted():
+            if yolo is not None and TELEM.front_det.wanted():
                 if now - last_queue >= _min_infer_interval:
                     last_queue = now
                     with _inf_lock:
@@ -2127,13 +2009,13 @@ def _start_zed_thread():
                     # capture loop exited (camera unplugged) — release and re-open below
                     err = "camera lost"
                 else:
-                    Handler._set_zed_status(False, f"SDK open: {err}")
+                    TELEM.front_zed.set_status(False, f"SDK open: {err}")
             except Exception as exc:
                 err = exc
-                Handler._set_zed_status(False, f"SDK open: {exc}")
+                TELEM.front_zed.set_status(False, f"SDK open: {exc}")
 
-            with Handler._zed_lock:
-                Handler._zed_connected = False   # keep the last error message for /api/zed/status
+            with TELEM.front_zed.lock:
+                TELEM.front_zed.connected = False   # keep the last error message for /api/zed/status
             try:
                 if zed is not None:
                     zed.close()   # release before retrying so the next open can detect it
@@ -2231,25 +2113,12 @@ def main():
         # deadman stalls under camera/AI load. publish_velocity() only builds and
         # publishes a message, which is thread-safe in rclpy. Deadman semantics are
         # unchanged: silence past VEL_TIMEOUT publishes a single stop, then idles.
-        def _vel_publish_once():
-            with Handler._vel_lock:
-                if not Handler._vel_active:
-                    return None
-                if time.monotonic() - Handler._vel_last > Handler.VEL_TIMEOUT:
-                    Handler._vel_active = False
-                    return (0.0, 0.0)
-                lx = Handler._vel_lin
-                az = Handler._vel_ang
-                if lx == 0.0 and az == 0.0:
-                    Handler._vel_active = False
-                return (lx, az)
-
         def _vel_loop():
             period = 0.05   # 20 Hz
             while True:
                 t0 = time.monotonic()
                 try:
-                    cmd = _vel_publish_once()
+                    cmd = TELEM.vel.consume_for_publish()
                     if cmd is not None:
                         publish_velocity(cmd[0], cmd[1])
                 except Exception as exc:
@@ -2289,20 +2158,20 @@ def main():
                 try:
                     frame = _encode_fn(msg)
                     if frame:
-                        with Handler._cam_lock:
-                            Handler._cam_jpeg            = frame
-                            Handler._cam_frame_count     += 1
-                            Handler._cam_connected       = True
-                            Handler._cam_last_error      = None
-                            Handler._cam_last_frame_time = time.monotonic()
-                            n = Handler._cam_frame_count
+                        with TELEM.rear_cam.lock:
+                            TELEM.rear_cam.jpeg            = frame
+                            TELEM.rear_cam.frame_count     += 1
+                            TELEM.rear_cam.connected       = True
+                            TELEM.rear_cam.last_error      = None
+                            TELEM.rear_cam.last_frame_time = time.monotonic()
+                            n = TELEM.rear_cam.frame_count
                         if n == 1 or n % 300 == 0:
                             log.debug("[camera] %d frames received (%dx%d)",
                                       n, msg.width, msg.height)
                 except Exception as exc:
                     err = f"{type(exc).__name__}: {exc}"
-                    with Handler._cam_lock:
-                        Handler._cam_last_error = err
+                    with TELEM.rear_cam.lock:
+                        TELEM.rear_cam.last_error = err
                     log.error("[camera] encode error: %s", err)
                     log_event("WARN", "Camera",
                               f"Camera frame encode error: {err}",

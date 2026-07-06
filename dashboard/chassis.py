@@ -43,8 +43,6 @@ import yaml  # PyYAML is a hard dependency (pyproject.toml); a hand-rolled
              # anything beyond the exact shape of our config files.
 
 from agrobot_dashboard.domain import kinematics
-from agrobot_dashboard.domain.battery import MedianVoltageFilter
-from agrobot_dashboard.domain.odometry import OdometryAccumulator
 
 
 def _load_yaml(path):
@@ -179,43 +177,25 @@ class Chassis:
         handler.speed_cmd_pub = pub
 
         # Optional wheel-odometry feedback (agrobot only). The accumulation rules
-        # (outlier rejection, reconnect reset) live in domain.odometry; this
-        # callback only feeds it and mirrors the result onto the handler
-        # fields the HTTP endpoints read.
+        # (outlier rejection, reconnect reset) live in domain.odometry, owned
+        # by the TelemetryStore — this callback only feeds it.
         if self.wheel_odom_topic:
             from std_msgs.msg import Int32MultiArray
 
-            # Max plausible encoder delta per cycle (~10 Hz). Robot top speed ~1 m/s
-            # ≈ 3211 pulses/m → ~321 pulses/cycle; 3000 gives a comfortable 9× margin.
-            odom = OdometryAccumulator(max_delta=3000, reconnect_gap_s=5.0)
-
             def _on_wheel_odom(msg):
                 if len(msg.data) >= 2:
-                    now = time.monotonic()
-                    with handler._odom_lock:
-                        odom.update(int(msg.data[0]), int(msg.data[1]), now)
-                        handler._odom_l       = odom.left
-                        handler._odom_r       = odom.right
-                        handler._odom_mileage = odom.mileage_pulses
-                        handler._odom_last    = odom.last_update
+                    handler.telemetry.odom.update(int(msg.data[0]), int(msg.data[1]))
 
             node.create_subscription(Int32MultiArray, self.wheel_odom_topic,
                                      _on_wheel_odom, 10)
 
         # Optional chassis battery voltage (agrobot only — gated by the `battery`
-        # feature). The median smoothing lives in domain.battery; this callback
-        # feeds it and mirrors the smoothed value for GET /api/chassis_battery.
+        # feature). Median smoothing lives in domain.battery via the store.
         if self.has_feature("battery") and self.battery_topic:
             from std_msgs.msg import Float32
 
-            batt = MedianVoltageFilter()
-
             def _on_chassis_battery(msg):
-                now = time.monotonic()
-                with handler._chassis_batt_lock:
-                    batt.add(float(msg.data), now)
-                    handler._chassis_batt_last     = batt.last_reading
-                    handler._chassis_batt_smoothed = batt.smoothed
+                handler.telemetry.battery.add_reading(float(msg.data))
 
             node.create_subscription(Float32, self.battery_topic,
                                      _on_chassis_battery, 10)
