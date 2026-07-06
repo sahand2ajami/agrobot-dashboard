@@ -422,3 +422,28 @@ class TestRouting:
             del serve.Handler.GET_EXACT["/api/amr/poll"]
             del serve.Handler.GET_EXACT["/api/amr/ping"]
             del serve.Handler.POST_EXACT["/api/amr/write"]
+
+
+# ── Static whitelist path-traversal guard ──────────────────────────────────────
+
+class TestPathTraversal:
+    @pytest.mark.parametrize("path", [
+        "/js/../serve.py",
+        "/js/%2e%2e/serve.py",
+        "/logo/../plc_client.py",
+        "/logo/%2E%2E/chassis.py",
+    ])
+    def test_traversal_blocked(self, server, path):
+        # The whitelist must match the NORMALIZED path — a '..' inside a
+        # whitelisted prefix used to leak server source files.
+        port, _ = server
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=3)
+        assert exc.value.code == 403
+
+    def test_shared_js_served(self, server):
+        port, _ = server
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/js/teleop.js", timeout=3) as r:
+            assert r.status == 200
+            assert b"publishCmdVel" in r.read()

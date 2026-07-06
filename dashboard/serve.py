@@ -18,12 +18,14 @@ import contextlib
 import json
 import logging
 import os
+import posixpath
 import socket
 import socketserver
 import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from http.server import SimpleHTTPRequestHandler
@@ -130,6 +132,10 @@ DETECTIONS_FILE      = "/tmp/object_detections.json"
 ZED_DEVICE           = "/dev/zed2i"    # symlink used by the OpenCV grayscale fallback only
 ZED_FRONT_INDEX      = 0              # pyzed camera index — front ZED 2i
 ZED_REAR_INDEX       = 1              # pyzed camera index — rear ZED 2i
+# Front-ZED capture mode. --wide switches to HD2K: the full sensor (~110° FOV,
+# 2208×1242) at its 15 fps hardware cap; the UI letterboxes instead of cropping.
+ZED_FRONT_RESOLUTION = "HD720"
+ZED_FRONT_FPS        = 30
 WEBCAM_DEVICE_DEFAULT = "/dev/video0"  # generic USB UVC webcam (e.g. Logitech)
 RS_DISPLAY_FPS       = 20.0   # live camera capture / display (20 fps: smoother + far lighter than 30 on the Jetson)
 RECORD_FPS           = 15.0   # rear.mp4 + front.mp4 saved at 15 fps (lighter on the Jetson)
@@ -317,7 +323,7 @@ class Handler(SimpleHTTPRequestHandler):
     # A route spec is a method-name string, a (method-name, *args) tuple, or a
     # plain callable taking the handler instance (used by extensions).
     INDEX_FILE = "index.html"   # what "/" serves; overridden by serve_plc.py
-    STATIC_PREFIXES = ("/logo/",)
+    STATIC_PREFIXES = ("/logo/", "/js/")
 
     GET_EXACT = {
         "/api/wheel_odom":         "_serve_wheel_odom",
@@ -380,8 +386,18 @@ class Handler(SimpleHTTPRequestHandler):
         else:
             getattr(self, spec)()
 
+    @staticmethod
+    def _route_path(raw):
+        """Strip query/fragment, percent-decode, and normalize away any '..'
+        segments. The whitelist below must be matched against the SAME path
+        SimpleHTTPRequestHandler will resolve, otherwise '/js/../serve.py'
+        (or its percent-encoded form) passes the '/js/' prefix check and then
+        serves serve.py."""
+        path = raw.split('?')[0].split('#')[0]
+        return posixpath.normpath(urllib.parse.unquote(path))
+
     def do_GET(self):
-        path = self.path.split('?')[0].split('#')[0]
+        path = self._route_path(self.path)
         spec = self.GET_EXACT.get(path)
         if spec is None:
             for prefix in sorted(self.GET_PREFIX, key=len, reverse=True):
@@ -398,13 +414,14 @@ class Handler(SimpleHTTPRequestHandler):
             self.path = f'/{self.INDEX_FILE}'
             super().do_GET()
         elif any(path.startswith(p) for p in self.STATIC_PREFIXES):
+            self.path = path   # serve the normalized path, not the raw one
             super().do_GET()
         else:
             log.warning("Blocked static path %s from %s", path, self.client_address[0])
             self.send_error(403)
 
     def do_POST(self):
-        path = self.path.split('?')[0].split('#')[0]
+        path = self._route_path(self.path)
         spec = self.POST_EXACT.get(path)
         if spec is not None:
             self._run_route(spec)
@@ -760,20 +777,23 @@ class Handler(SimpleHTTPRequestHandler):
         data = json.dumps({"voltage_v": v, "connected": connected}).encode()
         self._json_response(200, data)
 
+    ui_wide = False   # set by --wide in main(); the UI letterboxes video when true
+
     def _serve_config(self):
         """GET /api/config — chassis name, comms, feature flags, and limits so
         the web UI can adapt (show/hide chassis-specific panels)."""
         if Handler.chassis is not None:
-            body = json.dumps(Handler.chassis.to_browser_config()).encode()
+            cfg = Handler.chassis.to_browser_config()
         else:
             # No chassis loaded (e.g. in tests) — report module defaults.
-            body = json.dumps({
+            cfg = {
                 "chassis":  "unknown",
                 "comms":    "modbus_speed",
                 "features": {},
                 "limits":   {"maxLinear": MAX_LIN_INPUT, "maxAngular": MAX_ANG_INPUT},
-            }).encode()
-        self._json_response(200, body)
+            }
+        cfg["ui"] = {"wide": Handler.ui_wide}
+        self._json_response(200, json.dumps(cfg).encode())
 
     # ── PLC Gateway relay ────────────────────────────────────────────────────
     # Browsers can't speak gRPC, so these endpoints forward to the PlcClient
@@ -2086,8 +2106,8 @@ def _start_zed_thread():
             try:
                 zed         = sl.Camera()
                 init_params = sl.InitParameters()
-                init_params.camera_resolution = sl.RESOLUTION.HD720
-                init_params.camera_fps        = 30
+                init_params.camera_resolution = getattr(sl.RESOLUTION, ZED_FRONT_RESOLUTION)
+                init_params.camera_fps        = ZED_FRONT_FPS
                 # PERFORMANCE depth enables distance readout in YOLO detection.
                 init_params.depth_mode = sl.DEPTH_MODE.PERFORMANCE
                 try:
@@ -2144,9 +2164,18 @@ def main():
                     help="agrobot | jackal — overrides config/active_chassis.yaml")
     ap.add_argument("--rear-camera", dest="rear_camera", default=None,
                     help="zed | webcam | none — overrides the chassis rear_camera setting")
+    ap.add_argument("--wide", action="store_true",
+                    help="front ZED at HD2K — full ~110° FOV at 15 fps; the UI "
+                         "letterboxes video instead of cropping")
     args = ap.parse_args()
 
     Handler.gnss_file = args.gnss
+    if args.wide:
+        global ZED_FRONT_RESOLUTION, ZED_FRONT_FPS
+        ZED_FRONT_RESOLUTION = "HD2K"
+        ZED_FRONT_FPS        = 15    # HD2K hardware cap
+        Handler.ui_wide      = True
+        log.info("[zed] wide mode — front ZED at HD2K / 15 fps, UI letterboxing on")
 
     # Resolve the active chassis: --chassis > $ROBOT_CHASSIS > active_chassis.yaml.
     CHASSIS = chassis.load_active(args.chassis)

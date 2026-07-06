@@ -9,7 +9,6 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/roslib@1/build/roslib.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -989,6 +988,11 @@
       .fwd-btn, .act-btn, .act-rec { height: 58px; font-size: 13px; }
       .act-btn i { font-size: 18px; }
     }
+
+    /* ── Wide mode (--wide / HD2K): letterbox video instead of cropping.
+       !important because the <img> elements carry inline object-fit:cover. ── */
+    body.wide-video #splitImgMain,
+    body.wide-video #splitImgPip { object-fit: contain !important; }
   </style>
 </head>
 <body>
@@ -1405,19 +1409,18 @@
 <!-- Toast notification -->
 <div class="toast" id="toast"></div>
 
+<script src="/js/teleop.js"></script>
 <script>
 /* ── Config ── */
-// Must match LINEAR_SCALE in serve.py
-const MODBUS_LINEAR_SCALE = 3000;
+// Twist→Modbus scaling; refreshed from /api/config `scaling` (chassis YAML).
+let MODBUS_LINEAR_SCALE = 3000;
 
 const CFG = {
-  rosBridgeUrl:  'ws://localhost:9090',
   gnssApiUrl:    '/api/gnss',
   camStreamUrl:  '/api/camera/stream',
   zedStreamUrl:  '/api/zed/stream',
   detStreamUrl:  '/api/detection/stream',
   detDataUrl:    '/api/detection/data',
-  topicCmdVel:   '/avatar_robot/speed_cmd',
   maxLinear:     0.5,
   maxLinearBack: 0.5,
   maxAngular:    0.5,
@@ -1425,30 +1428,7 @@ const CFG = {
   hardMaxLinear:  null,
   hardMaxAngular: null,
 };
-
-/* ── ROS ── */
-let ros = null, _rosReconnectTimer = null;
-
-function _scheduleRosReconnect() {
-  if (_rosReconnectTimer) return;
-  _rosReconnectTimer = setTimeout(() => { _rosReconnectTimer = null; initRos(); }, 5000);
-}
-function initRos() {
-  if (ros) { try { ros.close(); } catch (_) {} ros = null; }
-  ros = new ROSLIB.Ros({ url: CFG.rosBridgeUrl });
-  ros.on('error', () => { _scheduleRosReconnect(); });
-  ros.on('close', () => { _scheduleRosReconnect(); });
-}
-
-/* ── Fetch helpers ── */
-const FETCH_TIMEOUT_MS = 3000;  // applies to all sensor API calls
-
-function _fetchWithTimeout(url, opts, timeoutMs) {
-  const ctrl   = new AbortController();
-  const timer  = setTimeout(() => ctrl.abort(), timeoutMs ?? FETCH_TIMEOUT_MS);
-  return fetch(url, { ...opts, signal: ctrl.signal })
-    .finally(() => clearTimeout(timer));
-}
+window.CFG = CFG;   // read by /js/teleop.js for the velocity clamp
 
 let _serverOk = true;
 function _setServerStatus(ok) {
@@ -1458,34 +1438,20 @@ function _setServerStatus(ok) {
   if (!ok && chassis) { chassis.textContent = 'NO LINK'; chassis.className = 'tl-val red'; }
 }
 
-function publishCmdVel(lin, ang) {
-  // Clamp to the active chassis ceilings so we never trip the server's 400.
-  if (CFG.hardMaxLinear  != null) lin = Math.max(-CFG.hardMaxLinear,  Math.min(CFG.hardMaxLinear,  lin));
-  if (CFG.hardMaxAngular != null) ang = Math.max(-CFG.hardMaxAngular, Math.min(CFG.hardMaxAngular, ang));
-  _fetchWithTimeout('/api/cmd_vel', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ linear_x: lin, angular_z: ang }),
-  }).then(r => {
-    _setServerStatus(r.ok || r.status < 500);
-    if (r.status === 400) {
-      addLogEntry('WARN', 'Network',
-        `Velocity command rejected by server (lin=${lin.toFixed(2)}, ang=${ang.toFixed(2)})`,
-        'The command exceeded chassis velocity limits. ' +
-        'Reduce speed in Advanced Settings or check max_linear/max_angular in the chassis YAML.');
-    }
-  }).catch(() => {
-    _setServerStatus(false);
-    _debounceLog('cmdvel-timeout', 'WARN', 'Network',
-      'Lost contact with dashboard server (cmd_vel timeout)',
-      'Check that the Jetson is on and the network cable is connected. ' +
-      'The robot will stop automatically via the 0.5 s deadman timeout.',
-      15);
-  });
-}
-function publishStop() { publishCmdVel(0, 0); }
-
-initRos();
+// publishCmdVel/publishStop come from /js/teleop.js; these hooks add this
+// page's connectivity indicator + event-log reporting.
+window.TELEOP_HOOKS = {
+  onServerStatus: _setServerStatus,
+  onReject: (lin, ang) => addLogEntry('WARN', 'Network',
+    `Velocity command rejected by server (lin=${lin.toFixed(2)}, ang=${ang.toFixed(2)})`,
+    'The command exceeded chassis velocity limits. ' +
+    'Reduce speed in Advanced Settings or check max_linear/max_angular in the chassis YAML.'),
+  onTimeout: () => _debounceLog('cmdvel-timeout', 'WARN', 'Network',
+    'Lost contact with dashboard server (cmd_vel timeout)',
+    'Check that the Jetson is on and the network cable is connected. ' +
+    'The robot will stop automatically via the 0.5 s deadman timeout.',
+    15),
+};
 
 /* ── WASD ── */
 const keyMap  = { w:'kw', a:'ka', s:'ks', d:'kd' };
@@ -2066,8 +2032,10 @@ pollGNSS();
 setInterval(pollGNSS, 1000);
 
 /* ── Forward 2 m ── */
-const PULSE_PER_M   = 3211;   // calibrated: 3484 gave 2.17 m; 6968/2.17 ≈ 3211 pulses/m
-const TARGET_PULSES = 2.0 * PULSE_PER_M;
+// Encoder calibration; refreshed from /api/config `scaling.pulsePerM`
+// (chassis YAML — calibrated: 3484 gave 2.17 m; 6968/2.17 ≈ 3211 pulses/m).
+let PULSE_PER_M   = 3211;
+let TARGET_PULSES = 2.0 * PULSE_PER_M;
 let _fwdInterval = null;   // truthy while a server-side 2 m drive is in progress
 
 async function moveForward2m() {
@@ -3164,6 +3132,17 @@ function _applyChassisConfig() {
         CFG.hardMaxLinear  = cfg.limits.maxLinear;
         CFG.hardMaxAngular = cfg.limits.maxAngular;
       }
+      // Scaling constants come from the chassis YAML via the server — the UI
+      // must never carry its own copy (they used to drift).
+      if (cfg.scaling) {
+        if (cfg.scaling.linearScale) MODBUS_LINEAR_SCALE = cfg.scaling.linearScale;
+        if (cfg.scaling.pulsePerM) {
+          PULSE_PER_M   = cfg.scaling.pulsePerM;
+          TARGET_PULSES = 2.0 * PULSE_PER_M;
+        }
+      }
+      // Wide mode (--wide): HD2K frames are letterboxed, never cropped.
+      if (cfg.ui && cfg.ui.wide) document.body.classList.add('wide-video');
       // Hide panels for features this chassis does not provide.
       document.querySelectorAll('[data-chassis-feature]').forEach(el => {
         const key = el.getAttribute('data-chassis-feature');

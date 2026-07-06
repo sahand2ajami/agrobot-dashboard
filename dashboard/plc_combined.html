@@ -901,6 +901,7 @@ input[type=range] { width: 100%; accent-color: var(--teal); height: 6px; cursor:
 <div id="speedVal"></div>
 <div id="speedBar"></div>
 
+<script src="/js/teleop.js"></script>
 <script>
 'use strict';
 
@@ -919,15 +920,20 @@ const CFG = {
   rearDetDataUrl:   '/api/detection/rear_data',
   gnssApiUrl:   '/api/gnss',
 };
-const MODBUS_LINEAR_SCALE = 3000;
-const PULSE_PER_M   = 3211;
-const TARGET_PULSES = 2.0 * PULSE_PER_M;
+// Scaling constants; refreshed from /api/config `scaling` (chassis YAML) —
+// the UI must never carry its own copy (they used to drift).
+let MODBUS_LINEAR_SCALE = 3000;
+let PULSE_PER_M   = 3211;
+let TARGET_PULSES = 2.0 * PULSE_PER_M;
+window.CFG = CFG;   // read by /js/teleop.js for the velocity clamp
 
 let _battRange = { minV: 42, maxV: 58 };
 
 fetch('/api/config').then(r => r.ok ? r.json() : {}).then(c => {
   if (c.limits?.maxLinear  != null) { CFG.maxLinear = c.limits.maxLinear; CFG.maxLinearBack = c.limits.maxLinear; CFG.hardMaxLinear = c.limits.maxLinear; }
   if (c.limits?.maxAngular != null) { CFG.maxAngular = c.limits.maxAngular; CFG.hardMaxAngular = c.limits.maxAngular; }
+  if (c.scaling?.linearScale) MODBUS_LINEAR_SCALE = c.scaling.linearScale;
+  if (c.scaling?.pulsePerM)   { PULSE_PER_M = c.scaling.pulsePerM; TARGET_PULSES = 2.0 * PULSE_PER_M; }
   if (c.battery?.minV != null) _battRange.minV = c.battery.minV;
   if (c.battery?.maxV != null) _battRange.maxV = c.battery.maxV;
 }).catch(() => {});
@@ -936,13 +942,7 @@ fetch('/api/config').then(r => r.ok ? r.json() : {}).then(c => {
 const _g   = id => document.getElementById(id);
 const _set = (id, v) => { const e = _g(id); if (e) e.textContent = v; };
 
-function _fetchWithTimeout(url, opts, ms) {
-  const timeout = ms ?? 3000;
-  const c = new AbortController();
-  const t = setTimeout(() => c.abort(), timeout);
-  return fetch(url, { ...opts, signal: c.signal }).finally(() => clearTimeout(t));
-}
-
+// _fetchWithTimeout, publishCmdVel and publishStop come from /js/teleop.js.
 const _post = (url, body) => fetch(url, {
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
 });
@@ -955,17 +955,6 @@ function showToast(msg, isErr) {
   t._tid = setTimeout(() => t.classList.remove('show'), 2500);
 }
 
-function publishCmdVel(lin, ang) {
-  // Clamp to the active chassis ceilings — same guard as index.html; this file
-  // previously bypassed it and could command past the chassis hard limits.
-  if (CFG.hardMaxLinear  != null) lin = Math.max(-CFG.hardMaxLinear,  Math.min(CFG.hardMaxLinear,  lin));
-  if (CFG.hardMaxAngular != null) ang = Math.max(-CFG.hardMaxAngular, Math.min(CFG.hardMaxAngular, ang));
-  return _post('/api/cmd_vel', { linear_x: lin, angular_z: ang });
-}
-
-function publishStop() {
-  publishCmdVel(0, 0).catch(() => {});
-}
 
 // ═══════════════════════════════════════════════════════════════
 // GLOBAL EVENT LOG

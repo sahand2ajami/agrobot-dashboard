@@ -253,9 +253,11 @@ URL="http://localhost:${PORT}"
 NET_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 log "Starting dashboard server → $URL  (chassis=$CHASSIS${CLI_REAR:+, rear-camera=$CLI_REAR})"
 if [[ -n "$CLI_REAR" ]]; then
-  python3 -u "$SCRIPT_DIR/$SERVE_PY" --chassis "$CHASSIS" --port "$PORT" --rear-camera "$CLI_REAR" &
+  # shellcheck disable=SC2086  # SERVE_EXTRA is intentionally word-split (e.g. "--wide")
+  python3 -u "$SCRIPT_DIR/$SERVE_PY" --chassis "$CHASSIS" --port "$PORT" --rear-camera "$CLI_REAR" ${SERVE_EXTRA:-} &
 else
-  python3 -u "$SCRIPT_DIR/$SERVE_PY" --chassis "$CHASSIS" --port "$PORT" &
+  # shellcheck disable=SC2086
+  python3 -u "$SCRIPT_DIR/$SERVE_PY" --chassis "$CHASSIS" --port "$PORT" ${SERVE_EXTRA:-} &
 fi
 SERVER_PID=$!
 
