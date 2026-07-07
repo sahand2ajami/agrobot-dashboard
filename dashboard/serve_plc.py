@@ -19,6 +19,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, str(Path(__file__).parent))
 import serve as _serve
@@ -73,6 +74,26 @@ def _serve_amr_write(handler):
     handler._json_response(200 if ok else 503, json.dumps(result).encode())
 
 
+def _serve_hmi_screens(handler):
+    plc = _plc(handler)
+    if plc is None:
+        return
+    handler._json_response(200, json.dumps(plc.hmi_screens_meta()).encode())
+
+
+def _serve_hmi_read(handler):
+    plc = _plc(handler)
+    if plc is None:
+        return
+    q = parse_qs(urlparse(handler.path).query)
+    screen = (q.get("screen") or [""])[0]
+    if not screen:
+        handler._json_response(400, b'{"error":"screen query param required"}')
+        return
+    out = plc.read_hmi_screen(screen)
+    handler._json_response(404 if out.get("error") else 200, json.dumps(out).encode())
+
+
 def _amr_state_loop():
     """Write %MW5112 = 2 (Moving) / 1 (Stationary) on every movement-state
     change, derived from the dashboard's velocity state. Waits for main() to
@@ -110,6 +131,8 @@ def _register():
     _serve.Handler.add_route("GET",  "/api/amr/poll",  _serve_amr_poll)
     _serve.Handler.add_route("GET",  "/api/amr/ping",  _serve_amr_ping)
     _serve.Handler.add_route("POST", "/api/amr/write", _serve_amr_write)
+    _serve.Handler.add_route("GET",  "/api/hmi/screens", _serve_hmi_screens)
+    _serve.Handler.add_route("GET",  "/api/hmi/read",    _serve_hmi_read)
 
 
 def main():

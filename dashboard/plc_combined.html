@@ -583,6 +583,111 @@ input[type=range] { width: 100%; accent-color: var(--teal); height: 6px; cursor:
 @media (min-width: 681px) and (max-width: 900px) {
   :root { --nav: 185px; --key-sz: 58px; }
 }
+
+/* ── HMI live mirror — styled to resemble the physical HMI panel ──── */
+#view-hmi { overflow: hidden; }
+.hmi-shell { display: flex; flex-direction: column; height: 100%; min-height: 0;
+  background: #c9cdd1; }                                  /* HMI grey desktop */
+.hmi-banner { display: flex; align-items: stretch; gap: 6px; padding: 6px;
+  background: #b9bec3; border-bottom: 1px solid #9aa0a6; flex-shrink: 0; }
+.hbn-corner { flex: 0 0 92px; border: 1px solid #7f868c; border-radius: 3px;
+  background: linear-gradient(#f2f3f4,#d7dade); color: #2a2f33; font-size: 12px;
+  font-weight: 700; line-height: 1.15; cursor: default; }
+.hbn-menu { cursor: pointer; }
+.hbn-menu:hover { background: linear-gradient(#fff,#e7eaee); }
+.hbn-msgs { flex: 1 1 auto; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.hbn-msg { flex: 1; display: flex; align-items: center; justify-content: center;
+  background: #d9dde0; border: 1px solid #9aa0a6; border-radius: 3px; font-size: 14px;
+  color: #333; padding: 2px 8px; text-align: center; }
+.hbn-fault { flex: 1; display: flex; align-items: center; justify-content: center;
+  background: #f0a3a3; border: 1px solid #d06767; border-radius: 3px; font-size: 14px;
+  font-weight: 700; color: #6b1414; padding: 2px 8px; text-align: center; min-height: 22px; }
+.hbn-fault:empty { background: #e9b9b9; opacity: .5; }
+.hmi-subbar { display: flex; align-items: center; gap: 10px; padding: 4px 12px;
+  background: #aab0b5; border-bottom: 1px solid #9aa0a6; font-size: 13px; color: #23292d; flex-shrink: 0; }
+#hmiCrumb { font-weight: 700; }
+.hmi-spacer { flex: 1 1 auto; }
+.hbn-clock { font-family: var(--mono); font-weight: 700; color: #23292d; }
+.hmi-conn { font-size: 12px; font-weight: 700; padding: 2px 9px; border-radius: 10px; }
+.hmi-conn.up   { background: #cdeede; color: #0a7a52; }
+.hmi-conn.down { background: #f6cccc; color: #a02020; }
+.hmi-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 16px; }
+.hmi-empty { padding: 30px; color: #4b5157; font-size: 15px; }
+
+/* screen title */
+.hs-title { text-align: center; font-size: 19px; font-weight: 700; color: #1c2226;
+  letter-spacing: .04em; margin-bottom: 14px; }
+
+/* MENU screen — button columns like the PDF */
+.hmi-menu-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px; max-width: 1050px; margin: 0 auto; }
+.hmi-menu-col { background: #b4b9be; border: 1px solid #8b9197; border-radius: 5px; padding: 8px; }
+.hmi-menu-col h3 { text-align: center; font-size: 13px; font-weight: 700; color: #1c2226;
+  padding-bottom: 8px; letter-spacing: .03em; }
+.hmi-mbtn { display: block; width: 100%; margin-bottom: 8px; padding: 12px 8px;
+  border: 1px solid #7f868c; border-radius: 4px; background: linear-gradient(#f4f5f6,#d5d9dd);
+  color: #23292d; font-size: 13px; font-weight: 600; cursor: pointer; text-align: center; line-height: 1.2; }
+.hmi-mbtn:hover { background: linear-gradient(#fff,#e4e8ec); border-color: var(--teal); }
+.hmi-mbtn:last-child { margin-bottom: 0; }
+
+/* generic card grid + bespoke cards share these */
+.hmi-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px; align-items: start; }
+.hcard { background: #eef0f1; border: 1px solid #9aa0a6; border-radius: 5px; overflow: hidden; }
+.hcard.wide { grid-column: 1 / -1; }
+.hcard-hdr { padding: 7px 11px; background: #6b7379; color: #fff; font-size: 13px;
+  font-weight: 700; letter-spacing: .03em; }
+.hcard-body { padding: 8px 11px; }
+
+/* indicator lamp (square, like the HMI) + label */
+.hlamp { display: flex; align-items: center; gap: 9px; padding: 4px 2px; font-size: 13px; color: #23292d; }
+.hled { flex: 0 0 auto; width: 16px; height: 16px; border-radius: 3px; background: #b7bcc0;
+  border: 1px solid #7d8288; box-shadow: inset 0 1px 2px rgba(0,0,0,.25); }
+.hled.on  { background: #2fbf6c; border-color: #1e8f4e; box-shadow: 0 0 6px rgba(47,191,108,.8), inset 0 1px 1px rgba(255,255,255,.4); }
+.hled.red { background: #b7bcc0; }
+.hled.red.on { background: #e24d4d; border-color: #b02c2c; box-shadow: 0 0 6px rgba(226,77,77,.8); }
+.hled.na { background: #d5d8da; border-style: dashed; }
+.hlamp .hl-lbl { flex: 1 1 auto; min-width: 0; }
+
+/* value field: label + boxed reading */
+.hfield { display: flex; align-items: center; gap: 8px; padding: 4px 2px; font-size: 13px; }
+.hf-lbl { flex: 1 1 auto; color: #23292d; min-width: 0; }
+.hf-box { flex: 0 0 auto; min-width: 92px; text-align: right; font-family: var(--mono);
+  font-weight: 700; font-size: 14px; color: #10306a; background: #fff;
+  border: 1px solid #9aa0a6; border-radius: 3px; padding: 3px 8px; }
+.hf-box.na { color: #9aa0a6; }
+
+/* read-only HMI buttons (shown for fidelity, never clickable) */
+.hbtn-grp { border: 1px solid #8b9197; border-radius: 4px; padding: 7px; margin-bottom: 10px; background: #c3c8cc; }
+.hbtn-grp h4 { text-align: center; font-size: 12px; font-weight: 700; color: #23292d; margin-bottom: 6px; letter-spacing: .03em; }
+.hbtn-row { display: flex; gap: 6px; }
+.hbtn { flex: 1 1 0; padding: 10px 6px; border: 1px solid #7f868c; border-radius: 4px;
+  background: linear-gradient(#eef0f1,#cfd3d7); color: #3a4045; font-size: 12px; font-weight: 700;
+  text-align: center; line-height: 1.15; cursor: not-allowed; }
+.hbtn.active { background: linear-gradient(#33c06f,#1f9a52); color: #fff; border-color: #1e8f4e; }
+.hbtn.warn.active { background: linear-gradient(#f2c14e,#e0a92c); color: #3a2e00; border-color: #c79420; }
+.hbtn.danger.active { background: linear-gradient(#e24d4d,#c22b2b); color: #fff; border-color: #a52020; }
+
+/* three-column motion screen */
+.hmi-motion { display: grid; grid-template-columns: minmax(180px,1fr) minmax(220px,1.2fr) minmax(200px,1fr);
+  gap: 12px; align-items: start; }
+@media (max-width: 820px) { .hmi-motion { grid-template-columns: 1fr; } }
+
+/* sequence status boxes (Main screen) */
+.hseq-box { background: #cfd3d7; border: 2px solid #8b9197; border-radius: 4px;
+  padding: 16px 10px; text-align: center; font-size: 15px; font-weight: 700; color: #23292d;
+  min-height: 54px; display: flex; align-items: center; justify-content: center; }
+.hseq-box.run { background: #bfe6cf; border-color: #3d9c68; }
+.hseq-box.fault { background: #f0a3a3; border-color: #c22b2b; }
+
+/* gauge (pitch/roll dial) */
+.hgauge { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.hgauge svg { width: 170px; height: 100px; }
+.hgauge .hg-val { font-family: var(--mono); font-size: 22px; font-weight: 700; color: #10306a; }
+.hgauge .hg-lbl { font-size: 13px; font-weight: 700; color: #23292d; letter-spacing: .04em; }
+.hdist { text-align: center; }
+.hdist .hd-v { font-family: var(--mono); font-size: 22px; font-weight: 700; color: #10306a; }
+.hdist .hd-l { font-size: 12px; color: #23292d; }
 </style>
 </head>
 <body>
@@ -609,6 +714,8 @@ input[type=range] { width: 100%; accent-color: var(--teal); height: 6px; cursor:
     <button class="nav-item" onclick="switchView('gps')">GPS</button>
     <div class="nav-divider"></div>
     <button class="nav-item" onclick="switchView('plc')">PLC</button>
+    <div class="nav-divider"></div>
+    <button class="nav-item" onclick="switchView('hmi')">HMI</button>
     <div class="nav-divider"></div>
     <button class="nav-item" onclick="switchView('connectivity')">Connectivity</button>
     <div class="nav-divider"></div>
@@ -825,6 +932,30 @@ input[type=range] { width: 100%; accent-color: var(--teal); height: 6px; cursor:
       </div>
     </div>
 
+    <!-- HMI VIEW — read-only live mirror of the machine HMI screens -->
+    <div id="view-hmi" class="view">
+      <div class="hmi-shell">
+        <!-- HMI top banner: FAULT RESET · message/fault · MENU SELECTION -->
+        <div class="hmi-banner">
+          <button class="hbn-corner" disabled title="Read-only mirror">FAULT<br>RESET</button>
+          <div class="hbn-msgs">
+            <div class="hbn-msg" id="hmiMsg">—</div>
+            <div class="hbn-fault" id="hmiFault"></div>
+          </div>
+          <button class="hbn-corner hbn-menu" id="hmiMenuBtn" onclick="_hmiGoMenu()">MENU<br>SELECTION</button>
+        </div>
+        <div class="hmi-subbar">
+          <span id="hmiCrumb">Menu</span>
+          <span class="hmi-spacer"></span>
+          <span class="hmi-conn" id="hmiConn">—</span>
+          <span class="hbn-clock" id="hmiClock"></span>
+        </div>
+        <div class="hmi-body" id="hmiBody">
+          <div class="hmi-empty">Loading HMI…</div>
+        </div>
+      </div>
+    </div>
+
     <!-- SETTINGS VIEW -->
     <div id="view-settings" class="view">
       <div class="settings-body">
@@ -1015,7 +1146,7 @@ const _prevState = {
 function _updateChassisStatus() { /* no-op */ }
 
 // ── Navigation ──────────────────────────────────────────────────
-const VIEWS = ['camera','gps','connectivity','plc','settings','logs'];
+const VIEWS = ['camera','gps','connectivity','plc','hmi','settings','logs'];
 let _mapReady = false;
 
 function switchView(name) {
@@ -1031,6 +1162,276 @@ function switchView(name) {
   }
   if (name === 'settings') _loadSettingsPanel();
   if (name === 'logs') _renderAppLog();
+  if (name === 'hmi') _hmiOnShow(); else _hmiOnHide();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// HMI — read-only live mirror of the machine HMI screens
+// ═══════════════════════════════════════════════════════════════
+const _hmi = { loaded:false, meta:null, current:null, timer:null, inflight:false, clock:null };
+
+async function _hmiOnShow() {
+  if (!_hmi.clock) { _hmi.clock = setInterval(_hmiTick, 1000); _hmiTick(); }
+  if (!_hmi.loaded) {
+    try {
+      const r = await _fetchWithTimeout('/api/hmi/screens', { cache:'no-store' }, 4000);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      _hmi.meta = await r.json();
+      _hmi.loaded = true;
+    } catch (err) {
+      _g('hmiBody').innerHTML =
+        '<div class="hmi-empty">HMI unavailable on this chassis (' +
+        (err?.message || err) + ').</div>';
+      return;
+    }
+  }
+  if (_hmi.current) { _hmiStartPoll(); _hmiPoll(); } else { _hmiGoMenu(); }
+}
+
+function _hmiOnHide() {
+  _hmiStopPoll();
+  if (_hmi.clock) { clearInterval(_hmi.clock); _hmi.clock = null; }
+}
+
+function _hmiStartPoll() { _hmiStopPoll(); _hmi.timer = setInterval(_hmiPoll, 400); }   // ~2.5 Hz
+function _hmiStopPoll()  { if (_hmi.timer) { clearInterval(_hmi.timer); _hmi.timer = null; } _hmi.inflight = false; }
+
+function _hmiFindScreen(id) {
+  for (const sec of (_hmi.meta?.sections || []))
+    for (const s of sec.screens) if (s.id === id) return { ...s, section: sec.section };
+  return null;
+}
+
+function _hmiGoMenu() {
+  _hmiStopPoll();
+  _hmi.current = null;
+  _set('hmiCrumb', 'Menu');
+  const mb = _g('hmiMenuBtn'); if (mb) mb.style.visibility = 'hidden';
+  const c = _g('hmiConn'); if (c) { c.textContent = ''; c.className = 'hmi-conn'; }
+  _g('hmiBody').innerHTML = _tplMenu();
+}
+
+function _hmiGoScreen(id) {
+  _hmi.current = id;
+  const meta = _hmiFindScreen(id);
+  _set('hmiCrumb', (meta?.section ? meta.section + ' › ' : '') + (meta?.title || id));
+  const mb = _g('hmiMenuBtn'); if (mb) mb.style.visibility = 'visible';
+  _g('hmiBody').innerHTML = '<div class="hmi-empty">Reading…</div>';
+  _hmiStartPoll();
+  _hmiPoll();
+}
+
+async function _hmiPoll() {
+  if (!_hmi.current || _hmi.inflight) return;
+  if (!_g('view-hmi')?.classList.contains('active')) return;
+  _hmi.inflight = true;
+  try {
+    const r = await _fetchWithTimeout(
+      '/api/hmi/read?screen=' + encodeURIComponent(_hmi.current), { cache:'no-store' }, 2500);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    if (d.screen !== _hmi.current) return;      // stale — screen switched mid-flight
+    const c = _g('hmiConn');
+    if (c) { c.textContent = d.connected ? 'PLC live' : 'PLC offline';
+             c.className = 'hmi-conn ' + (d.connected ? 'up' : 'down'); }
+    _hmiRenderScreen(d);
+  } catch (err) {
+    const c = _g('hmiConn'); if (c) { c.textContent = 'error'; c.className = 'hmi-conn down'; }
+  } finally {
+    _hmi.inflight = false;
+  }
+}
+
+function _hmiTick() {
+  const d = new Date(), p = n => String(n).padStart(2, '0');
+  const mon = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'][d.getMonth()];
+  _set('hmiClock',
+    `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())} ${p(d.getDate())}-${mon}-${String(d.getFullYear()).slice(2)}`);
+}
+
+// Reflect the PLC fault/warning banner into the HMI top bar (called by _renderBannerBox).
+function _hmiSetBanner(fault, warning) {
+  const f = _g('hmiFault'), m = _g('hmiMsg');
+  if (f) f.textContent = (fault || '').trim();
+  if (m) m.textContent = (warning || '').trim() || 'System nominal';
+}
+
+// ── render helpers ───────────────────────────────────────────────
+const _hcap = s => s
+  .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+  .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2');
+function _hnum(v) {
+  if (v === null || v === undefined) return null;
+  return (typeof v === 'number' && !Number.isInteger(v)) ? v.toFixed(2) : String(v);
+}
+function _led(v, red) {
+  const c = v === true ? 'on' : (v === false ? '' : 'na');
+  return `<span class="hled ${red ? 'red ' : ''}${c}"></span>`;
+}
+function _lampRow(label, v, red) {
+  return `<div class="hlamp">${_led(v, red)}<span class="hl-lbl">${label}</span></div>`;
+}
+function _fieldRow(label, v, unit) {
+  const n = _hnum(v);
+  return `<div class="hfield"><span class="hf-lbl">${label}</span>` +
+         `<span class="hf-box${n === null ? ' na' : ''}">${n === null ? '—' : n + (unit ? ' ' + unit : '')}</span></div>`;
+}
+function _btn(label, active, cls) {
+  return `<button class="hbtn ${cls || ''} ${active ? 'active' : ''}" disabled>${label}</button>`;
+}
+function _card(title, body, wide) {
+  return `<div class="hcard${wide ? ' wide' : ''}"><div class="hcard-hdr">${title}</div>` +
+         `<div class="hcard-body">${body}</div></div>`;
+}
+
+function _hmiRenderScreen(d) {
+  const B = d.blocks || {};
+  let html;
+  switch (d.layout) {
+    case 'main':   html = _tplMain(B);   break;
+    case 'gauges': html = _tplGauges(B); break;
+    case 'motion': html = _tplMotion(B); break;
+    case 'motor':  html = _tplMotor(B);  break;
+    case 'robot':  html = _tplRobot(B);  break;
+    default:       html = _tplPanels(d.panels || []);
+  }
+  _g('hmiBody').innerHTML = `<div class="hs-title">${(d.title || '').toUpperCase()}</div>` + html;
+}
+
+// ── templates (mirror the PDF screens) ───────────────────────────
+function _tplMenu() {
+  const cols = (_hmi.meta?.sections || []).map(sec =>
+    `<div class="hmi-menu-col"><h3>${sec.section.toUpperCase()}</h3>` +
+    sec.screens.map(s => `<button class="hmi-mbtn" onclick="_hmiGoScreen('${s.id}')">${s.title}</button>`).join('') +
+    `</div>`).join('');
+  return `<div class="hs-title">MENU</div><div class="hmi-menu-grid">${cols}</div>`;
+}
+
+function _tplPanels(panels) {
+  const FAULT = /fault|overcurrent|position lost|motion blocked|warning present|drive faulted|alarm/i;
+  const cards = panels.map(p => {
+    const rows = p.rows.map(r => r.kind === 'bool'
+      ? _lampRow(r.label, r.value, FAULT.test(r.label))
+      : _fieldRow(r.label, r.value, r.unit)).join('');
+    return _card(p.title, rows);
+  }).join('');
+  return `<div class="hmi-cards">${cards}</div>`;
+}
+
+function _tplMain(B) {
+  const i = B.HMI_IND || {}, a = B.AugerSeq || {}, p = B.PlanterSeq || {};
+  const st = s => s.Complete ? 'CYCLE COMPLETE'
+    : s.InCycle ? 'IN CYCLE — STEP ' + (s.Step ?? '—')
+    : s.Home ? 'AT HOME'
+    : s.OkToStart ? 'READY — OK TO START' : 'WAITING FOR SEQUENCE START';
+  const cl = s => s.InCycle ? ' run' : '';
+  const auto = i.ModeStatus === 2, manual = i.ModeStatus != null && i.ModeStatus !== 2;
+  const es = [['F-L', i.EstopOkFL], ['F-R', i.EstopOkFR], ['R-L', i.EstopOkRL],
+              ['R-R', i.EstopOkRR], ['Robot', i.EstopOkRbt], ['AMR', i.EstopOkAMR]];
+  return `<div class="hmi-cards">
+    ${_card('AUGER SEQUENCE', `<div class="hseq-box${cl(a)}">${st(a)}</div>`, true)}
+    ${_card('PLANTER SEQUENCE', `<div class="hseq-box${cl(p)}">${st(p)}</div>`, true)}
+    ${_card('MODE SELECT', `<div class="hbtn-row">${_btn('AUTO MODE', auto)}${_btn('MANUAL MODE', manual, 'warn')}</div>`)}
+    ${_card('START / STOP', `<div class="hbtn-row">${_btn('START', a.InCycle || p.InCycle)}${_btn('STOP', false, 'danger')}</div>` + _fieldRow('Cycle Status', i.CycleStatus, ''))}
+    ${_card('AMR', _lampRow('OK TO PLANT', i.AMROktoPlant))}
+    ${_card('SAFETY', es.map(e => _lampRow('E-Stop ' + e[0] + ' OK', e[1])).join('') +
+        _lampRow('Front Scanner OK', i.ScanOkFront) + _lampRow('Rear Scanner OK', i.ScanOkRear) +
+        _lampRow('Gate OK', i.GateOk) + _lampRow('Faulted', i.Faulted, true))}
+  </div>`;
+}
+
+function _gauge(label, val) {
+  const clamp = (val == null) ? 0 : Math.max(-40, Math.min(40, val));
+  const ang = clamp / 40 * 80;                 // ±80° sweep
+  const cx = 85, cy = 92, len = 68;
+  const x = cx + len * Math.cos((ang - 90) * Math.PI / 180);
+  const y = cy + len * Math.sin((ang - 90) * Math.PI / 180);
+  return `<div class="hgauge">
+    <div class="hg-lbl">${label}</div>
+    <svg viewBox="0 0 170 100">
+      <path d="M12,92 A73,73 0 0 1 158,92" fill="none" stroke="#8b9197" stroke-width="3"/>
+      <line x1="${cx}" y1="${cy}" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}" stroke="#c22b2b" stroke-width="3"/>
+      <circle cx="${cx}" cy="${cy}" r="4" fill="#333"/>
+    </svg>
+    <div class="hg-val">${val == null ? '—' : val.toFixed(2) + '°'}</div>
+  </div>`;
+}
+
+function _tplGauges(B) {
+  const i = B.HMI_IND || {};
+  const dist = (v, l) => `<div class="hdist"><div class="hd-v">${v == null ? '—' : v.toFixed(2)}</div><div class="hd-l">${l}</div></div>`;
+  return `<div class="hmi-cards">
+    ${_card('PITCH', _gauge('PITCH', i.PitchDisplay))}
+    ${_card('ROLL', _gauge('ROLL', i.RollDisplay))}
+    ${_card('DISTANCES', `<div style="display:flex;gap:16px;justify-content:space-around;padding:10px 0">
+        ${dist(i.AugerDistance, 'Auger (mm)')}${dist(i.PlanterDistance, 'Planter (mm)')}</div>`)}
+  </div>`;
+}
+
+function _tplMotion(B) {
+  const sym = Object.keys(B)[0], b = B[sym] || {};
+  const teknic = ('ServoOn' in b);
+  const vals = [
+    ['Position Target', b.PositionTarget, 'mm'], ['Velocity Target', b.VelocityTarget, 'mm/s'],
+    ['Position Measured', b.PositionMeasured, 'mm'], ['Velocity Measured', b.VelocityMeasured, 'mm/s'],
+    ['Torque Measured', b.TorqueMeasured, 'Nm'], ['Error', b.Error, ''],
+  ];
+  if (teknic) vals.push(['Warning', b.Warning, '']);
+  const lampNames = teknic
+    ? ['ServoOn','ServoOff','AtHome','AtApproach','AtWork','ReadyForCMD','InRange','CMDComplete',
+       'Settled','AtSpeed','Homing','BrkReleased','AtTargetPos','ErrorResetAck','MotionBlocked',
+       'SoftwarePosLim','SoftwareNegLim','MotorConnected','FaultPresent','WarningPresent']
+    : ['AtHome','AtApproach','AtWork','ReadyStart','NotRunning','Moving','RunningIn','RunningOut',
+       'EndReachedIn','EndReachedOut','PositionLost','Overcurrent','Faulted'];
+  const FAULT = /fault|overcurrent|lost|blocked|poslim|neglim/i;
+  const lamps = lampNames.filter(n => n in b)
+    .map(n => _lampRow(_hcap(n), b[n], FAULT.test(n))).join('');
+  const btns = teknic
+    ? `<div class="hbtn-grp"><h4>SERVO</h4><div class="hbtn-row">${_btn('OFF', b.ServoOff)}${_btn('ON', b.ServoOn)}</div></div>
+       <div class="hbtn-grp"><h4>JOG</h4><div class="hbtn-row">${_btn('▲', false)}${_btn('▼', false)}</div></div>
+       <div class="hbtn-grp"><h4>POSITION SELECTION</h4><div class="hbtn-row">${_btn('HOME', b.AtHome)}${_btn('APPROACH', b.AtApproach)}${_btn('WORK', b.AtWork)}</div></div>
+       <div class="hbtn-grp"><h4>HOMING</h4><div class="hbtn-row">${_btn(b.Homing ? 'HOMING…' : 'HOME REQUIRED', b.Homing, 'warn')}</div></div>`
+    : `<div class="hbtn-grp"><h4>RECOVERY RUN</h4><div class="hbtn-row">${_btn('−', b.RunningIn)}${_btn('+', b.RunningOut)}</div></div>
+       <div class="hbtn-grp"><h4>JOG</h4><div class="hbtn-row">${_btn('−', false)}${_btn('+', false)}</div></div>
+       <div class="hbtn-grp"><h4>POSITION SELECTION</h4><div class="hbtn-row">${_btn('HOME', b.AtHome)}${_btn('WORK', b.AtWork)}</div></div>`;
+  return `<div class="hmi-motion">
+    <div>${btns}</div>
+    ${_card('MEASUREMENTS', vals.map(v => _fieldRow(v[0], v[1], v[2])).join(''))}
+    ${_card('STATUS', lamps)}
+  </div>`;
+}
+
+function _tplMotor(B) {
+  const b = B.HMI_IND_Auger || {};
+  return `<div class="hmi-cards">
+    ${_card('MOTOR', `<div class="hbtn-row">${_btn('OFF', b.Off, 'danger')}${_btn('ON', b.On)}</div>`)}
+    ${_card('MANUAL DIRECTION', `<div class="hbtn-row">${_btn('CCW', b.CCW)}${_btn('CW', b.CW)}</div>`)}
+    ${_card('VELOCITY', _fieldRow('Velocity Target', b.VelocityTarget, 'RPM') + _fieldRow('Velocity Measured', b.VelocityMeasured, 'RPM'))}
+    ${_card('STATUS', _lampRow('Drive Faulted', b.Faulted, true) + _lampRow('Auger Run', b.Run) +
+        _lampRow('Forward', b.Fwd) + _lampRow('Reverse', b.Rev) + _lampRow('CW', b.CW) + _lampRow('CCW', b.CCW))}
+  </div>`;
+}
+
+function _tplRobot(B) {
+  const r = B.HMI_IND_Robot || {}, g = B.HMI_Gripper || {};
+  const inN  = ['diStart','diStop','diPause','diContinue','diReset','diShutdown','diSetMotorsOn','diSetMotorsOff','diHome'];
+  const outN = ['doReady','doRunning','doPaused','doError','doEstopOn','doSafeguardOn','doSError','doWarning',
+                'doMotorsOn','doAtHome','doCmdRunning','doCmdError','doAutoMode','doTeachMode','doEnableOn'];
+  const FAULT = /error|estop on|warning|s error/i;
+  return `<div class="hmi-cards">
+    ${_card('ROBOT CONTROLS',
+       `<div class="hbtn-row">${_btn('MOTORS ON', r.doMotorsOn)}${_btn('MOTORS OFF', r.doMotorsOn === false)}</div>
+        <div class="hbtn-row" style="margin-top:6px">${_btn('START', r.doRunning)}${_btn('STOP', false, 'danger')}</div>
+        <div class="hbtn-row" style="margin-top:6px">${_btn('CONTINUE', false)}${_btn('PAUSE', r.doPaused, 'warn')}</div>
+        <div class="hbtn-row" style="margin-top:6px">${_btn('GO HOME', r.doAtHome)}${_btn('RESET', false)}</div>`)}
+    ${_card('ROBOT INPUTS', inN.map(n => _lampRow(_hcap(n.slice(2)), r[n])).join('') + _fieldRow('Program Commd', r.diProgSel, ''))}
+    ${_card('ROBOT OUTPUTS', outN.map(n => _lampRow(_hcap(n.slice(2)), r[n], FAULT.test(_hcap(n.slice(2))))).join('') +
+        _fieldRow('Program Echo', r.doCmdProg, '') + _fieldRow('Home Status', r.HomeStatus, '') + _fieldRow('Error Code', r.ErrorCode, ''))}
+    ${_card('GRIPPER', _lampRow('In Position Mode', g.InPositionMode) + _lampRow('In Jog Mode', g.InJogMode) +
+        _lampRow('At Base', g.AtBase) + _lampRow('At Work', g.AtWork) +
+        _lampRow('Jog Base Active', g.JogBaseActive) + _lampRow('Jog Work Active', g.JogWorkActive) +
+        _fieldRow('Actual Position', g.ActPos, 'mm'))}
+  </div>`;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2128,6 +2529,7 @@ function _renderBannerBox(d) {
     if (warning) h += '<div class="plc-banner-item warning">WARNING: ' + _esc(warning) + '</div>';
   }
   box.innerHTML = h;
+  if (typeof _hmiSetBanner === 'function') _hmiSetBanner(connected ? fault : '', connected ? warning : '');
 }
 
 async function _pollBanner() {
