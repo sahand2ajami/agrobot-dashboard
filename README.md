@@ -580,6 +580,12 @@ You should see **Chassis Link** go green, **Chassis Battery** show a voltage, an
 #   📷 Camera  ·  🗺 GPS  ·  📡 Connectivity  ·  ⚙ PLC Handshake
 ```
 
+The dashboard is also published on the Jetson's LAN/WiFi address — currently
+**http://10.136.225.44:8769** — so it can be opened from any other device
+(laptop, tablet, phone) on the same network, not just the Jetson itself. The
+launcher prints the current address at startup; if the Jetson's IP changes,
+use the printed one.
+
 ### Jackal
 
 ```bash
