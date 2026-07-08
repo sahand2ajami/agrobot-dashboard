@@ -129,11 +129,121 @@ class TestHmiLayout:
         ids = [s["id"] for s in plc_client.HMI_SCREENS]
         assert len(ids) == len(set(ids))
 
-    def test_screens_meta_grouped(self):
+    def test_screens_meta_menu_tree(self):
         meta = PlcClient.hmi_screens_meta()
-        assert meta["sections"][0]["section"] == "Overview"
-        flat = [sc["id"] for sec in meta["sections"] for sc in sec["screens"]]
-        assert flat == [s["id"] for s in plc_client.HMI_SCREENS]
+        assert meta["root"] == "root"
+        assert "root" in meta["menus"] and "io" in meta["menus"]
+        # every screen has a title in the flat map
+        assert set(meta["titles"]) == {s["id"] for s in plc_client.HMI_SCREENS}
+
+    def test_menu_targets_resolve(self):
+        ids = {s["id"] for s in plc_client.HMI_SCREENS}
+        for key, menu in plc_client.HMI_MENU.items():
+            for col in menu["columns"]:
+                for btn in col["buttons"]:
+                    kind, _, tgt = btn["target"].partition(":")
+                    if kind == "screen":
+                        assert tgt in ids, f"{key}: bad screen target {tgt}"
+                    elif kind == "menu":
+                        assert tgt in plc_client.HMI_MENU, f"{key}: bad menu target {tgt}"
+                    else:
+                        raise AssertionError(f"unknown target kind {btn['target']}")
+
+    def test_every_screen_reachable_from_menu(self):
+        reached = set()
+        for menu in plc_client.HMI_MENU.values():
+            for col in menu["columns"]:
+                for btn in col["buttons"]:
+                    kind, _, tgt = btn["target"].partition(":")
+                    if kind == "screen":
+                        reached.add(tgt)
+        assert reached == {s["id"] for s in plc_client.HMI_SCREENS}
+
+    def test_screen_has_layout(self):
+        for s in plc_client.HMI_SCREENS:
+            assert plc_client._hmi_expand_layout(s)["layout"]
+
+    def test_hmi_addresses_match_bench_reg(self):
+        """Every HMI-mirror tag that also appears in the bench-confirmed _REG map
+        must resolve to the same %MW/%MX address. This pins the transcription to
+        hardware truth so the two maps can't silently drift (esp. the auger-motor
+        block, whose word order follows _REG, not the PDF)."""
+        def member_mx(block, member):
+            udt, base = plc_client.HMI_BLOCKS[block]
+            for name, dt, addr in plc_client.HMI_UDT[udt]:
+                if name == member:
+                    w, bit = plc_client._hmi_addr(addr)
+                    return (base + w) * 16 + bit, "MX" if dt == "bool" else "MW", base + w
+            raise KeyError(member)
+
+        def parse(reg):
+            r = reg.strip().upper().lstrip("%")
+            return r[:2], int(r[2:])
+
+        # bench _REG key → (HMI block, member)
+        pairs = {
+            "IND_MODE_STATUS": ("HMI_IND", "ModeStatus"),
+            "IND_ESTOP_OK_FL": ("HMI_IND", "EstopOkFL"),
+            "IND_GATE_OK": ("HMI_IND", "GateOk"),
+            "IND_FAULTED": ("HMI_IND", "Faulted"),
+            "IND_AUGER_ENABLED": ("HMI_IND", "AugerEnabled"),
+            "IND_PLANTER_ENABLED": ("HMI_IND", "PlanterEnabled"),
+            "IND_ROBOT_ENABLED": ("HMI_IND", "RobotEnabled"),
+            "IND_AMR_ENABLED": ("HMI_IND", "AMREnabled"),
+            "AUGER_HOME": ("AugerSeq", "Home"),
+            "AUGER_SETUP_OK": ("AugerSeq", "SetupOk"),
+            "AUGER_OK_START": ("AugerSeq", "OkToStart"),
+            "AUGER_ENABLED": ("AugerSeq", "Enabled"),
+            "AUGER_IN_CYCLE": ("AugerSeq", "InCycle"),
+            "AUGER_COMPLETE": ("AugerSeq", "Complete"),
+            "AUGER_STEP": ("AugerSeq", "Step"),
+            "PLANTER_HOME": ("PlanterSeq", "Home"),
+            "PLANTER_STEP": ("PlanterSeq", "Step"),
+            "AUGER_MOTOR_VEL_TARGET": ("HMI_IND_Auger", "VelocityTarget"),
+            "AUGER_MOTOR_VEL_ACTUAL": ("HMI_IND_Auger", "VelocityMeasured"),
+            "AUGER_MOTOR_RUN": ("HMI_IND_Auger", "Run"),
+            "AUGER_MOTOR_FWD": ("HMI_IND_Auger", "Fwd"),
+            "AUGER_MOTOR_FAULTED": ("HMI_IND_Auger", "Faulted"),
+        }
+        for key, (blk, mem) in pairs.items():
+            kind, num = parse(plc_client._REG[key])
+            mx, mkind, word = member_mx(blk, mem)
+            got = mx if kind == "MX" else word
+            assert kind == mkind and got == num, (
+                f"{key}: _REG={plc_client._REG[key]} but mirror {blk}.{mem} "
+                f"→ %{'MX'+str(mx) if kind=='MX' else 'MW'+str(word)}")
+
+
+class TestConnectNegativeCache:
+    """A downed PLC must fast-fail: one blocking connect per cooldown window,
+    not one per poll (which starved the HMI/AMR polls past their fetch timeout)."""
+
+    def test_failed_connect_is_cached(self, monkeypatch):
+        import types
+        calls = {"n": 0}
+
+        class FakeClient:
+            def __init__(self, *a, **k): pass
+            def connect(self): calls["n"] += 1; return False
+            def close(self): pass
+
+        fake = types.ModuleType("pymodbus.client")
+        fake.ModbusTcpClient = FakeClient
+        monkeypatch.setitem(sys.modules, "pymodbus.client", fake)
+
+        now = [1000.0]
+        monkeypatch.setattr(plc_client.time, "monotonic", lambda: now[0])
+
+        c = PlcClient("192.0.2.1", 502)
+        with c._lock:
+            assert c._ensure_client() is None
+            assert c._ensure_client() is None     # within cooldown → no 2nd connect
+        assert calls["n"] == 1
+
+        now[0] += c._CONNECT_COOLDOWN + 0.1        # cooldown elapsed → retry once
+        with c._lock:
+            assert c._ensure_client() is None
+        assert calls["n"] == 2
 
 
 class TestHmiDecode:

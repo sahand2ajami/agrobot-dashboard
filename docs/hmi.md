@@ -1,8 +1,10 @@
 # HMI live mirror (read-only)
 
 The tree-planter has a physical HMI panel that reads a set of UDT instances in
-the LS Electric PLC's M area and shows their members across ~24 screens. The
-dashboard mirrors those screens **read-only**: it shows the same live values,
+the LS Electric PLC's M area and shows their members across ~28 screens,
+navigated by an on-screen MENU of buttons (and an I/O sub-menu). The dashboard
+mirrors both the navigation and the screens **read-only**: same buttons, same
+live values,
 polled over the same Modbus TCP link the rest of the PLC integration uses. The
 HMI buttons in the dashboard only navigate — nothing here writes to the PLC.
 
@@ -52,24 +54,35 @@ flip that flag if a bench check shows swapped halves — see "Verify on live PLC
 
 | Method | Path | Notes |
 |--------|------|-------|
-| GET | `/api/hmi/screens` | Menu structure: `{sections:[{section, screens:[{id,title}]}]}` — drives the on-screen **MENU** of buttons. |
-| GET | `/api/hmi/read?screen=<id>` | Screen data + live values: `{connected, screen, title, section, layout, blocks:{SYMBOL:{member:value}}, singles:{name:value}, panels:[{title, rows:[{label, ref, kind, unit, value}]}]}`. Unknown screen → 404. |
+| GET | `/api/hmi/screens` | Navigation tree: `{menus:{root:{title,columns:[{header,buttons:[{label,target}]}]}, io:{…}}, root:"root", titles:{id:title}}`. Mirrors the physical **MENU** (pp.2) button columns + the **IO MENU** sub-menu (pp.6). A button `target` is `screen:<id>` (open a data screen) or `menu:<key>` (open a sub-menu). |
+| GET | `/api/hmi/read?screen=<id>` | Screen data + live values: `{connected, screen, title, section, layout, blocks:{SYMBOL:{member:value}}, singles:{name:value}, panels:[{title, rows:[{label, ref, kind, unit, value, ip?}]}]}`. Unknown screen → 404. |
 
 Both 503 on a chassis without `plc.enabled`. The browser opens on the **MENU**
-screen (mirrors the panel's menu), each button navigates to a screen, and each
-screen has a **MENU SELECTION** button back. The active screen polls
-`/api/hmi/read` at ~2.5 Hz (pauses when the HMI view is hidden).
+screen (mirrors the panel exactly: six button columns). Pressing a menu button
+either opens a data screen or descends into the **IO MENU** sub-menu; a `‹ Back`
+control (subbar) pops one level (the panel's on-screen **RETURN**), and the
+top-right **MENU SELECTION** jumps straight back to the root menu. The active
+screen polls `/api/hmi/read` at ~2.5 Hz (pauses when the HMI view is hidden).
 
 ### Frontend rendering (`plc_combined.html`)
 
-Each screen carries a `layout` hint. Bespoke templates reproduce the physical
-HMI layout from `blocks` (three-column `motion` screens with control buttons /
-measurements / indicator lamps, `main` with sequence boxes + mode/start-stop +
-safety lamps, `gauges` with pitch/roll dials, `motor`, `robot`); everything
-else falls back to the generic `panels` renderer (lamp + value cards). The
-on-screen control buttons are **always disabled** — this is a read-only mirror.
-The top banner shows the live fault/warning text (reused from
-`/api/plc/banner`) and a clock.
+Each screen carries a `layout` hint (from the screen def, else `HMI_LAYOUT`,
+else `panels`). A bespoke template per PDF page family renders from `blocks` /
+`panels`:
+
+- `main` (pp.1) — auger/planter sequence boxes, mode + start/stop, AMR, safety lamps.
+- `comms` (pp.3) — Ethernet/IP node list (name · IP · comms lamp, red = failed).
+- `gauges` (pp.5) — pitch/roll dials + distances.
+- `motion` (pp.13–21) — three columns (control buttons · measurements · status
+  lamps); auto-detects Teknic slide vs LA36 axis; position-selection buttons
+  vary per axis (`_posBtns`).
+- `motor` (pp.16), `robot` (pp.11), `jaws` (pp.22), `enable` (pp.30).
+- `panels` (default) — generic lamp + value cards (I/O lists, parameters,
+  tolerances, safety layout, robot I/O).
+
+On-screen control buttons are **always disabled** — this is a read-only mirror;
+they only reflect state. The top banner shows the live fault/warning text
+(reused from `/api/plc/banner`) and a clock.
 
 ## Adding / editing screens
 
@@ -80,10 +93,27 @@ The top banner shows the live fault/warning text (reused from
   new), then reference it from a screen.
 - **New standalone tag** — add it to `HMI_SINGLES` and reference it as
   `single:<name>`.
+- **New screen** — add it to `HMI_SCREENS` *and* wire a button to it in
+  `HMI_MENU` (a test asserts every screen is reachable from the menu tree, and
+  every menu target resolves). Give it a `layout` if it needs a bespoke
+  template; otherwise it renders with `panels`.
 
 Never hardcode a register or offset anywhere else. Run `pytest
 tests/test_plc_client.py` — the `TestHmiLayout` / `TestHmiDecode` /
 `TestHmiScreenRead` classes cover addressing, decode, and a simulated read.
+
+## Address provenance & the auger-motor exception
+
+Every UDT layout and instance base is transcribed from the PDF (pp.40–79), and
+17 of them are independently corroborated by the bench-confirmed `_REG` map
+(e-stops, enables, sequences, steps — a test pins these). **One block differs:**
+`ud_HMI_MotorIND` (`HMI_IND_Auger` @ %MW2500). The PDF (p.73) lists status bits
+first then velocities; the live PLC (`_REG.AUGER_MOTOR_*`, bench-confirmed) has
+**velocities first (word +0/+1) and the status bits at word +2** with
+Run/Fwd/Faulted at bits 0/1/2. The mirror follows `_REG` here. Only those three
+bits are confirmed, so the PDF's Rev/On/Off/CW/CCW are **not** decoded (positions
+unknown). `test_hmi_addresses_match_bench_reg` locks the whole mirror to `_REG`
+so the two maps can't drift.
 
 ## Verify on the live PLC (read-only, no writes)
 

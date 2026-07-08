@@ -629,6 +629,29 @@ input[type=range] { width: 100%; accent-color: var(--teal); height: 6px; cursor:
   color: #23292d; font-size: 13px; font-weight: 600; cursor: pointer; text-align: center; line-height: 1.2; }
 .hmi-mbtn:hover { background: linear-gradient(#fff,#e4e8ec); border-color: var(--teal); }
 .hmi-mbtn:last-child { margin-bottom: 0; }
+.hmi-menu-col h3.blank { visibility: hidden; }
+.hmi-back { border: 1px solid #7f868c; border-radius: 3px; background: linear-gradient(#f2f3f4,#d7dade);
+  color: #23292d; font-size: 12px; font-weight: 700; padding: 2px 10px; cursor: pointer; }
+.hmi-back:hover { background: linear-gradient(#fff,#e7eaee); border-color: var(--teal); }
+
+/* Communications screen (name · IP · lamp), like the PDF list */
+.hcomm-list { max-width: 720px; margin: 0 auto; }
+.hcomm-row { display: flex; align-items: center; gap: 12px; padding: 9px 6px;
+  border-bottom: 1px solid #b9bec3; }
+.hcomm-row .hled { width: 18px; height: 18px; }
+.hcomm-name { flex: 1 1 auto; font-size: 14px; font-weight: 700; color: #1c2226; }
+.hcomm-ip { flex: 0 0 auto; font-family: var(--mono); font-weight: 700; color: #10306a; }
+
+/* Feature Enable/Disable — five columns of buttons + status box */
+.henable-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px; max-width: 900px; margin: 0 auto; }
+.henable-col { background: #c3c8cc; border: 1px solid #8b9197; border-radius: 5px; padding: 10px;
+  display: flex; flex-direction: column; gap: 8px; }
+.henable-hdr { text-align: center; font-size: 13px; font-weight: 700; color: #1c2226; }
+.henable-status { text-align: center; font-size: 13px; font-weight: 700; padding: 10px 6px;
+  border: 2px solid #b58a00; border-radius: 4px; background: #f2d64a; color: #3a2e00; }
+.henable-status.on  { background: #bfe6cf; border-color: #3d9c68; color: #0a5c34; }
+.henable-status.na  { background: #d5d8da; border-color: #9aa0a6; color: #5a6066; }
 
 /* generic card grid + bespoke cards share these */
 .hmi-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
@@ -945,6 +968,7 @@ input[type=range] { width: 100%; accent-color: var(--teal); height: 6px; cursor:
           <button class="hbn-corner hbn-menu" id="hmiMenuBtn" onclick="_hmiGoMenu()">MENU<br>SELECTION</button>
         </div>
         <div class="hmi-subbar">
+          <button class="hmi-back" id="hmiBackBtn" onclick="_hmiBack()" style="visibility:hidden">‹ Back</button>
           <span id="hmiCrumb">Menu</span>
           <span class="hmi-spacer"></span>
           <span class="hmi-conn" id="hmiConn">—</span>
@@ -1168,16 +1192,18 @@ function switchView(name) {
 // ═══════════════════════════════════════════════════════════════
 // HMI — read-only live mirror of the machine HMI screens
 // ═══════════════════════════════════════════════════════════════
-const _hmi = { loaded:false, meta:null, current:null, timer:null, inflight:false, clock:null };
+// menus: {root:{...}, io:{...}}; titles: {id:title}; stack: nav history tokens
+const _hmi = { menus:null, titles:{}, current:null, menuKey:null,
+               stack:[], timer:null, inflight:false, clock:null };
 
 async function _hmiOnShow() {
   if (!_hmi.clock) { _hmi.clock = setInterval(_hmiTick, 1000); _hmiTick(); }
-  if (!_hmi.loaded) {
+  if (!_hmi.menus) {
     try {
       const r = await _fetchWithTimeout('/api/hmi/screens', { cache:'no-store' }, 4000);
       if (!r.ok) throw new Error('HTTP ' + r.status);
-      _hmi.meta = await r.json();
-      _hmi.loaded = true;
+      const m = await r.json();
+      _hmi.menus = m.menus; _hmi.titles = m.titles || {};
     } catch (err) {
       _g('hmiBody').innerHTML =
         '<div class="hmi-empty">HMI unavailable on this chassis (' +
@@ -1185,7 +1211,8 @@ async function _hmiOnShow() {
       return;
     }
   }
-  if (_hmi.current) { _hmiStartPoll(); _hmiPoll(); } else { _hmiGoMenu(); }
+  if (_hmi.current) { _hmiStartPoll(); _hmiPoll(); }
+  else { if (!_hmi.stack.length) _hmi.stack = ['menu:root']; _hmiRenderMenu(_hmi.menuKey || 'root'); }
 }
 
 function _hmiOnHide() {
@@ -1196,47 +1223,66 @@ function _hmiOnHide() {
 function _hmiStartPoll() { _hmiStopPoll(); _hmi.timer = setInterval(_hmiPoll, 400); }   // ~2.5 Hz
 function _hmiStopPoll()  { if (_hmi.timer) { clearInterval(_hmi.timer); _hmi.timer = null; } _hmi.inflight = false; }
 
-function _hmiFindScreen(id) {
-  for (const sec of (_hmi.meta?.sections || []))
-    for (const s of sec.screens) if (s.id === id) return { ...s, section: sec.section };
-  return null;
+// ── navigation (mirrors the physical MENU / sub-menus / RETURN) ──────
+function _hmiUpdateBack() {
+  const b = _g('hmiBackBtn'); if (b) b.style.visibility = (_hmi.stack.length > 1) ? 'visible' : 'hidden';
 }
-
-function _hmiGoMenu() {
-  _hmiStopPoll();
-  _hmi.current = null;
-  _set('hmiCrumb', 'Menu');
+function _hmiRenderMenu(key) {                    // render a menu screen (no push)
+  _hmiStopPoll(); _hmi.current = null; _hmi.menuKey = key;
+  const menu = _hmi.menus[key] || _hmi.menus.root;
+  _set('hmiCrumb', menu.title || 'Menu');
   const mb = _g('hmiMenuBtn'); if (mb) mb.style.visibility = 'hidden';
   const c = _g('hmiConn'); if (c) { c.textContent = ''; c.className = 'hmi-conn'; }
-  _g('hmiBody').innerHTML = _tplMenu();
+  _hmiUpdateBack();
+  _g('hmiBody').innerHTML = _tplMenu(menu);
 }
-
-function _hmiGoScreen(id) {
-  _hmi.current = id;
-  const meta = _hmiFindScreen(id);
-  _set('hmiCrumb', (meta?.section ? meta.section + ' › ' : '') + (meta?.title || id));
+function _hmiRenderScreenShell(id) {              // open a data screen (no push)
+  _hmi.current = id; _hmi.menuKey = null;
+  _set('hmiCrumb', _hmi.titles[id] || id);
   const mb = _g('hmiMenuBtn'); if (mb) mb.style.visibility = 'visible';
-  _g('hmiBody').innerHTML = '<div class="hmi-empty">Reading…</div>';
-  _hmiStartPoll();
-  _hmiPoll();
+  _hmiUpdateBack();
+  _hmi.errCount = 0;
+  const body = _g('hmiBody'); body.innerHTML = '<div class="hmi-empty">Reading…</div>';
+  delete body.dataset.rendered;
+  _hmiStartPoll(); _hmiPoll();
+}
+function _hmiNav(token) {                          // token = "menu:x" | "screen:x"
+  const [kind, key] = token.split(':');
+  if (kind === 'menu') _hmiRenderMenu(key); else _hmiRenderScreenShell(key);
+}
+function _hmiDispatch(target) { _hmi.stack.push(target); _hmiNav(target); }   // button press
+function _hmiGoMenu() { _hmi.stack = ['menu:root']; _hmiRenderMenu('root'); } // MENU SELECTION
+function _hmiBack() {                              // RETURN / ‹ Back
+  if (_hmi.stack.length > 1) { _hmi.stack.pop(); _hmiNav(_hmi.stack[_hmi.stack.length - 1]); }
+  else { _hmi.stack = ['menu:root']; _hmiRenderMenu('root'); }
 }
 
 async function _hmiPoll() {
   if (!_hmi.current || _hmi.inflight) return;
   if (!_g('view-hmi')?.classList.contains('active')) return;
   _hmi.inflight = true;
+  const screen = _hmi.current;
   try {
     const r = await _fetchWithTimeout(
-      '/api/hmi/read?screen=' + encodeURIComponent(_hmi.current), { cache:'no-store' }, 2500);
+      '/api/hmi/read?screen=' + encodeURIComponent(screen), { cache:'no-store' }, 5000);
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
     if (d.screen !== _hmi.current) return;      // stale — screen switched mid-flight
+    _hmi.errCount = 0;
     const c = _g('hmiConn');
     if (c) { c.textContent = d.connected ? 'PLC live' : 'PLC offline';
              c.className = 'hmi-conn ' + (d.connected ? 'up' : 'down'); }
     _hmiRenderScreen(d);
   } catch (err) {
+    if (screen !== _hmi.current) return;         // switched away mid-flight
     const c = _g('hmiConn'); if (c) { c.textContent = 'error'; c.className = 'hmi-conn down'; }
+    // Don't leave the screen stuck on "Reading…": after a few failures show why.
+    if ((_hmi.errCount = (_hmi.errCount || 0) + 1) >= 3) {
+      const b = _g('hmiBody');
+      if (b && !b.dataset.rendered)
+        b.innerHTML = '<div class="hmi-empty">Can’t reach the dashboard server for this screen (' +
+          (err?.message || err) + '). Retrying…</div>';
+    }
   } finally {
     _hmi.inflight = false;
   }
@@ -1288,23 +1334,30 @@ function _hmiRenderScreen(d) {
   const B = d.blocks || {};
   let html;
   switch (d.layout) {
-    case 'main':   html = _tplMain(B);   break;
-    case 'gauges': html = _tplGauges(B); break;
-    case 'motion': html = _tplMotion(B); break;
-    case 'motor':  html = _tplMotor(B);  break;
-    case 'robot':  html = _tplRobot(B);  break;
+    case 'main':   html = _tplMain(B);         break;
+    case 'gauges': html = _tplGauges(B);       break;
+    case 'motion': html = _tplMotion(B, d.screen); break;
+    case 'motor':  html = _tplMotor(B);        break;
+    case 'robot':  html = _tplRobot(B);        break;
+    case 'comms':  html = _tplComms(d);        break;
+    case 'enable': html = _tplEnable(B);       break;
+    case 'jaws':   html = _tplJaws(d);         break;
     default:       html = _tplPanels(d.panels || []);
   }
-  _g('hmiBody').innerHTML = `<div class="hs-title">${(d.title || '').toUpperCase()}</div>` + html;
+  const body = _g('hmiBody');
+  body.innerHTML = `<div class="hs-title">${(d.title || '').toUpperCase()}</div>` + html;
+  body.dataset.rendered = '1';
 }
 
 // ── templates (mirror the PDF screens) ───────────────────────────
-function _tplMenu() {
-  const cols = (_hmi.meta?.sections || []).map(sec =>
-    `<div class="hmi-menu-col"><h3>${sec.section.toUpperCase()}</h3>` +
-    sec.screens.map(s => `<button class="hmi-mbtn" onclick="_hmiGoScreen('${s.id}')">${s.title}</button>`).join('') +
+const _nl = s => (s || '').replace(/\n/g, '<br>');
+
+function _tplMenu(menu) {
+  const cols = (menu.columns || []).map(col =>
+    `<div class="hmi-menu-col">${col.header ? `<h3>${col.header}</h3>` : `<h3 class="blank"></h3>`}` +
+    col.buttons.map(b => `<button class="hmi-mbtn" onclick="_hmiDispatch('${b.target}')">${_nl(b.label)}</button>`).join('') +
     `</div>`).join('');
-  return `<div class="hs-title">MENU</div><div class="hmi-menu-grid">${cols}</div>`;
+  return `<div class="hs-title">${(menu.title || 'MENU')}</div><div class="hmi-menu-grid">${cols}</div>`;
 }
 
 function _tplPanels(panels) {
@@ -1368,7 +1421,7 @@ function _tplGauges(B) {
   </div>`;
 }
 
-function _tplMotion(B) {
+function _tplMotion(B, screen) {
   const sym = Object.keys(B)[0], b = B[sym] || {};
   const teknic = ('ServoOn' in b);
   const vals = [
@@ -1393,7 +1446,7 @@ function _tplMotion(B) {
        <div class="hbtn-grp"><h4>HOMING</h4><div class="hbtn-row">${_btn(b.Homing ? 'HOMING…' : 'HOME REQUIRED', b.Homing, 'warn')}</div></div>`
     : `<div class="hbtn-grp"><h4>RECOVERY RUN</h4><div class="hbtn-row">${_btn('−', b.RunningIn)}${_btn('+', b.RunningOut)}</div></div>
        <div class="hbtn-grp"><h4>JOG</h4><div class="hbtn-row">${_btn('−', false)}${_btn('+', false)}</div></div>
-       <div class="hbtn-grp"><h4>POSITION SELECTION</h4><div class="hbtn-row">${_btn('HOME', b.AtHome)}${_btn('WORK', b.AtWork)}</div></div>`;
+       <div class="hbtn-grp"><h4>POSITION SELECTION</h4><div class="hbtn-row">${_posBtns(screen, b)}</div></div>`;
   return `<div class="hmi-motion">
     <div>${btns}</div>
     ${_card('MEASUREMENTS', vals.map(v => _fieldRow(v[0], v[1], v[2])).join(''))}
@@ -1402,13 +1455,16 @@ function _tplMotion(B) {
 }
 
 function _tplMotor(B) {
+  // Only Run/Fwd/Faulted + velocities are bench-confirmed for this block
+  // (see ud_HMI_MotorIND note). ON/OFF reflect the Run bit; direction buttons
+  // are static (their bits aren't confirmed on the live PLC).
   const b = B.HMI_IND_Auger || {};
   return `<div class="hmi-cards">
-    ${_card('MOTOR', `<div class="hbtn-row">${_btn('OFF', b.Off, 'danger')}${_btn('ON', b.On)}</div>`)}
-    ${_card('MANUAL DIRECTION', `<div class="hbtn-row">${_btn('CCW', b.CCW)}${_btn('CW', b.CW)}</div>`)}
+    ${_card('MOTOR', `<div class="hbtn-row">${_btn('OFF', b.Run === false, 'danger')}${_btn('ON', b.Run === true)}</div>`)}
+    ${_card('MANUAL DIRECTION', `<div class="hbtn-row">${_btn('CCW', false)}${_btn('CW', false)}</div>`)}
     ${_card('VELOCITY', _fieldRow('Velocity Target', b.VelocityTarget, 'RPM') + _fieldRow('Velocity Measured', b.VelocityMeasured, 'RPM'))}
     ${_card('STATUS', _lampRow('Drive Faulted', b.Faulted, true) + _lampRow('Auger Run', b.Run) +
-        _lampRow('Forward', b.Fwd) + _lampRow('Reverse', b.Rev) + _lampRow('CW', b.CW) + _lampRow('CCW', b.CCW))}
+        _lampRow('Auger Fwd/Rev', b.Fwd))}
   </div>`;
 }
 
@@ -1431,6 +1487,55 @@ function _tplRobot(B) {
         _lampRow('At Base', g.AtBase) + _lampRow('At Work', g.AtWork) +
         _lampRow('Jog Base Active', g.JogBaseActive) + _lampRow('Jog Work Active', g.JogWorkActive) +
         _fieldRow('Actual Position', g.ActPos, 'mm'))}
+  </div>`;
+}
+
+// LA36 position-selection buttons differ per axis (matches each PDF screen).
+function _posBtns(screen, b) {
+  if (screen === 'planter_jaw_vertical')
+    return _btn('HOME', b.AtHome) + _btn('PLANT RELEASE', false) + _btn('CLEAR OF TAMPERS', false);
+  return _btn('HOME', b.AtHome) + _btn('WORK', b.AtWork);
+}
+
+// Ethernet/IP communications (pp.3): name · IP · comms lamp (red = failed).
+function _tplComms(d) {
+  const rows = (d.panels[0]?.rows || []).map(r => {
+    const cls = r.value === true ? 'on' : (r.value === false ? 'red on' : 'na');
+    return `<div class="hcomm-row"><span class="hled ${cls}"></span>` +
+           `<span class="hcomm-name">${r.label}</span><span class="hcomm-ip">${r.ip || ''}</span></div>`;
+  }).join('');
+  return `<div class="hcomm-list">${rows}</div>`;
+}
+
+// Feature enable/disable (pp.30): five columns of ENABLED/DISABLE + status box.
+function _tplEnable(B) {
+  const i = B.HMI_IND || {};
+  const feats = [['AUGER', i.AugerEnabled], ['PLANTER', i.PlanterEnabled], ['ROBOT', i.RobotEnabled],
+                 ['AMR', i.AMREnabled], ['DRY CYCLE', i.DryCycleEnabled]];
+  const cols = feats.map(([name, v]) => {
+    const status = v === true ? 'ENABLED' : (v === false ? 'DISABLED' : '—');
+    const scls   = v === true ? 'on' : (v === false ? 'off' : 'na');
+    return `<div class="henable-col"><div class="henable-hdr">${name}</div>` +
+           _btn('ENABLED', v === true) + _btn('DISABLE', false) +
+           `<div class="henable-status ${scls}">${status}</div></div>`;
+  }).join('');
+  return `<div class="henable-grid">${cols}</div>`;
+}
+
+// Auger jaw controls (pp.22): control method + per-jaw feedback/outputs.
+function _tplJaws(d) {
+  const B = d.blocks || {}, i = B.HMI_IND || {}, j1 = B.HMI_IND_Jaw1 || {}, j2 = B.HMI_IND_Jaw2 || {};
+  const fb = {};
+  (d.panels.find(p => p.title === 'Feedback & Outputs')?.rows || []).forEach(r => { fb[r.label] = r.value; });
+  const jawCard = (n, jb) => _card('JAW ' + n,
+    _fieldRow('Position Measured', fb['Jaw ' + n + ' Position Measured'], '%') +
+    _lampRow('Close Output', fb['Jaw ' + n + ' Close Output']) +
+    _lampRow('Open Output', fb['Jaw ' + n + ' Open Output']) +
+    _lampRow('At Home', jb.AtHome) + _lampRow('At Work', jb.AtWork) + _lampRow('Moving', jb.Moving));
+  return `<div class="hmi-cards">
+    ${_card('CONTROL METHOD', `<div class="hbtn-row">${_btn('SINGLE', i.JawMethod1)}${_btn('DUAL', i.JawMethod2)}</div>`)}
+    ${jawCard('1', j1)}
+    ${jawCard('2', j2)}
   </div>`;
 }
 

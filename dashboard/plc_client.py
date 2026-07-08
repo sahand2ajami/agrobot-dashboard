@@ -336,11 +336,19 @@ HMI_UDT = {
         ("ParameterChanged", "bool", "94.1"), ("TrayPopupIND", "bool", "94.2"),
         ("AugerDistance", "real", "96.0"), ("PlanterDistance", "real", "100.0"),
     ],
+    # NB: word order here follows the BENCH-CONFIRMED _REG map (AUGER_MOTOR_*),
+    # NOT p.73 of HMI_screen_and_tags.pdf. The PDF lists the status bits first
+    # then the velocities; the live PLC (per _REG) has velocities first and the
+    # status bits at word +2, with Run/Fwd/Faulted at bits 0/1/2. Only those
+    # three bits are bench-confirmed, so the PDF's Rev/On/Off/CW/CCW (positions
+    # unknown here) are intentionally omitted rather than guessed. A test in
+    # tests/test_plc_client.py pins these against _REG. See docs/hmi.md.
     "ud_HMI_MotorIND": [
-        ("Fwd", "bool", "0.0"), ("Rev", "bool", "0.1"), ("On", "bool", "0.2"),
-        ("Off", "bool", "0.3"), ("Faulted", "bool", "0.4"), ("Run", "bool", "0.5"),
-        ("CW", "bool", "0.6"), ("CCW", "bool", "0.7"),
-        ("VelocityTarget", "uint", "2.0"), ("VelocityMeasured", "uint", "4.0"),
+        ("VelocityTarget", "uint", "0.0"),    # %MW2500  = _REG["AUGER_MOTOR_VEL_TARGET"]
+        ("VelocityMeasured", "uint", "2.0"),  # %MW2501  = _REG["AUGER_MOTOR_VEL_ACTUAL"]
+        ("Run", "bool", "4.0"),               # %MX40032 = _REG["AUGER_MOTOR_RUN"]
+        ("Fwd", "bool", "4.1"),               # %MX40033 = _REG["AUGER_MOTOR_FWD"]
+        ("Faulted", "bool", "4.2"),           # %MX40034 = _REG["AUGER_MOTOR_FAULTED"]
     ],
     "ud_HMI_LA36IND": [
         ("AtHome", "bool", "0.0"), ("AtApproach", "bool", "0.1"),
@@ -609,19 +617,35 @@ HMI_SCREENS = [
         {"title": "Distances", "block": "HMI_IND",
          "members": ["AugerDistance", "PlanterDistance"]},
     ]},
-    {"id": "communications", "title": "Communications", "section": "Status", "panels": [
+    {"id": "communications", "title": "Ethernet I/P Communications", "section": "Status",
+     "layout": "comms", "panels": [
         {"title": "EtherNet/IP Nodes", "rows": [
-            {"label": "Keyence GC1000 – Safety PLC (.4)", "ref": "single:Node0CommsOk", "kind": "bool"},
-            {"label": "Turck IO Link Master (.6)", "ref": "single:Node1CommsOk", "kind": "bool"},
-            {"label": "Teknic IO Hub – Main Slides (.10)", "ref": "single:Node2CommsOk", "kind": "bool"},
-            {"label": "Linak LA36 – Auger Gimbal X (.11)", "ref": "single:Node3CommsOk", "kind": "bool"},
-            {"label": "Linak LA36 – Auger Gimbal Y (.12)", "ref": "single:Node4CommsOk", "kind": "bool"},
-            {"label": "Linak LA36 – Planter Gimbal X (.13)", "ref": "single:Node5CommsOk", "kind": "bool"},
-            {"label": "Linak LA36 – Planter Gimbal Y (.14)", "ref": "single:Node6CommsOk", "kind": "bool"},
-            {"label": "Linak LA36 – Planter Vert Jaw Slide (.15)", "ref": "single:Node7CommsOk", "kind": "bool"},
-            {"label": "Linak LA36 – Planter Tampers (.16)", "ref": "single:Node8CommsOk", "kind": "bool"},
-            {"label": "Epson VT6 Robot (.20)", "ref": "single:Node9CommsOk", "kind": "bool"},
+            {"label": "KEYENCE GC1000 - SAFETY PLC", "ip": "192.168.1.4", "ref": "single:Node0CommsOk", "kind": "bool"},
+            {"label": "TURCK IO LINK MASTER", "ip": "192.168.1.6", "ref": "single:Node1CommsOk", "kind": "bool"},
+            {"label": "TEKNIC IO HUB - MAIN SLIDES", "ip": "192.168.1.10", "ref": "single:Node2CommsOk", "kind": "bool"},
+            {"label": "LINAK LA36 - AUGER GIMBAL X AXIS", "ip": "192.168.1.11", "ref": "single:Node3CommsOk", "kind": "bool"},
+            {"label": "LINAK LA36 - AUGER GIMBAL Y AXIS", "ip": "192.168.1.12", "ref": "single:Node4CommsOk", "kind": "bool"},
+            {"label": "LINAK LA36 - PLANTER GIMBAL X AXIS", "ip": "192.168.1.13", "ref": "single:Node5CommsOk", "kind": "bool"},
+            {"label": "LINAK LA36 - PLANTER GIMBAL Y AXIS", "ip": "192.168.1.14", "ref": "single:Node6CommsOk", "kind": "bool"},
+            {"label": "LINAK LA36 - PLANTER VERTICAL JAW SLIDE", "ip": "192.168.1.15", "ref": "single:Node7CommsOk", "kind": "bool"},
+            {"label": "LINAK LA36 - PLANTER TAMPERS", "ip": "192.168.1.16", "ref": "single:Node8CommsOk", "kind": "bool"},
+            {"label": "EPSON VT6 ROBOT", "ip": "192.168.1.20", "ref": "single:Node9CommsOk", "kind": "bool"},
         ]},
+    ]},
+    # Robot I/O lists (reached from the I/O sub-menu → ROBOT · INPUTS / OUTPUTS).
+    {"id": "robot_inputs", "title": "Robot Inputs", "section": "I/O", "panels": [
+        {"title": "Robot Inputs (PLC → Robot)", "block": "HMI_IND_Robot", "members": [
+            "diStart", "diStop", "diPause", "diContinue", "diReset", "diShutdown",
+            "diSetMotorsOn", "diSetMotorsOff", "diHome"]},
+        {"title": "Program", "block": "HMI_IND_Robot", "members": ["diProgSel"]},
+    ]},
+    {"id": "robot_outputs", "title": "Robot Outputs", "section": "I/O", "panels": [
+        {"title": "Robot Outputs (Robot → PLC)", "block": "HMI_IND_Robot", "members": [
+            "doReady", "doRunning", "doPaused", "doError", "doEstopOn", "doSafeguardOn",
+            "doSError", "doWarning", "doMotorsOn", "doAtHome", "doCmdRunning", "doCmdError",
+            "doAutoMode", "doTeachMode", "doEnableOn"]},
+        {"title": "Echo", "block": "HMI_IND_Robot",
+         "members": ["doCmdProg", "HomeStatus", "ErrorCode"]},
     ]},
     # ── Auger Controls ──
     {"id": "auger_main_slide", "title": "Auger Main Slide", "section": "Auger Controls",
@@ -649,68 +673,132 @@ HMI_SCREENS = [
      "panels": [{"title": "Planter Gimbal Y Axis (LA36)", "block": "HMI_IND_PlanterGimbalY"}]},
     {"id": "planter_jaw_vertical", "title": "Planter Jaw Vertical", "section": "Planter Controls",
      "panels": [{"title": "Planter Jaw Vertical Slide (LA36)", "block": "HMI_IND_PlanterJawVert"}]},
-    {"id": "planter_jaws", "title": "Planter Jaws", "section": "Planter Controls", "panels": [
+    {"id": "planter_jaws", "title": "Auger Jaw Controls", "section": "Planter Controls", "panels": [
         {"title": "Jaw 1 (LA36)", "block": "HMI_IND_Jaw1"},
         {"title": "Jaw 2 (LA36)", "block": "HMI_IND_Jaw2"},
+        {"title": "Control Method", "block": "HMI_IND", "members": ["JawMethod1", "JawMethod2"]},
+        {"title": "Feedback & Outputs", "rows": [
+            {"label": "Jaw 1 Position Measured", "ref": "HMI_IO.LocalAnologIn1", "kind": "num", "unit": "%"},
+            {"label": "Jaw 2 Position Measured", "ref": "HMI_IO.LocalAnologIn2", "kind": "num", "unit": "%"},
+            {"label": "Jaw 1 Close Output", "ref": "HMI_IO.LocalOut#10", "kind": "bool"},
+            {"label": "Jaw 1 Open Output", "ref": "HMI_IO.LocalOut#11", "kind": "bool"},
+            {"label": "Jaw 2 Close Output", "ref": "HMI_IO.LocalOut#12", "kind": "bool"},
+            {"label": "Jaw 2 Open Output", "ref": "HMI_IO.LocalOut#13", "kind": "bool"},
+        ]},
     ]},
     {"id": "planter_tampers", "title": "Planter Tampers", "section": "Planter Controls",
      "panels": [{"title": "Planter Tampers (LA36)", "block": "HMI_IND_PlanterTamper"}]},
-    # ── Parameters (display-only) ──
+    # ── Parameters (display-only; friendly labels mirror the PDF screens) ──
     {"id": "auger_params_1", "title": "Auger Parameters 1", "section": "Parameters", "panels": [
-        {"title": "Auger Slide & Blade", "block": "HMI_Parameters", "members": [
-            "AugerBladeJogSpeed", "AugerBladeRunSpeed", "AugerDigDepth", "AugerSlideSensorOffset",
-            "AugerSlideAppPosition", "AugerSlideAppSpeed", "AugerSlideClearPosition",
-            "AugerSlideHomePosition", "AugerSlideHomeSpeed", "AugerSlideJogSpeed",
-            "AugerSlideWorkSpeed", "AugerSlideOutSpeed", "AugerSlideSoftLimNeg", "AugerSlideSoftLimPos"]},
+        {"title": "Main Slide Velocity", "rows": [
+            {"label": "Jogging", "ref": "HMI_Parameters.AugerSlideJogSpeed", "kind": "num", "unit": "mm/s"},
+            {"label": "Run Approach", "ref": "HMI_Parameters.AugerSlideAppSpeed", "kind": "num", "unit": "mm/s"},
+            {"label": "Run Dig", "ref": "HMI_Parameters.AugerSlideWorkSpeed", "kind": "num", "unit": "mm/s"},
+            {"label": "Run Dig Out", "ref": "HMI_Parameters.AugerSlideOutSpeed", "kind": "num", "unit": "mm/s"},
+            {"label": "Run Return", "ref": "HMI_Parameters.AugerSlideHomeSpeed", "kind": "num", "unit": "mm/s"},
+        ]},
+        {"title": "Blade Velocity", "rows": [
+            {"label": "Jogging", "ref": "HMI_Parameters.AugerBladeJogSpeed", "kind": "num", "unit": "RPM"},
+            {"label": "Run", "ref": "HMI_Parameters.AugerBladeRunSpeed", "kind": "num", "unit": "RPM"},
+        ]},
+        {"title": "Positions", "rows": [
+            {"label": "Home Position", "ref": "HMI_Parameters.AugerSlideHomePosition", "kind": "num", "unit": "mm"},
+            {"label": "Sensor to Blade Offset", "ref": "HMI_Parameters.AugerSlideSensorOffset", "kind": "num", "unit": "mm"},
+            {"label": "Safe Move Height", "ref": "HMI_Parameters.AugerSlideClearPosition", "kind": "num", "unit": "mm"},
+            {"label": "Dig Depth", "ref": "HMI_Parameters.AugerDigDepth", "kind": "num", "unit": "mm"},
+        ]},
     ]},
     {"id": "auger_params_2", "title": "Auger Parameters 2", "section": "Parameters", "panels": [
-        {"title": "Auger Gimbal", "block": "HMI_Parameters", "members": [
-            "AugerGimbalJogSpeed", "AugerGimbalRunSpeed", "AugerGimbalXHomePos",
-            "AugerGimbalXSoftLimNeg", "AugerGimbalXSoftLimPos", "AugerGimbalYHomePos",
-            "AugerGimbalYSoftLimNeg", "AugerGimbalYSoftLimPos"]},
+        {"title": "Gimbal Velocity", "rows": [
+            {"label": "Jogging", "ref": "HMI_Parameters.AugerGimbalJogSpeed", "kind": "num", "unit": "%"},
+            {"label": "Run", "ref": "HMI_Parameters.AugerGimbalRunSpeed", "kind": "num", "unit": "%"},
+        ]},
+        {"title": "Home Positions", "rows": [
+            {"label": "Y Axis Home Position", "ref": "HMI_Parameters.AugerGimbalYHomePos", "kind": "num", "unit": "mm"},
+            {"label": "X Axis Home Position", "ref": "HMI_Parameters.AugerGimbalXHomePos", "kind": "num", "unit": "mm"},
+        ]},
     ]},
     {"id": "planter_params_1", "title": "Planter Parameters 1", "section": "Parameters", "panels": [
-        {"title": "Planter Slide", "block": "HMI_Parameters", "members": [
-            "PlanterDigDepth", "PlanterSlideSensorOffset", "PlanterSlideAppPosition",
-            "PlanterSlideAppSpeed", "PlanterSlideClearPosition", "PlanterSlideHomePosition",
-            "PlanterSlideHomeSpeed", "PlanterSlideJogSpeed", "PlanterSlideWorkSpeed",
-            "PlanterSlideSoftLimNeg", "PlanterSlideSoftLimPos"]},
+        {"title": "Main Slide Velocity", "rows": [
+            {"label": "Jogging", "ref": "HMI_Parameters.PlanterSlideJogSpeed", "kind": "num", "unit": "mm/s"},
+            {"label": "Run Approach", "ref": "HMI_Parameters.PlanterSlideAppSpeed", "kind": "num", "unit": "mm/s"},
+            {"label": "Run Work", "ref": "HMI_Parameters.PlanterSlideWorkSpeed", "kind": "num", "unit": "mm/s"},
+            {"label": "Run Return", "ref": "HMI_Parameters.PlanterSlideHomeSpeed", "kind": "num", "unit": "mm/s"},
+        ]},
+        {"title": "Positions", "rows": [
+            {"label": "Home Position", "ref": "HMI_Parameters.PlanterSlideHomePosition", "kind": "num", "unit": "mm"},
+            {"label": "Sensor to Spade Offset", "ref": "HMI_Parameters.PlanterSlideSensorOffset", "kind": "num", "unit": "mm"},
+            {"label": "Safe Move Height", "ref": "HMI_Parameters.PlanterSlideClearPosition", "kind": "num", "unit": "mm"},
+            {"label": "Dig Depth", "ref": "HMI_Parameters.PlanterDigDepth", "kind": "num", "unit": "mm"},
+        ]},
     ]},
     {"id": "planter_params_2", "title": "Planter Parameters 2", "section": "Parameters", "panels": [
-        {"title": "Planter Gimbal", "block": "HMI_Parameters", "members": [
-            "PlanterGimbalJogSpeed", "PlanterGimbalRunSpeed", "PlanterGimbalXHomePos",
-            "PlanterGimbalXSoftLimNeg", "PlanterGimbalXSoftLimPos", "PlanterGimbalYHomePos",
-            "PlanterGimbalYSoftLimNeg", "PlanterGimbalYSoftLimPos"]},
+        {"title": "Gimbal Velocity", "rows": [
+            {"label": "Jogging", "ref": "HMI_Parameters.PlanterGimbalJogSpeed", "kind": "num", "unit": "%"},
+            {"label": "Run", "ref": "HMI_Parameters.PlanterGimbalRunSpeed", "kind": "num", "unit": "%"},
+        ]},
+        {"title": "Home Positions", "rows": [
+            {"label": "Y Axis Home Position", "ref": "HMI_Parameters.PlanterGimbalYHomePos", "kind": "num", "unit": "mm"},
+            {"label": "X Axis Home Position", "ref": "HMI_Parameters.PlanterGimbalXHomePos", "kind": "num", "unit": "mm"},
+        ]},
     ]},
     {"id": "planter_params_3", "title": "Planter Parameters 3", "section": "Parameters", "panels": [
-        {"title": "Jaws", "block": "HMI_Parameters", "members": [
-            "PlanterJawsJogSpeed", "PlanterJawsRunSpeed", "PlanterJawsHomePosition",
-            "PlanterJawsWorkPosition", "PlanterJawsSoftlimNeg", "PlanterJawsSoftlimPos"]},
-        {"title": "Vertical Jaw", "block": "HMI_Parameters", "members": [
-            "PlanterVertJawJogSpeed", "PlanterVertJawRunSpeed", "PlanterVertJawHomePosition",
-            "PlanterVertJawWorkPosition", "PlanterVertJawReleasePos",
-            "PlanterVertJawSoftlimNeg", "PlanterVertJawSoftlimPos"]},
-        {"title": "Tampers", "block": "HMI_Parameters", "members": [
-            "PlanterTampersJogSpeed", "PlanterTampersRunSpeed", "PlanterTampersHomePosition",
-            "PlanterTampersWorkPosition", "PlanterTampersSoftlimNeg", "PlanterTampersSoftlimPos"]},
+        {"title": "Jaws Vert Velocity", "rows": [
+            {"label": "Jogging", "ref": "HMI_Parameters.PlanterVertJawJogSpeed", "kind": "num", "unit": "%"},
+            {"label": "Run", "ref": "HMI_Parameters.PlanterVertJawRunSpeed", "kind": "num", "unit": "%"},
+        ]},
+        {"title": "Tampers Velocity", "rows": [
+            {"label": "Jogging", "ref": "HMI_Parameters.PlanterTampersJogSpeed", "kind": "num", "unit": "%"},
+            {"label": "Run", "ref": "HMI_Parameters.PlanterTampersRunSpeed", "kind": "num", "unit": "%"},
+        ]},
+        {"title": "Jaws Vert Positions", "rows": [
+            {"label": "Jaws Vert Home Position", "ref": "HMI_Parameters.PlanterVertJawHomePosition", "kind": "num", "unit": "mm"},
+            {"label": "Jaws Vert Release", "ref": "HMI_Parameters.PlanterVertJawReleasePos", "kind": "num", "unit": "mm"},
+            {"label": "Jaws Vert Clear", "ref": "HMI_Parameters.PlanterVertJawWorkPosition", "kind": "num", "unit": "mm"},
+        ]},
+        {"title": "Tamper / Jaws Positions", "rows": [
+            {"label": "Tamper Home Position", "ref": "HMI_Parameters.PlanterTampersHomePosition", "kind": "num", "unit": "mm"},
+            {"label": "Tamper Work Position", "ref": "HMI_Parameters.PlanterTampersWorkPosition", "kind": "num", "unit": "mm"},
+            {"label": "Jaws Home Position", "ref": "HMI_Parameters.PlanterJawsHomePosition", "kind": "num", "unit": "%"},
+            {"label": "Jaws Work Position", "ref": "HMI_Parameters.PlanterJawsWorkPosition", "kind": "num", "unit": "%"},
+        ]},
     ]},
     {"id": "robot_params", "title": "Robot Parameters", "section": "Parameters", "panels": [
-        {"title": "Gripper (Zimmer)", "block": "HMI_Parameters", "members": [
-            "ZimmerOpenPos", "ZimmerClosePos", "PositionTolZimmer"]},
+        {"title": "Gripper (Zimmer)", "rows": [
+            {"label": "Open Position", "ref": "HMI_Parameters.ZimmerOpenPos", "kind": "num", "unit": "mm"},
+            {"label": "Close Position", "ref": "HMI_Parameters.ZimmerClosePos", "kind": "num", "unit": "mm"},
+        ]},
     ]},
     {"id": "tolerances", "title": "Tolerances & Limits", "section": "Parameters", "panels": [
-        {"title": "Soft Limits", "block": "HMI_Parameters", "members": [
-            "AugerSlideSoftLimNeg", "AugerSlideSoftLimPos", "AugerGimbalXSoftLimNeg",
-            "AugerGimbalXSoftLimPos", "AugerGimbalYSoftLimNeg", "AugerGimbalYSoftLimPos",
-            "PlanterSlideSoftLimNeg", "PlanterSlideSoftLimPos", "PlanterGimbalXSoftLimNeg",
-            "PlanterGimbalXSoftLimPos", "PlanterGimbalYSoftLimNeg", "PlanterGimbalYSoftLimPos",
-            "PlanterVertJawSoftlimNeg", "PlanterVertJawSoftlimPos", "PlanterTampersSoftlimNeg",
-            "PlanterTampersSoftlimPos", "PlanterJawsSoftlimNeg", "PlanterJawsSoftlimPos"]},
-        {"title": "Position Tolerances & Ramps", "block": "HMI_Parameters", "members": [
-            "PositionTolLA14", "PositionTolLA36", "PositionTolSlides", "PositionTolZimmer",
-            "LA36RampUp", "LA36RampDown", "LA36CurrentLim", "SlideAccel", "SlideDecel"]},
+        {"title": "Auger Soft Limits", "rows": [
+            {"label": "Auger Main Slide Soft Limit (-)", "ref": "HMI_Parameters.AugerSlideSoftLimNeg", "kind": "num", "unit": "mm"},
+            {"label": "Auger Main Slide Soft Limit (+)", "ref": "HMI_Parameters.AugerSlideSoftLimPos", "kind": "num", "unit": "mm"},
+            {"label": "Auger Gimbal X Axis Soft Limit (-)", "ref": "HMI_Parameters.AugerGimbalXSoftLimNeg", "kind": "num", "unit": "mm"},
+            {"label": "Auger Gimbal X Axis Soft Limit (+)", "ref": "HMI_Parameters.AugerGimbalXSoftLimPos", "kind": "num", "unit": "mm"},
+            {"label": "Auger Gimbal Y Axis Soft Limit (-)", "ref": "HMI_Parameters.AugerGimbalYSoftLimNeg", "kind": "num", "unit": "mm"},
+            {"label": "Auger Gimbal Y Axis Soft Limit (+)", "ref": "HMI_Parameters.AugerGimbalYSoftLimPos", "kind": "num", "unit": "mm"},
+        ]},
+        {"title": "Planter Soft Limits", "rows": [
+            {"label": "Planter Main Slide Soft Limit (-)", "ref": "HMI_Parameters.PlanterSlideSoftLimNeg", "kind": "num", "unit": "mm"},
+            {"label": "Planter Main Slide Soft Limit (+)", "ref": "HMI_Parameters.PlanterSlideSoftLimPos", "kind": "num", "unit": "mm"},
+            {"label": "Planter Gimbal X Axis Soft Limit (-)", "ref": "HMI_Parameters.PlanterGimbalXSoftLimNeg", "kind": "num", "unit": "mm"},
+            {"label": "Planter Gimbal X Axis Soft Limit (+)", "ref": "HMI_Parameters.PlanterGimbalXSoftLimPos", "kind": "num", "unit": "mm"},
+            {"label": "Planter Gimbal Y Axis Soft Limit (-)", "ref": "HMI_Parameters.PlanterGimbalYSoftLimNeg", "kind": "num", "unit": "mm"},
+            {"label": "Planter Gimbal Y Axis Soft Limit (+)", "ref": "HMI_Parameters.PlanterGimbalYSoftLimPos", "kind": "num", "unit": "mm"},
+            {"label": "Planter Vert Jaw Slide Soft Limit (-)", "ref": "HMI_Parameters.PlanterVertJawSoftlimNeg", "kind": "num", "unit": "mm"},
+            {"label": "Planter Vert Jaw Slide Soft Limit (+)", "ref": "HMI_Parameters.PlanterVertJawSoftlimPos", "kind": "num", "unit": "mm"},
+            {"label": "Planter Tampers Soft Limit (-)", "ref": "HMI_Parameters.PlanterTampersSoftlimNeg", "kind": "num", "unit": "mm"},
+            {"label": "Planter Tampers Soft Limit (+)", "ref": "HMI_Parameters.PlanterTampersSoftlimPos", "kind": "num", "unit": "mm"},
+        ]},
+        {"title": "Position Tolerances", "rows": [
+            {"label": "Main Slides Position Tolerance", "ref": "HMI_Parameters.PositionTolSlides", "kind": "num", "unit": "mm"},
+            {"label": "LA36 Actuators Position Tolerance", "ref": "HMI_Parameters.PositionTolLA36", "kind": "num", "unit": "mm"},
+            {"label": "LA14 Actuators Position Tolerance", "ref": "HMI_Parameters.PositionTolLA14", "kind": "num", "unit": "mm"},
+            {"label": "Gripper Position Tolerance", "ref": "HMI_Parameters.PositionTolZimmer", "kind": "num", "unit": "mm"},
+        ]},
     ]},
-    {"id": "enable_disable", "title": "Enable / Disable", "section": "Parameters", "panels": [
+    {"id": "enable_disable", "title": "Feature Enable / Disable", "section": "Parameters",
+     "layout": "enable", "panels": [
         {"title": "Feature Enables", "block": "HMI_IND",
          "members": ["AugerEnabled", "PlanterEnabled", "RobotEnabled", "AMREnabled", "DryCycleEnabled"]},
     ]},
@@ -718,16 +806,76 @@ HMI_SCREENS = [
 
 HMI_SCREEN_BY_ID = {s["id"]: s for s in HMI_SCREENS}
 
+# Physical HMI navigation. `root` mirrors the MENU screen (pp.2): six button
+# columns; each button targets a data screen ("screen:<id>") or a sub-menu
+# ("menu:<key>"). `io` mirrors the I/O sub-menu (pp.6). Button labels carry
+# newlines exactly as they wrap on the panel.
+HMI_MENU = {
+    "root": {"title": "MENU", "columns": [
+        {"header": "STATUS", "buttons": [
+            {"label": "I/O", "target": "menu:io"},
+            {"label": "SAFETY", "target": "screen:safety_layout"},
+            {"label": "GAUGES", "target": "screen:gauges"},
+            {"label": "COMMUNICATIONS", "target": "screen:communications"},
+        ]},
+        {"header": "PARAMETERS", "buttons": [
+            {"label": "AUGER\nPARAMETERS 1", "target": "screen:auger_params_1"},
+            {"label": "AUGER\nPARAMETERS 2", "target": "screen:auger_params_2"},
+            {"label": "PLANTER\nPARAMETERS 1", "target": "screen:planter_params_1"},
+            {"label": "PLANTER\nPARAMETERS 2", "target": "screen:planter_params_2"},
+            {"label": "PLANTER\nPARAMETERS 3", "target": "screen:planter_params_3"},
+            {"label": "ROBOT\nPARAMETERS", "target": "screen:robot_params"},
+        ]},
+        {"header": "AUGER CONTROLS", "buttons": [
+            {"label": "AUGER\nMAIN SLIDE", "target": "screen:auger_main_slide"},
+            {"label": "AUGER\nGIMBAL X-AXIS", "target": "screen:auger_gimbal_x"},
+            {"label": "AUGER\nGIMBAL Y-AXIS", "target": "screen:auger_gimbal_y"},
+            {"label": "AUGER\nBLADE", "target": "screen:auger_motor"},
+        ]},
+        {"header": "MAIN CONTROLS", "buttons": [
+            {"label": "EPSON\nROBOT", "target": "screen:epson_robot"},
+            {"label": "AMR", "target": "screen:amr"},
+        ]},
+        {"header": "PLANTER CONTROLS", "buttons": [
+            {"label": "PLANTER\nMAIN SLIDE", "target": "screen:planter_main_slide"},
+            {"label": "PLANTER\nGIMBAL X-AXIS", "target": "screen:planter_gimbal_x"},
+            {"label": "PLANTER\nGIMBAL Y-AXIS", "target": "screen:planter_gimbal_y"},
+            {"label": "PLANTER\nJAW VERTICAL", "target": "screen:planter_jaw_vertical"},
+            {"label": "PLANTER\nJAWS", "target": "screen:planter_jaws"},
+            {"label": "PLANTER\nTAMPERS", "target": "screen:planter_tampers"},
+        ]},
+        {"header": "", "buttons": [
+            {"label": "TOLERANCES &\nLIMITS", "target": "screen:tolerances"},
+            {"label": "ENABLE /\nDISABLE", "target": "screen:enable_disable"},
+            {"label": "MAIN\nSCREEN", "target": "screen:main"},
+        ]},
+    ]},
+    "io": {"title": "IO MENU", "parent": "root", "columns": [
+        {"header": "PLC", "buttons": [
+            {"label": "DIGITAL I/O", "target": "screen:io_digital"},
+            {"label": "ANALOG I/O", "target": "screen:io_analog"},
+        ]},
+        {"header": "ROBOT", "buttons": [
+            {"label": "INPUTS", "target": "screen:robot_inputs"},
+            {"label": "OUTPUTS", "target": "screen:robot_outputs"},
+        ]},
+        {"header": "", "buttons": [
+            {"label": "MAIN\nSCREEN", "target": "screen:main"},
+        ]},
+    ]},
+}
+
 # Visual template each screen renders with in the browser (mirrors the PDF).
-# "panels" = generic lamp/value cards; the rest are bespoke HMI layouts.
+# "panels" = generic lamp/value cards; the rest are bespoke HMI layouts. A screen
+# may also carry its own "layout" key (wins over this map); anything unlisted → "panels".
 HMI_LAYOUT = {
     "main": "main", "gauges": "gauges",
-    "auger_motor": "motor", "epson_robot": "robot",
+    "auger_motor": "motor", "epson_robot": "robot", "planter_jaws": "jaws",
     "auger_main_slide": "motion", "planter_main_slide": "motion",
     "auger_gimbal_x": "motion", "auger_gimbal_y": "motion",
     "planter_gimbal_x": "motion", "planter_gimbal_y": "motion",
     "planter_jaw_vertical": "motion", "planter_tampers": "motion",
-    # everything else (params, I/O, safety, comms, jaws, enable) → "panels"
+    # everything else (params, I/O, safety, robot I/O lists) → "panels"
 }
 
 
@@ -752,17 +900,24 @@ def _hmi_expand_layout(screen):
                 rows.sort(key=lambda r: order.get(r["label"], 1_000))
         else:
             for r in p["rows"]:
-                rows.append({"label": r["label"], "ref": r["ref"],
-                             "kind": r.get("kind", "bool"), "unit": r.get("unit", "")})
+                row = {"label": r["label"], "ref": r["ref"],
+                       "kind": r.get("kind", "bool"), "unit": r.get("unit", "")}
+                if "ip" in r:               # Communications screen: device IP
+                    row["ip"] = r["ip"]
+                rows.append(row)
         panels.append({"title": p["title"], "rows": rows})
     return {"screen": screen["id"], "title": screen["title"],
-            "section": screen["section"], "panels": panels}
+            "section": screen["section"],
+            "layout": screen.get("layout") or HMI_LAYOUT.get(screen["id"], "panels"),
+            "panels": panels}
 
 
 class PlcClient:
     """Modbus TCP client to the LS Electric PLC. host/port point at the PLC's Modbus
     server (192.168.1.2:502 for agrobot). One socket, serialized by ``_lock`` so a 100 ms
     pulse and concurrent status polls don't interleave on the wire."""
+
+    _CONNECT_COOLDOWN = 3.0                      # s to wait before re-attempting a failed connect
 
     def __init__(self, host="127.0.0.1", port=502, timeout=2.0):
         self.host    = host
@@ -771,6 +926,7 @@ class PlcClient:
         self._lock   = threading.Lock()
         self._client = None                     # pymodbus ModbusTcpClient (lazy)
         self._import_error = None               # set once if pymodbus is unavailable
+        self._next_retry = 0.0                  # monotonic time before which we don't reconnect
 
     @property
     def target(self):
@@ -784,6 +940,13 @@ class PlcClient:
             return self._client
         if self._import_error is not None:
             return None
+        # Negative cache: after a failed connect, don't re-attempt (a blocking
+        # ~`timeout`s TCP connect) for _CONNECT_COOLDOWN seconds. Without this,
+        # every poll on every tab — all serialized on _lock — stacks up 2 s
+        # connects when the PLC is down and starves each other past the client
+        # fetch timeout. Fast-fail keeps a downed PLC a normal, snappy 200.
+        if time.monotonic() < self._next_retry:
+            return None
         try:
             from pymodbus.client import ModbusTcpClient
         except Exception as exc:                # pymodbus not installed
@@ -796,9 +959,12 @@ class PlcClient:
                 client.close()
             except Exception:
                 pass
-            log.warning("PLC Modbus connect failed → %s", self.target)
+            self._next_retry = time.monotonic() + self._CONNECT_COOLDOWN
+            log.warning("PLC Modbus connect failed → %s (retry in %.0fs)",
+                        self.target, self._CONNECT_COOLDOWN)
             return None
         self._client = client
+        self._next_retry = 0.0
         log.info("PLC Modbus client connected → %s", self.target)
         return self._client
 
@@ -811,6 +977,7 @@ class PlcClient:
             except Exception:
                 pass
         self._client = None
+        self._next_retry = 0.0                   # allow an immediate reconnect after a drop
 
     # -- raw device access (caller holds _lock; client is live) ---------------
     @staticmethod
@@ -1040,14 +1207,12 @@ class PlcClient:
     # -- HMI live mirror (read-only) -------------------------------------------
     @staticmethod
     def hmi_screens_meta():
-        """Menu structure for the HMI mirror, grouped by section. No PLC access."""
-        sections, cur = [], None
-        for s in HMI_SCREENS:
-            if cur is None or cur["section"] != s["section"]:
-                cur = {"section": s["section"], "screens": []}
-                sections.append(cur)
-            cur["screens"].append({"id": s["id"], "title": s["title"]})
-        return {"sections": sections}
+        """Navigation for the HMI mirror: the physical MENU (pp.2) button columns
+        plus the I/O sub-menu (pp.6). Buttons target either a data screen
+        (``screen:<id>``) or another menu (``menu:<key>``). Also returns a flat
+        {id: title} map so the browser can label any screen. No PLC access."""
+        titles = {s["id"]: s["title"] for s in HMI_SCREENS}
+        return {"menus": HMI_MENU, "root": "root", "titles": titles}
 
     def _read_hmi_words(self, base, count):
         """FC04 batch read of `count` words from %MW<base>, chunked to stay under
@@ -1129,7 +1294,6 @@ class PlcClient:
             blocks_out[sym] = {m[0]: values.get(f"{sym}.{m[0]}") for m in HMI_UDT[udt]}
         layout["blocks"] = blocks_out
         layout["singles"] = {nm: values.get(f"single:{nm}") for nm in singles}
-        layout["layout"] = HMI_LAYOUT.get(screen_id, "panels")
         layout["connected"] = connected
         return layout
 
