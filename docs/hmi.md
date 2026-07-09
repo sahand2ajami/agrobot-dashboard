@@ -102,6 +102,18 @@ Never hardcode a register or offset anywhere else. Run `pytest
 tests/test_plc_client.py` — the `TestHmiLayout` / `TestHmiDecode` /
 `TestHmiScreenRead` classes cover addressing, decode, and a simulated read.
 
+## Display formatting (C-more fractional digits)
+
+Numeric fields are shown with the same precision as the physical C-more panel,
+from `HMI_DECIMALS` (keyed by block instance + member, since the same UDT is
+shown with different precision on different screens). For an **integer** tag the
+fractional digits are an *implied decimal* — the value is `raw / 10**frac`
+(velocity `600000` → `6000.00`, torque `800` → `8.00`); for a **REAL** tag the
+value is already engineering units, so it only rounds. `_hmi_fmt_value` renders
+these as fixed-decimals strings in `read_hmi_screen`; the browser prints them
+verbatim. The C-more entry min/max limits aren't stored — they clamp operator
+entry on the panel and don't change a displayed value (this mirror is read-only).
+
 ## Address provenance & the auger-motor exception
 
 Every UDT layout and instance base is transcribed from the PDF (pp.40–79), and

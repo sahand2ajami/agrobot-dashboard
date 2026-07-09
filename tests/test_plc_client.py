@@ -163,6 +163,32 @@ class TestHmiLayout:
         for s in plc_client.HMI_SCREENS:
             assert plc_client._hmi_expand_layout(s)["layout"]
 
+    def test_decimals_keys_are_real_members(self):
+        """Every HMI_DECIMALS entry must name an actual block instance + member."""
+        for block, members in plc_client.HMI_DECIMALS.items():
+            assert block in plc_client.HMI_BLOCKS, f"unknown block {block}"
+            udt, _ = plc_client.HMI_BLOCKS[block]
+            names = {m[0] for m in plc_client.HMI_UDT[udt]}
+            for mem in members:
+                assert mem in names, f"{block}.{mem} not in {udt}"
+
+    def test_fmt_value_integer_and_real(self):
+        f = plc_client._hmi_fmt_value
+        # DINT VelocityTarget on a slide, 2 frac → implied decimal (÷100)
+        assert f("HMI_IND_AugerSlide", "VelocityTarget", 600000) == "6000.00"
+        # UINT TorqueMeasured, 2 frac
+        assert f("HMI_IND_AugerSlide", "TorqueMeasured", 800) == "8.00"
+        # REAL PositionMeasured already in mm → only rounds
+        assert f("HMI_IND_AugerSlide", "PositionMeasured", 12.3456) == "12.35"
+        # UINT motor VelocityTarget, 0 frac → plain integer, no divide
+        assert f("HMI_IND_Auger", "VelocityTarget", 1234) == "1234"
+        # jaws PositionMeasured is 1 frac (differs from gimbal's 2)
+        assert f("HMI_IND_Jaw1", "PositionMeasured", 12.34) == "12.3"
+        # bools and unspecced fields pass through untouched
+        assert f("HMI_IND_AugerSlide", "ServoOn", True) is True
+        assert f("HMI_IND", "CycleStatus", 3) == 3
+        assert f("HMI_IND_AugerSlide", "VelocityTarget", None) is None
+
     def test_hmi_addresses_match_bench_reg(self):
         """Every HMI-mirror tag that also appears in the bench-confirmed _REG map
         must resolve to the same %MW/%MX address. This pins the transcription to
@@ -302,7 +328,8 @@ class TestHmiScreenRead:
         assert out["connected"] is True
         vals = {r["label"]: r["value"] for r in out["panels"][0]["rows"]}
         assert vals["AtHome"] is True
-        assert vals["PositionMeasured"] == pytest.approx(55.5, abs=1e-2)
+        # PositionMeasured is a REAL formatted to the screen's 2 fractional digits
+        assert vals["PositionMeasured"] == "55.50"
 
     def test_node_comms_inverted(self, monkeypatch):
         # NodeCommsNOk @%MW1048: bit set = NOT ok → mirror shows False

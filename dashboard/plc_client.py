@@ -490,6 +490,83 @@ HMI_SINGLES = {
 }
 
 
+# ── C-more display formatting (fractional digits) ────────────────────────────
+# The physical HMI (C-more) shows each numeric field with a fixed number of
+# fractional digits. For an INTEGER PLC tag that is an *implied decimal* — the
+# value is raw / 10**frac (raw 800, 2 → 8.00; raw 600000, 2 → 6000.00). For a
+# REAL tag the value is already in engineering units, so frac only sets rounding.
+# Keyed by block INSTANCE + member because the same UDT is shown with different
+# precision on different screens (LA36 PositionMeasured: 2 on gimbals, 1 on the
+# jaw-feedback screen). Source: the C-more project's Numeric object formats.
+# The entry min/max limits from that export are not stored here — they clamp
+# operator entry on the panel and don't change a displayed value, and this
+# mirror is read-only. A test asserts every key below is a real UDT member.
+_HMI_INT_TYPES = {"uint", "int", "word", "udint", "dint"}
+
+# Teknic slides carry a Warning field; LA36 axes don't (see the two IND UDTs).
+_TEKNIC_DEC = {"PositionTarget": 2, "PositionMeasured": 2, "VelocityTarget": 2,
+               "VelocityMeasured": 2, "TorqueMeasured": 2, "Error": 0, "Warning": 0}
+_LA36_DEC = {k: v for k, v in _TEKNIC_DEC.items() if k != "Warning"}
+HMI_DECIMALS = {
+    "HMI_IND_AugerSlide":     dict(_TEKNIC_DEC),
+    "HMI_IND_PlanterSlide":   dict(_TEKNIC_DEC),
+    "HMI_IND_AugerGimbalX":   dict(_LA36_DEC),
+    "HMI_IND_AugerGimbalY":   dict(_LA36_DEC),
+    "HMI_IND_PlanterGimbalX": dict(_LA36_DEC),
+    "HMI_IND_PlanterGimbalY": dict(_LA36_DEC),
+    "HMI_IND_PlanterJawVert": dict(_LA36_DEC),
+    "HMI_IND_PlanterTamper":  dict(_LA36_DEC),
+    "HMI_IND_Jaw1": {"PositionMeasured": 1},
+    "HMI_IND_Jaw2": {"PositionMeasured": 1},
+    "HMI_IND_Auger": {"VelocityTarget": 0, "VelocityMeasured": 0},
+    "HMI_Parameters": {
+        # Slide speeds are UDINT shown ×0.01; gimbal/blade/jaw/tamper speeds are
+        # integer (0 frac); positions/limits/tolerances are REAL (round to frac).
+        "AugerSlideJogSpeed": 2, "AugerSlideAppSpeed": 2, "AugerSlideWorkSpeed": 2,
+        "AugerSlideOutSpeed": 2, "AugerSlideHomeSpeed": 2, "AugerSlideClearPosition": 2,
+        "AugerSlideHomePosition": 2, "AugerSlideSensorOffset": 2, "AugerDigDepth": 2,
+        "AugerBladeJogSpeed": 0, "AugerBladeRunSpeed": 0,
+        "AugerGimbalJogSpeed": 0, "AugerGimbalRunSpeed": 0,
+        "AugerGimbalXHomePos": 2, "AugerGimbalYHomePos": 2,
+        "PlanterSlideHomePosition": 2, "PlanterSlideSensorOffset": 2,
+        "PlanterSlideClearPosition": 2, "PlanterDigDepth": 2,
+        "PlanterSlideJogSpeed": 2, "PlanterSlideAppSpeed": 2,
+        "PlanterSlideWorkSpeed": 2, "PlanterSlideHomeSpeed": 2,
+        "PlanterGimbalJogSpeed": 0, "PlanterGimbalRunSpeed": 0,
+        "PlanterGimbalXHomePos": 2, "PlanterGimbalYHomePos": 2,
+        "PlanterVertJawHomePosition": 2, "PlanterVertJawReleasePos": 2,
+        "PlanterVertJawWorkPosition": 2, "PlanterVertJawJogSpeed": 0,
+        "PlanterVertJawRunSpeed": 0,
+        "PlanterTampersHomePosition": 2, "PlanterTampersWorkPosition": 2,
+        "PlanterTampersJogSpeed": 0, "PlanterTampersRunSpeed": 0,
+        "PlanterJawsHomePosition": 0, "PlanterJawsWorkPosition": 0,
+        "ZimmerOpenPos": 2, "ZimmerClosePos": 2,
+        "AugerSlideSoftLimNeg": 2, "AugerSlideSoftLimPos": 2,
+        "PlanterSlideSoftLimNeg": 2, "PlanterSlideSoftLimPos": 2,
+        "AugerGimbalXSoftLimNeg": 2, "AugerGimbalXSoftLimPos": 2,
+        "AugerGimbalYSoftLimNeg": 2, "AugerGimbalYSoftLimPos": 2,
+        "PlanterGimbalXSoftLimNeg": 2, "PlanterGimbalXSoftLimPos": 2,
+        "PlanterGimbalYSoftLimNeg": 2, "PlanterGimbalYSoftLimPos": 2,
+        "PlanterVertJawSoftlimNeg": 2, "PlanterVertJawSoftlimPos": 2,
+        "PlanterTampersSoftlimNeg": 2, "PlanterTampersSoftlimPos": 2,
+        "PositionTolSlides": 2, "PositionTolLA36": 2,
+    },
+}
+
+
+def _hmi_fmt_value(block, member, raw):
+    """Apply the C-more display format → a fixed-decimals string, or return `raw`
+    unchanged when the field has no format spec or isn't a plain number. Integer
+    tags divide by 10**frac (implied decimal); REAL tags only round."""
+    dec = HMI_DECIMALS.get(block, {}).get(member)
+    if dec is None or isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return raw
+    udt, _base = HMI_BLOCKS[block]
+    dt = next((d for n, d, _a in HMI_UDT[udt] if n == member), None)
+    val = raw / (10 ** dec) if dt in _HMI_INT_TYPES else float(raw)
+    return f"{val:.{dec}f}"
+
+
 def _hmi_addr(addr):
     """'byte.bit' struct offset → (word_offset, bit_in_word)."""
     b, _, k = str(addr).partition(".")
@@ -1300,14 +1377,20 @@ class PlcClient:
                     base_ref, _, bs = ref.partition("#")
                     v = values.get(base_ref)
                     row["value"] = None if v is None else bool((int(v) >> int(bs)) & 1)
+                elif "." in ref and not ref.startswith("single:"):
+                    blk, mem = ref.split(".", 1)
+                    row["value"] = _hmi_fmt_value(blk, mem, values.get(ref))
                 else:
                     row["value"] = values.get(ref)
 
-        # Raw block/single values keyed for the bespoke HMI templates.
+        # Block/single values keyed for the bespoke HMI templates. Numeric fields
+        # with a C-more format spec are rendered as fixed-decimals strings (in
+        # engineering units); bools and unspecced numbers pass through raw.
         blocks_out = {}
         for sym in blocks:
             udt, _base = HMI_BLOCKS[sym]
-            blocks_out[sym] = {m[0]: values.get(f"{sym}.{m[0]}") for m in HMI_UDT[udt]}
+            blocks_out[sym] = {m[0]: _hmi_fmt_value(sym, m[0], values.get(f"{sym}.{m[0]}"))
+                               for m in HMI_UDT[udt]}
         layout["blocks"] = blocks_out
         layout["singles"] = {nm: values.get(f"single:{nm}") for nm in singles}
         layout["connected"] = connected
