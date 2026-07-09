@@ -1043,11 +1043,14 @@ class PlcClient:
 
     @staticmethod
     def _decode_banner_string(words):
-        """Decode 16-bit words (big-endian: high byte = first char) into an ASCII string."""
+        """Decode 16-bit words into an ASCII string. The LS PLC packs strings
+        little-endian within each word (low byte = first char) — confirmed on the
+        live PLC, where high-byte-first produced pair-swapped gibberish
+        ('lPna tlSdi...' instead of 'Planter Slide Motor Not Connected')."""
         out = []
         for w in words:
-            out.append((w >> 8) & 0xFF)
             out.append(w & 0xFF)
+            out.append((w >> 8) & 0xFF)
         return bytes(out)[:_BANNER_CHARS].split(b'\x00', 1)[0].decode('ascii', 'replace').strip()
 
     def _machine_status(self):
@@ -1250,32 +1253,45 @@ class PlcClient:
             client = self._ensure_client()
             if client is not None:
                 connected = True
-                # Read each block/single behind its own guard: one bad address
-                # yields None, never aborts the screen or drops the SHARED socket
-                # (the AMR poll on the PLC tab uses the same client).
+                # Read each block/single behind its own guard. Two failure modes,
+                # handled differently:
+                #   • Modbus *exception response* (isError) → _read_* returns None:
+                #     a bad address, but the socket is fine — yield None, keep going.
+                #   • Transport error (broken pipe/reset/timeout) → raises: the
+                #     shared pymodbus socket is dead. Stop, and _reset() below so
+                #     the next poll reconnects — the same recovery _op gives every
+                #     other read path (without this, the HMI stays stuck on a dead
+                #     socket while /api/amr/poll self-heals).
+                transport_error = False
                 for sym in blocks:
                     udt, base = HMI_BLOCKS[sym]
-                    try:
-                        words = self._read_hmi_words(base, _hmi_block_words(udt))
-                    except Exception as exc:
-                        log.debug("HMI block %s read failed: %s", sym, exc)
-                        words = None
+                    words = None
+                    if not transport_error:
+                        try:
+                            words = self._read_hmi_words(base, _hmi_block_words(udt))
+                        except Exception as exc:
+                            log.warning("HMI block %s read failed, dropping socket: %s", sym, exc)
+                            transport_error = True
                     for name, dt, addr in HMI_UDT[udt]:
                         w, bit = _hmi_addr(addr)
                         values[f"{sym}.{name}"] = (
                             None if words is None else _hmi_decode(words, dt, w, bit))
                 for nm in singles:
                     word_addr, bit, invert = HMI_SINGLES[nm]
-                    try:
-                        w = self._read_words_raw(word_addr, 1)
-                    except Exception as exc:
-                        log.debug("HMI single %s read failed: %s", nm, exc)
-                        w = None
+                    w = None
+                    if not transport_error:
+                        try:
+                            w = self._read_words_raw(word_addr, 1)
+                        except Exception as exc:
+                            log.warning("HMI single %s read failed, dropping socket: %s", nm, exc)
+                            transport_error = True
                     if w is None:
                         values[f"single:{nm}"] = None
                     else:
                         v = bool((w[0] >> bit) & 1)
                         values[f"single:{nm}"] = (not v) if invert else v
+                if transport_error:
+                    self._reset()
 
         for panel in layout["panels"]:
             for row in panel["rows"]:

@@ -86,9 +86,9 @@ class TestAmrWriteValidation:
 
 
 class TestBannerDecode:
-    def test_decodes_big_endian_ascii(self):
-        # "AB" packed high-byte-first, null-terminated
-        words = [0x4142, 0x4344, 0x0000] + [0] * 13
+    def test_decodes_little_endian_ascii(self):
+        # LS PLC packs strings low-byte-first: 'A'=0x41,'B'=0x42 → word 0x4241.
+        words = [0x4241, 0x4443, 0x0000] + [0] * 13
         assert PlcClient._decode_banner_string(words) == "ABCD"
 
     def test_empty_banner(self):
@@ -319,3 +319,24 @@ class TestHmiScreenRead:
         rows = {r["label"]: r["value"] for r in out["panels"][0]["rows"]}
         assert rows["IN02 Gate Locked"] is True
         assert rows["IN00 Spare"] is False
+
+    def test_transport_error_resets_socket(self, monkeypatch):
+        # A broken pipe mid-read must drop the shared socket so the next poll
+        # reconnects (matches _op); a bad-address None must NOT reset it.
+        c = PlcClient("192.0.2.1", 502)
+        monkeypatch.setattr(c, "_ensure_client", lambda: object())
+        reset = {"n": 0}
+        monkeypatch.setattr(c, "_reset", lambda: reset.__setitem__("n", reset["n"] + 1))
+
+        def boom(addr, count):
+            raise OSError("[Errno 32] Broken pipe")
+        monkeypatch.setattr(c, "_read_words_raw", boom)
+        out = c.read_hmi_screen("auger_gimbal_x")
+        assert out["connected"] is True                 # we did have a socket
+        assert all(r["value"] is None for r in out["panels"][0]["rows"])
+        assert reset["n"] == 1                           # socket dropped for next poll
+
+        reset["n"] = 0
+        monkeypatch.setattr(c, "_read_words_raw", lambda a, n: None)  # isError, socket fine
+        c.read_hmi_screen("auger_gimbal_x")
+        assert reset["n"] == 0                            # bad address ≠ reset
