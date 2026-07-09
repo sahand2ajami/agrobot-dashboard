@@ -41,7 +41,7 @@ MACHINE_COMMANDS = frozenset({
     "START", "STOP", "HOME_ALL", "FAULT_RESET", "SET_AUTO", "SET_MANUAL",
     "ENABLE_AUGER", "DISABLE_AUGER", "ENABLE_PLANTER", "DISABLE_PLANTER",
     "RESET_AUGER", "RESET_PLANTER", "ENABLE_ROBOT", "DISABLE_ROBOT",
-    "ENABLE_AMR", "DISABLE_AMR",
+    "ENABLE_AMR", "DISABLE_AMR", "JAW_METHOD_1", "JAW_METHOD_2", "AMR_OK_TO_PLANT",
 })
 
 ROBOT_COMMANDS = frozenset({
@@ -234,6 +234,7 @@ _REG = {
     # ── machine / robot pushbutton words (writes) — pulsed: write value → 100 ms → 0 ──
     "HMI_PB_MachineCtrl":  "%MW5000",   # machine PB word (bit values below)
     "HMI_PB_MachineCtrl2": "%MW5001",   # machine PB word 2 (ResetPlanterSeq/robot/AMR)
+    "HMI_PB_MachineCtrl3": "%MW5002",   # machine PB word 3 (AMRokToPlant @4.1 → bit1)
     "ROBOT_PB_CMD":        "%MW6200",   # HMI_PB_Robot word
     # ── machine status (HMI_IND @ %MW1000) ──
     "IND_MODE_STATUS":     "%MW1000",   # 0/1 = Manual, 2 = Auto
@@ -286,13 +287,70 @@ _MACHINE_CMD_MAP = {
     "DISABLE_ROBOT":   ("HMI_PB_MachineCtrl2", 16384),  # bit 14 DisableRobotPVPB
     "ENABLE_AMR":      ("HMI_PB_MachineCtrl2", 2048),   # bit 11 EnableAMRPVPB
     "DISABLE_AMR":     ("HMI_PB_MachineCtrl2", 4096),   # bit 12 DisableAMRPVPB
+    "JAW_METHOD_1":    ("HMI_PB_MachineCtrl2", 128),    # bit 7  JawMethod1PB @2.7
+    "JAW_METHOD_2":    ("HMI_PB_MachineCtrl2", 256),    # bit 8  JawMethod2PB @3.0
+    "AMR_OK_TO_PLANT": ("HMI_PB_MachineCtrl3", 2),      # bit 1  AMRokToPlant @4.1
 }
 
-# ControlRobot → ROBOT_PB_CMD (%MW6200) bit value.
+# ControlRobot → ROBOT_PB_CMD (%MW6200) bit value. This map is identical to the
+# ud_HMI_RobotPB bit layout (HMI_screen_and_tags.pdf p.72), which cross-confirms
+# that PDF PB layout — the same source used for the axis PB words below.
 _ROBOT_CMD_MAP = {
     "HOME": 1, "PAUSE": 2, "CONTINUE": 4, "MOTORS_ON": 8, "MOTORS_OFF": 16,
     "START": 32, "STOP": 64, "SHUTDOWN": 128, "RESET": 256,
 }
+
+# ── HMI control writes (pushbutton words) ─────────────────────────────────────
+# Momentary pushbutton (PVPB) words the physical HMI writes. Each button is one
+# bit of a word instance; a press pulses the whole word to (1<<bit) → 100 ms → 0
+# (matching machine/robot buttons). Instance bases come from the program local
+# variables (pp.40-62); bit layouts from the PB UDTs (pp.70-72). Only the machine
+# (%MW5000/1) and robot (%MW6200) words are bench-confirmed; the axis words
+# (%MW5400-6500) are from the PDF and want a live pulse-check per axis.
+_HMI_PB_BITS = {
+    # ud_HMI_TeknicPB (p.70)
+    "teknic": {"ServoOn": 1, "ServoOff": 2, "JogFwd": 4, "JogRev": 8, "HomePos": 16,
+               "ApproachPos": 32, "WorkPos": 64, "SetValues": 128, "StartHoming": 256},
+    # ud_HMI_LA36PB (p.71) — adds Recovery in/out
+    "la36": {"ServoOn": 1, "ServoOff": 2, "JogFwd": 4, "JogRev": 8, "HomePos": 16,
+             "ApproachPos": 32, "WorkPos": 64, "SetValues": 128, "StartHoming": 256,
+             "RecoveryIn": 512, "RecoveryOut": 1024},
+    # ud_HMI_MotorPB (p.72)
+    "motor": {"On": 1, "Off": 2, "CW": 4, "CCW": 8},
+    # ud_HMI_RobotPB (p.72) — same as _ROBOT_CMD_MAP
+    "robot": {"GoHome": 1, "Pause": 2, "Continue": 4, "MotorsOn": 8, "MotorsOff": 16,
+              "Start": 32, "Stop": 64, "Shutdown": 128, "Reset": 256},
+}
+# PB instance → (kind, %MW base). All buttons fall in word 0 of the instance.
+_HMI_PB_BLOCKS = {
+    "HMI_PB_AugerSlide":     ("teknic", 5400),
+    "HMI_PB_PlanterSlide":   ("teknic", 5500),
+    "HMI_PB_AugerGimbalX":   ("la36",   5600),
+    "HMI_PB_AugerGimbalY":   ("la36",   5700),
+    "HMI_PB_PlanterGimbalX": ("la36",   5800),
+    "HMI_PB_PlanterGimbalY": ("la36",   5900),
+    "HMI_PB_PlanterJawVert": ("la36",   6000),
+    "HMI_PB_PlanterTamper":  ("la36",   6100),
+    "HMI_PB_Robot":          ("robot",  6200),
+    "HMI_PB_Jaw1":           ("la36",   6300),
+    "HMI_PB_Jaw2":           ("la36",   6400),
+    "HMI_PB_Auger":          ("motor",  6500),
+}
+# Continuous-motion buttons: held (hold-to-jog), not pulsed. Everything else pulses.
+_HMI_JOG_BUTTONS = {"JogFwd", "JogRev", "RecoveryIn", "RecoveryOut"}
+_JOG_DEADMAN = 0.5          # s: a held jog auto-clears if not refreshed within this
+
+
+def _resolve_pb(block, button):
+    """(block, button) → (%MW addr, bit_value) if allow-listed, else None."""
+    spec = _HMI_PB_BLOCKS.get(block)
+    if spec is None:
+        return None
+    kind, base = spec
+    bit = _HMI_PB_BITS[kind].get(button)
+    if bit is None:
+        return None
+    return base, bit
 
 # ── HMI live-mirror (read-only) ──────────────────────────────────────────────
 # The physical HMI reads a set of UDT instances in the PLC's M area and shows
@@ -946,7 +1004,7 @@ HMI_MENU = {
 # "panels" = generic lamp/value cards; the rest are bespoke HMI layouts. A screen
 # may also carry its own "layout" key (wins over this map); anything unlisted → "panels".
 HMI_LAYOUT = {
-    "main": "main", "gauges": "gauges",
+    "main": "main", "gauges": "gauges", "amr": "amr",
     "auger_motor": "motor", "epson_robot": "robot", "planter_jaws": "jaws",
     "auger_main_slide": "motion", "planter_main_slide": "motion",
     "auger_gimbal_x": "motion", "auger_gimbal_y": "motion",
@@ -1004,6 +1062,7 @@ class PlcClient:
         self._client = None                     # pymodbus ModbusTcpClient (lazy)
         self._import_error = None               # set once if pymodbus is unavailable
         self._next_retry = 0.0                  # monotonic time before which we don't reconnect
+        self._jog = None                        # (addr, bitval, expiry) of a held jog, or None
 
     @property
     def target(self):
@@ -1108,6 +1167,25 @@ class PlcClient:
         time.sleep(0.1)
         self._write(name, 0)
         return True, f"pulsed {name}: {press_val} → 0"
+
+    def _write_word(self, plc_addr, value):
+        """FC06 write to %MW<plc_addr>. Refuses anything below the FEnet write base
+        (%MW5000) — a hard floor so a bad address can never scribble on the read area."""
+        reg = plc_addr - _FENET_WRITE_WORD_BASE
+        if reg < 0:
+            log.warning("_write_word: %%MW%d below FEnet write area (min %%MW%d)",
+                        plc_addr, _FENET_WRITE_WORD_BASE)
+            return False
+        res = self._client.write_register(reg, int(value) & 0xFFFF)
+        return not res.isError()
+
+    def _pulse_word(self, plc_addr, bitval):
+        """Momentary: pulse a single PB word to `bitval` → 100 ms → 0."""
+        if not self._write_word(plc_addr, bitval):
+            return False
+        time.sleep(0.1)
+        self._write_word(plc_addr, 0)
+        return True
 
     def _read_words_raw(self, plc_addr, count):
         """Read `count` consecutive FC04 input registers starting at %MW<plc_addr>.
@@ -1223,6 +1301,59 @@ class PlcClient:
             status["success"] = ok
             status["message"] = f"Robot {cmd}: {detail}"
             return status
+        return self._op(fn)
+
+    # -- HMI control-page writes (axis/motor pushbuttons) ----------------------
+    def press_button(self, block, button):
+        """Pulse a momentary axis/motor pushbutton (allow-listed). Jog buttons are
+        rejected here — they must go through jog() so the deadman applies."""
+        def fn():
+            spec = _resolve_pb(block, button)
+            if spec is None:
+                return {"success": False, "message": f"unknown button {block}.{button}"}
+            if button in _HMI_JOG_BUTTONS:
+                return {"success": False, "message": f"{button} is a jog button — use /api/hmi/jog"}
+            addr, bitval = spec
+            ok = self._pulse_word(addr, bitval)
+            return {"success": ok, "message": f"{block}.{button}: pulsed %MW{addr} bit {bitval}"}
+        return self._op(fn)
+
+    def jog(self, block, button, action):
+        """Hold-to-jog a continuous-motion button. action 'start'/'refresh' sets the
+        bit and (re)arms a deadman; 'stop' clears it. If refreshes lapse (tab closed,
+        connection lost) jog_deadman() clears the bit. Only one jog is held at a time."""
+        action = (action or "").lower()
+        def fn():
+            spec = _resolve_pb(block, button)
+            if spec is None or button not in _HMI_JOG_BUTTONS:
+                return {"success": False, "message": f"{block}.{button} is not a jog button"}
+            addr, bitval = spec
+            if action == "stop":
+                self._write_word(addr, 0)
+                if self._jog and self._jog[0] == addr:
+                    self._jog = None
+                return {"success": True, "message": f"{block}.{button}: jog stop"}
+            # start / refresh — if switching axes, drop the previous jog's bit first
+            if self._jog and self._jog[0] != addr:
+                self._write_word(self._jog[0], 0)
+            ok = self._write_word(addr, bitval)
+            self._jog = (addr, bitval, time.monotonic() + _JOG_DEADMAN)
+            return {"success": ok, "message": f"{block}.{button}: jog {action}"}
+        return self._op(fn)
+
+    def jog_deadman(self):
+        """Background-thread tick (~10 Hz): clear a held jog whose refresh has lapsed.
+        Cheap no-op (no PLC I/O) unless a jog is actually pending."""
+        if self._jog is None:
+            return
+        def fn():
+            j = self._jog
+            if j and time.monotonic() > j[2]:
+                self._write_word(j[0], 0)
+                self._jog = None
+                log.warning("jog deadman: cleared held jog at %%MW%d (refresh lapsed)", j[0])
+                return {"success": True, "message": "jog deadman cleared"}
+            return {"success": True, "message": "ok"}
         return self._op(fn)
 
     # -- read operations ------------------------------------------------------

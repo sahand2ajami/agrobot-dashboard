@@ -39,7 +39,7 @@ pytest tests/                      # no hardware / no ROS required
 | `dashboard/serve.py` | HTTP layer + composition root (`main()`); ~1,270 lines. Declarative routing: `GET_EXACT`/`GET_PREFIX`/`POST_EXACT` (exact first, then longest prefix — order can't shadow routes). Extensions register via `Handler.add_route`; **monkey-patching is forbidden**. |
 | `dashboard/chassis.py` | Chassis abstraction (see below). Transitional home; carries the `sys.path` shim that makes `agrobot_dashboard` importable from a checkout. |
 | `dashboard/plc_client.py` | The ONE Modbus TCP client to the PLC (register map `_REG`, command bit tables, AMR handshake block). |
-| `dashboard/serve_plc.py` | Adds `/api/amr/*` + `/api/hmi/*` (read-only HMI mirror) routes + the %MW5112 auto-write thread via `add_route` (no patching); serves `plc_combined.html`. |
+| `dashboard/serve_plc.py` | Adds `/api/amr/*` + `/api/hmi/*` (HMI mirror: read screens + control-page writes) routes + the %MW5112 auto-write and jog-deadman threads via `add_route` (no patching); serves `plc_combined.html`. |
 | `dashboard/index.html`, `plc_combined.html`, `dashboard/js/teleop.js` | The two pages + the shared teleop transport (the only JS allowed to POST `/api/cmd_vel`; clamps to chassis ceilings; pages hook in via `window.TELEOP_HOOKS`). |
 | `src/avatar_robot_base/` | ROS package: `robot_base_node` (Modbus RTU driver), `protocol.py` (pure frame build/parse — tested without rclpy), `odom_calculation` (`car_type` ROS param: T3/T13/T17E), one parameterized `robot_launch.py`. |
 | `tests/` | Domain units, in-process HTTP endpoint tests, PLC register-map integrity, protocol frames. |
@@ -100,7 +100,8 @@ separate (jackal keeps cosmetic planter/auger buttons with no PLC).
 | POST | `/api/plc/machine`, `/api/plc/robot` | Pulsed pushbutton words (allow-listed commands, unknown → 400). |
 | GET | `/api/plc/{status,sequence,auger_motor,banner,tags}` | Machine status / sequence detail / auger motor / HMI banner / tag+symbol reference (works PLC-down). |
 | GET/POST | `/api/amr/{poll,ping,write}` | AMR↔PLC handshake block %MW5100–5112 (registered by `serve_plc.py`). |
-| GET | `/api/hmi/{screens,read}` | Read-only live mirror of the machine HMI screens (registered by `serve_plc.py`; see [hmi.md](docs/hmi.md)). `read?screen=<id>` returns each screen's panels with a live value per row. |
+| GET | `/api/hmi/{screens,read}` | Live mirror of the machine HMI screens (registered by `serve_plc.py`; see [hmi.md](docs/hmi.md)). `read?screen=<id>` returns each screen's panels with a live value per row; numeric fields carry the C-more fractional-digit formatting. |
+| POST | `/api/hmi/press`, `/api/hmi/jog` | Control-page writes: `press {block,button}` pulses a momentary axis/motor pushbutton; `jog {block,button,action}` holds a jog bit with a server deadman. Allow-listed PB words (%MW5400–6500, FC06); writes below %MW5000 refused. 503 off-chassis, 400 unknown button. |
 
 All `/api/plc/*` and `/api/amr/*` return **503** on a chassis without
 `plc.enabled`; a downed PLC is a normal 200 with `connected:false`.

@@ -94,6 +94,69 @@ def _serve_hmi_read(handler):
     handler._json_response(404 if out.get("error") else 200, json.dumps(out).encode())
 
 
+def _read_json_body(handler):
+    """Parse a JSON POST body; sends the error response and returns None on failure."""
+    try:
+        length = int(handler.headers.get("Content-Length", 0))
+        if length > _serve.MAX_POST_BYTES:
+            handler._json_response(413, b'{"error":"Request too large"}')
+            return None
+        return json.loads(handler.rfile.read(length) if length else b"{}")
+    except Exception:
+        handler._json_response(400, b'{"error":"invalid JSON"}')
+        return None
+
+
+def _serve_hmi_press(handler):
+    """Pulse a momentary axis/motor pushbutton. Body: {block, button}."""
+    plc = _plc(handler)
+    if plc is None:
+        return
+    data = _read_json_body(handler)
+    if data is None:
+        return
+    block, button = data.get("block"), data.get("button")
+    if not block or not button:
+        handler._json_response(400, b'{"error":"block and button required"}')
+        return
+    result = plc.press_button(block, button)
+    ok = result.get("connected") and result.get("success")
+    handler._json_response(200 if ok else 400 if result.get("connected") else 503,
+                           json.dumps(result).encode())
+
+
+def _serve_hmi_jog(handler):
+    """Hold-to-jog a continuous-motion button. Body: {block, button, action}."""
+    plc = _plc(handler)
+    if plc is None:
+        return
+    data = _read_json_body(handler)
+    if data is None:
+        return
+    block, button = data.get("block"), data.get("button")
+    action = data.get("action", "start")
+    if not block or not button:
+        handler._json_response(400, b'{"error":"block and button required"}')
+        return
+    result = plc.jog(block, button, action)
+    ok = result.get("connected") and result.get("success")
+    handler._json_response(200 if ok else 400 if result.get("connected") else 503,
+                           json.dumps(result).encode())
+
+
+def _jog_deadman_loop():
+    """Clear a held jog whose browser refresh has lapsed (tab closed / connection
+    lost). Cheap: no PLC I/O unless a jog is actually pending."""
+    while True:
+        time.sleep(0.1)   # 10 Hz — deadman resolves within ~_JOG_DEADMAN of last contact
+        plc = _serve.Handler.plc
+        if plc is not None:
+            try:
+                plc.jog_deadman()
+            except Exception as exc:
+                _serve.log.warning("[hmi_jog] deadman error: %s", exc)
+
+
 def _amr_state_loop():
     """Write %MW5112 = 2 (Moving) / 1 (Stationary) on every movement-state
     change, derived from the dashboard's velocity state. Waits for main() to
@@ -133,11 +196,14 @@ def _register():
     _serve.Handler.add_route("POST", "/api/amr/write", _serve_amr_write)
     _serve.Handler.add_route("GET",  "/api/hmi/screens", _serve_hmi_screens)
     _serve.Handler.add_route("GET",  "/api/hmi/read",    _serve_hmi_read)
+    _serve.Handler.add_route("POST", "/api/hmi/press",   _serve_hmi_press)
+    _serve.Handler.add_route("POST", "/api/hmi/jog",     _serve_hmi_jog)
 
 
 def main():
     _register()
     threading.Thread(target=_amr_state_loop, daemon=True, name="amr-state").start()
+    threading.Thread(target=_jog_deadman_loop, daemon=True, name="hmi-jog-deadman").start()
     _serve.main()
 
 

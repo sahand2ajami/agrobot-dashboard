@@ -1,12 +1,40 @@
-# HMI live mirror (read-only)
+# HMI live mirror
 
 The tree-planter has a physical HMI panel that reads a set of UDT instances in
 the LS Electric PLC's M area and shows their members across ~28 screens,
 navigated by an on-screen MENU of buttons (and an I/O sub-menu). The dashboard
-mirrors both the navigation and the screens **read-only**: same buttons, same
-live values,
-polled over the same Modbus TCP link the rest of the PLC integration uses. The
-HMI buttons in the dashboard only navigate — nothing here writes to the PLC.
+mirrors both the navigation and the screens, polled over the same Modbus TCP
+link the rest of the PLC integration uses. Most screens are **read-only**; the
+**control pages** (Auger/Main/Planter Controls) are **writable** — see "Control
+writes".
+
+## Control writes (auger / main / planter control pages)
+
+The axis, motor, robot, jaw, and AMR control screens send the same momentary
+pushbuttons as the physical panel. Each button is one bit of a write-only PB
+word instance; a press pulses the whole word to `(1<<bit)` → 100 ms → 0 (FC06,
+`reg = %MW − 5000`). Sources: instance bases from the program local variables
+(pp.40-62), bit layouts from the PB UDTs (pp.70-72). Only the machine
+(%MW5000/1) and robot (%MW6200) words are bench-confirmed; the axis words
+(%MW5400-6500) come from the PDF and should be pulse-checked per axis on the
+live PLC.
+
+- **Allow-list.** `_HMI_PB_BLOCKS` (instance → kind + %MW base) × `_HMI_PB_BITS`
+  (kind → button → bit). `_resolve_pb` rejects anything not listed; `_write_word`
+  hard-refuses any target below %MW5000 so a write can never hit the read area.
+- **Momentary buttons** (Servo On/Off, Home/Approach/Work, Homing, Motor On/Off,
+  Robot Start/Stop/…): `POST /api/hmi/press {block, button}` → `press_button`
+  pulses once. Jaw method + AMR OK-to-Plant reuse the proven machine word via
+  `POST /api/plc/machine` (`JAW_METHOD_1/2`, `AMR_OK_TO_PLANT`).
+- **Hold-to-jog** (Jog Fwd/Rev, Recovery In/Out): `POST /api/hmi/jog
+  {block, button, action}`. The browser sends `start`, re-sends `refresh` every
+  200 ms while held, and `stop` on release / navigation / tab blur. A server
+  **deadman** (`_JOG_DEADMAN`, 0.5 s; watchdog thread in `serve_plc.py`) clears
+  the jog bit if refreshes lapse — a dropped connection or closed tab stops the
+  axis. Only one jog is held at a time.
+
+Both endpoints 503 on a chassis without `plc.enabled`, 400 on an unknown/
+disallowed button. The read-only screens' on-screen buttons stay disabled.
 
 It is served by `launch_dashboard_plc.sh` (`serve_plc.py` → `plc_combined.html`,
 default port 8769) as a new **HMI** item in the left sidebar. On a chassis

@@ -686,7 +686,12 @@ input[type=range] { width: 100%; accent-color: var(--teal); height: 6px; cursor:
 .hbtn-row { display: flex; gap: 6px; }
 .hbtn { flex: 1 1 0; padding: 10px 6px; border: 1px solid #7f868c; border-radius: 4px;
   background: linear-gradient(#eef0f1,#cfd3d7); color: #3a4045; font-size: 12px; font-weight: 700;
-  text-align: center; line-height: 1.15; cursor: not-allowed; }
+  text-align: center; line-height: 1.15; cursor: not-allowed; user-select: none; }
+/* clickable control buttons (onclick / jog handlers) vs disabled mirror buttons */
+.hbtn[onclick], .hbtn.jog { cursor: pointer; }
+.hbtn[onclick]:hover, .hbtn.jog:hover { border-color: var(--teal); }
+.hbtn[onclick]:active, .hbtn.jog:active { background: linear-gradient(#cfd3d7,#b7bcc1); transform: translateY(1px); }
+.hbtn.jog:active { background: linear-gradient(#33c06f,#1f9a52); color: #fff; border-color: #1e8f4e; }
 .hbtn.active { background: linear-gradient(#33c06f,#1f9a52); color: #fff; border-color: #1e8f4e; }
 .hbtn.warn.active { background: linear-gradient(#f2c14e,#e0a92c); color: #3a2e00; border-color: #c79420; }
 .hbtn.danger.active { background: linear-gradient(#e24d4d,#c22b2b); color: #fff; border-color: #a52020; }
@@ -1216,6 +1221,7 @@ async function _hmiOnShow() {
 }
 
 function _hmiOnHide() {
+  _jogStop();
   _hmiStopPoll();
   if (_hmi.clock) { clearInterval(_hmi.clock); _hmi.clock = null; }
 }
@@ -1228,7 +1234,7 @@ function _hmiUpdateBack() {
   const b = _g('hmiBackBtn'); if (b) b.style.visibility = (_hmi.stack.length > 1) ? 'visible' : 'hidden';
 }
 function _hmiRenderMenu(key) {                    // render a menu screen (no push)
-  _hmiStopPoll(); _hmi.current = null; _hmi.menuKey = key;
+  _jogStop(); _hmiStopPoll(); _hmi.current = null; _hmi.menuKey = key;
   const menu = _hmi.menus[key] || _hmi.menus.root;
   _set('hmiCrumb', menu.title || 'Menu');
   const mb = _g('hmiMenuBtn'); if (mb) mb.style.visibility = 'hidden';
@@ -1237,6 +1243,7 @@ function _hmiRenderMenu(key) {                    // render a menu screen (no pu
   _g('hmiBody').innerHTML = _tplMenu(menu);
 }
 function _hmiRenderScreenShell(id) {              // open a data screen (no push)
+  _jogStop();
   _hmi.current = id; _hmi.menuKey = null;
   _set('hmiCrumb', _hmi.titles[id] || id);
   const mb = _g('hmiMenuBtn'); if (mb) mb.style.visibility = 'visible';
@@ -1325,6 +1332,56 @@ function _fieldRow(label, v, unit) {
 function _btn(label, active, cls) {
   return `<button class="hbtn ${cls || ''} ${active ? 'active' : ''}" disabled>${label}</button>`;
 }
+
+// ── control-page writes (auger / main / planter control pages) ───────
+// PB word instance per control screen (mirrors _HMI_PB_BLOCKS server-side).
+const _PB = {
+  auger_main_slide: 'HMI_PB_AugerSlide', planter_main_slide: 'HMI_PB_PlanterSlide',
+  auger_gimbal_x: 'HMI_PB_AugerGimbalX', auger_gimbal_y: 'HMI_PB_AugerGimbalY',
+  planter_gimbal_x: 'HMI_PB_PlanterGimbalX', planter_gimbal_y: 'HMI_PB_PlanterGimbalY',
+  planter_jaw_vertical: 'HMI_PB_PlanterJawVert', planter_tampers: 'HMI_PB_PlanterTamper',
+};
+// fire-and-forget POST (reuses the page's _post; swallows transport errors)
+function _postFF(url, body) { _post(url, body).catch(() => {}); }
+function _hmiPress(block, button) { _postFF('/api/hmi/press', { block, button }); }  // momentary pulse
+function _hmiMachine(command)     { _postFF('/api/plc/machine', { command }); }       // machine word (proven)
+
+// Hold-to-jog: set on press, refresh every 200 ms, clear on release. A server-side
+// deadman clears the bit if refreshes stop (tab closed / connection lost).
+let _jog = null;   // { block, button, timer } while a jog is held
+function _jogStart(block, button, ev) {
+  if (ev) ev.preventDefault();
+  _jogStop();
+  _postFF('/api/hmi/jog', { block, button, action: 'start' });
+  _jog = { block, button, timer: setInterval(
+    () => _postFF('/api/hmi/jog', { block, button, action: 'refresh' }), 200) };
+}
+function _jogStop() {
+  if (!_jog) return;
+  clearInterval(_jog.timer);
+  _postFF('/api/hmi/jog', { block: _jog.block, button: _jog.button, action: 'stop' });
+  _jog = null;
+}
+// Safety backstops: any release, tab blur, or navigation stops a held jog.
+window.addEventListener('mouseup', _jogStop);
+window.addEventListener('touchend', _jogStop);
+window.addEventListener('touchcancel', _jogStop);
+window.addEventListener('blur', _jogStop);
+
+// Clickable pulse button, machine-command button, and hold-to-jog button.
+function _pbtn(label, block, button, active, cls) {
+  return `<button class="hbtn ${cls || ''} ${active ? 'active' : ''}" ` +
+         `onclick="_hmiPress('${block}','${button}')">${label}</button>`;
+}
+function _mbtn(label, command, active, cls) {
+  return `<button class="hbtn ${cls || ''} ${active ? 'active' : ''}" ` +
+         `onclick="_hmiMachine('${command}')">${label}</button>`;
+}
+function _jbtn(label, block, button, cls) {
+  return `<button class="hbtn jog ${cls || ''}" ` +
+         `onmousedown="_jogStart('${block}','${button}',event)" onmouseleave="_jogStop()" ` +
+         `ontouchstart="_jogStart('${block}','${button}',event)">${label}</button>`;
+}
 function _card(title, body, wide) {
   return `<div class="hcard${wide ? ' wide' : ''}"><div class="hcard-hdr">${title}</div>` +
          `<div class="hcard-body">${body}</div></div>`;
@@ -1342,6 +1399,7 @@ function _hmiRenderScreen(d) {
     case 'comms':  html = _tplComms(d);        break;
     case 'enable': html = _tplEnable(B);       break;
     case 'jaws':   html = _tplJaws(d);         break;
+    case 'amr':    html = _tplAmr(B);          break;
     default:       html = _tplPanels(d.panels || []);
   }
   const body = _g('hmiBody');
@@ -1439,14 +1497,15 @@ function _tplMotion(B, screen) {
   const FAULT = /fault|overcurrent|lost|blocked|poslim|neglim/i;
   const lamps = lampNames.filter(n => n in b)
     .map(n => _lampRow(_hcap(n), b[n], FAULT.test(n))).join('');
+  const pb = _PB[screen];
   const btns = teknic
-    ? `<div class="hbtn-grp"><h4>SERVO</h4><div class="hbtn-row">${_btn('OFF', b.ServoOff)}${_btn('ON', b.ServoOn)}</div></div>
-       <div class="hbtn-grp"><h4>JOG</h4><div class="hbtn-row">${_btn('▲', false)}${_btn('▼', false)}</div></div>
-       <div class="hbtn-grp"><h4>POSITION SELECTION</h4><div class="hbtn-row">${_btn('HOME', b.AtHome)}${_btn('APPROACH', b.AtApproach)}${_btn('WORK', b.AtWork)}</div></div>
-       <div class="hbtn-grp"><h4>HOMING</h4><div class="hbtn-row">${_btn(b.Homing ? 'HOMING…' : 'HOME REQUIRED', b.Homing, 'warn')}</div></div>`
-    : `<div class="hbtn-grp"><h4>RECOVERY RUN</h4><div class="hbtn-row">${_btn('−', b.RunningIn)}${_btn('+', b.RunningOut)}</div></div>
-       <div class="hbtn-grp"><h4>JOG</h4><div class="hbtn-row">${_btn('−', false)}${_btn('+', false)}</div></div>
-       <div class="hbtn-grp"><h4>POSITION SELECTION</h4><div class="hbtn-row">${_posBtns(screen, b)}</div></div>`;
+    ? `<div class="hbtn-grp"><h4>SERVO</h4><div class="hbtn-row">${_pbtn('OFF', pb, 'ServoOff', b.ServoOff)}${_pbtn('ON', pb, 'ServoOn', b.ServoOn)}</div></div>
+       <div class="hbtn-grp"><h4>JOG</h4><div class="hbtn-row">${_jbtn('▲', pb, 'JogFwd')}${_jbtn('▼', pb, 'JogRev')}</div></div>
+       <div class="hbtn-grp"><h4>POSITION SELECTION</h4><div class="hbtn-row">${_pbtn('HOME', pb, 'HomePos', b.AtHome)}${_pbtn('APPROACH', pb, 'ApproachPos', b.AtApproach)}${_pbtn('WORK', pb, 'WorkPos', b.AtWork)}</div></div>
+       <div class="hbtn-grp"><h4>HOMING</h4><div class="hbtn-row">${_pbtn('START', pb, 'StartHoming', b.Homing, 'warn')}</div></div>`
+    : `<div class="hbtn-grp"><h4>RECOVERY RUN</h4><div class="hbtn-row">${_jbtn('−', pb, 'RecoveryIn')}${_jbtn('+', pb, 'RecoveryOut')}</div></div>
+       <div class="hbtn-grp"><h4>JOG</h4><div class="hbtn-row">${_jbtn('−', pb, 'JogRev')}${_jbtn('+', pb, 'JogFwd')}</div></div>
+       <div class="hbtn-grp"><h4>POSITION SELECTION</h4><div class="hbtn-row">${_posBtns(screen, b, pb)}</div></div>`;
   return `<div class="hmi-motion">
     <div>${btns}</div>
     ${_card('MEASUREMENTS', vals.map(v => _fieldRow(v[0], v[1], v[2])).join(''))}
@@ -1458,10 +1517,10 @@ function _tplMotor(B) {
   // Only Run/Fwd/Faulted + velocities are bench-confirmed for this block
   // (see ud_HMI_MotorIND note). ON/OFF reflect the Run bit; direction buttons
   // are static (their bits aren't confirmed on the live PLC).
-  const b = B.HMI_IND_Auger || {};
+  const b = B.HMI_IND_Auger || {}, pb = 'HMI_PB_Auger';
   return `<div class="hmi-cards">
-    ${_card('MOTOR', `<div class="hbtn-row">${_btn('OFF', b.Run === false, 'danger')}${_btn('ON', b.Run === true)}</div>`)}
-    ${_card('MANUAL DIRECTION', `<div class="hbtn-row">${_btn('CCW', false)}${_btn('CW', false)}</div>`)}
+    ${_card('MOTOR', `<div class="hbtn-row">${_pbtn('OFF', pb, 'Off', b.Run === false, 'danger')}${_pbtn('ON', pb, 'On', b.Run === true)}</div>`)}
+    ${_card('MANUAL DIRECTION', `<div class="hbtn-row">${_pbtn('CCW', pb, 'CCW', false)}${_pbtn('CW', pb, 'CW', false)}</div>`)}
     ${_card('VELOCITY', _fieldRow('Velocity Target', b.VelocityTarget, 'RPM') + _fieldRow('Velocity Measured', b.VelocityMeasured, 'RPM'))}
     ${_card('STATUS', _lampRow('Drive Faulted', b.Faulted, true) + _lampRow('Auger Run', b.Run) +
         _lampRow('Auger Fwd/Rev', b.Fwd))}
@@ -1476,10 +1535,10 @@ function _tplRobot(B) {
   const FAULT = /error|estop on|warning|s error/i;
   return `<div class="hmi-cards">
     ${_card('ROBOT CONTROLS',
-       `<div class="hbtn-row">${_btn('MOTORS ON', r.doMotorsOn)}${_btn('MOTORS OFF', r.doMotorsOn === false)}</div>
-        <div class="hbtn-row" style="margin-top:6px">${_btn('START', r.doRunning)}${_btn('STOP', false, 'danger')}</div>
-        <div class="hbtn-row" style="margin-top:6px">${_btn('CONTINUE', false)}${_btn('PAUSE', r.doPaused, 'warn')}</div>
-        <div class="hbtn-row" style="margin-top:6px">${_btn('GO HOME', r.doAtHome)}${_btn('RESET', false)}</div>`)}
+       `<div class="hbtn-row">${_pbtn('MOTORS ON', 'HMI_PB_Robot', 'MotorsOn', r.doMotorsOn)}${_pbtn('MOTORS OFF', 'HMI_PB_Robot', 'MotorsOff', r.doMotorsOn === false)}</div>
+        <div class="hbtn-row" style="margin-top:6px">${_pbtn('START', 'HMI_PB_Robot', 'Start', r.doRunning)}${_pbtn('STOP', 'HMI_PB_Robot', 'Stop', false, 'danger')}</div>
+        <div class="hbtn-row" style="margin-top:6px">${_pbtn('CONTINUE', 'HMI_PB_Robot', 'Continue', false)}${_pbtn('PAUSE', 'HMI_PB_Robot', 'Pause', r.doPaused, 'warn')}</div>
+        <div class="hbtn-row" style="margin-top:6px">${_pbtn('GO HOME', 'HMI_PB_Robot', 'GoHome', r.doAtHome)}${_pbtn('RESET', 'HMI_PB_Robot', 'Reset', false)}</div>`)}
     ${_card('ROBOT INPUTS', inN.map(n => _lampRow(_hcap(n.slice(2)), r[n])).join('') + _fieldRow('Program Commd', r.diProgSel, ''))}
     ${_card('ROBOT OUTPUTS', outN.map(n => _lampRow(_hcap(n.slice(2)), r[n], FAULT.test(_hcap(n.slice(2))))).join('') +
         _fieldRow('Program Echo', r.doCmdProg, '') + _fieldRow('Home Status', r.HomeStatus, '') + _fieldRow('Error Code', r.ErrorCode, ''))}
@@ -1491,10 +1550,12 @@ function _tplRobot(B) {
 }
 
 // LA36 position-selection buttons differ per axis (matches each PDF screen).
-function _posBtns(screen, b) {
+function _posBtns(screen, b, pb) {
   if (screen === 'planter_jaw_vertical')
-    return _btn('HOME', b.AtHome) + _btn('PLANT RELEASE', false) + _btn('CLEAR OF TAMPERS', false);
-  return _btn('HOME', b.AtHome) + _btn('WORK', b.AtWork);
+    return _pbtn('HOME', pb, 'HomePos', b.AtHome) +
+           _pbtn('PLANT RELEASE', pb, 'ApproachPos', b.AtApproach) +
+           _pbtn('CLEAR OF TAMPERS', pb, 'WorkPos', b.AtWork);
+  return _pbtn('HOME', pb, 'HomePos', b.AtHome) + _pbtn('WORK', pb, 'WorkPos', b.AtWork);
 }
 
 // Ethernet/IP communications (pp.3): name · IP · comms lamp (red = failed).
@@ -1527,15 +1588,26 @@ function _tplJaws(d) {
   const B = d.blocks || {}, i = B.HMI_IND || {}, j1 = B.HMI_IND_Jaw1 || {}, j2 = B.HMI_IND_Jaw2 || {};
   const fb = {};
   (d.panels.find(p => p.title === 'Feedback & Outputs')?.rows || []).forEach(r => { fb[r.label] = r.value; });
-  const jawCard = (n, jb) => _card('JAW ' + n,
+  const jawCard = (n, jb, pb) => _card('JAW ' + n,
+    `<div class="hbtn-grp"><h4>JOG</h4><div class="hbtn-row">${_jbtn('OPEN', pb, 'JogFwd')}${_jbtn('CLOSE', pb, 'JogRev')}</div></div>` +
+    `<div class="hbtn-grp"><h4>POSITION</h4><div class="hbtn-row">${_pbtn('HOME', pb, 'HomePos', jb.AtHome)}${_pbtn('WORK', pb, 'WorkPos', jb.AtWork)}</div></div>` +
     _fieldRow('Position Measured', fb['Jaw ' + n + ' Position Measured'], '%') +
     _lampRow('Close Output', fb['Jaw ' + n + ' Close Output']) +
     _lampRow('Open Output', fb['Jaw ' + n + ' Open Output']) +
     _lampRow('At Home', jb.AtHome) + _lampRow('At Work', jb.AtWork) + _lampRow('Moving', jb.Moving));
   return `<div class="hmi-cards">
-    ${_card('CONTROL METHOD', `<div class="hbtn-row">${_btn('SINGLE', i.JawMethod1)}${_btn('DUAL', i.JawMethod2)}</div>`)}
-    ${jawCard('1', j1)}
-    ${jawCard('2', j2)}
+    ${_card('CONTROL METHOD', `<div class="hbtn-row">${_mbtn('SINGLE', 'JAW_METHOD_1', i.JawMethod1)}${_mbtn('DUAL', 'JAW_METHOD_2', i.JawMethod2)}</div>`)}
+    ${jawCard('1', j1, 'HMI_PB_Jaw1')}
+    ${jawCard('2', j2, 'HMI_PB_Jaw2')}
+  </div>`;
+}
+
+// AMR controls (pp.12): OK-to-plant confirm (machine word) + indicator.
+function _tplAmr(B) {
+  const i = B.HMI_IND || {};
+  return `<div class="hmi-cards">
+    ${_card('AMR', `<div class="hbtn-row">${_mbtn('OK TO PLANT', 'AMR_OK_TO_PLANT', i.AMROktoPlant)}</div>` +
+        _lampRow('AMR OK to Plant', i.AMROktoPlant))}
   </div>`;
 }
 

@@ -85,6 +85,86 @@ class TestAmrWriteValidation:
         assert "not a writable" not in out.get("message", "")
 
 
+class _FakeModbus:
+    def __init__(self):
+        self.writes = []
+    def write_register(self, reg, value):
+        self.writes.append((reg, value))
+        return type("R", (), {"isError": lambda s: False})()
+
+
+class TestHmiControlWrites:
+    """Axis/motor pushbutton writes: allow-list, FC06 offset, pulse, jog deadman."""
+
+    def _client(self, monkeypatch):
+        c = PlcClient("192.0.2.1", 502)
+        fake = _FakeModbus()
+        monkeypatch.setattr(c, "_ensure_client", lambda: fake)
+        c._client = fake
+        return c, fake
+
+    def test_allow_list_integrity(self):
+        # every PB instance sits in the write area and names a known bit kind
+        for block, (kind, base) in plc_client._HMI_PB_BLOCKS.items():
+            assert base >= plc_client._FENET_WRITE_WORD_BASE, block
+            assert kind in plc_client._HMI_PB_BITS, block
+
+    def test_press_pulses_correct_register(self, monkeypatch):
+        c, fake = self._client(monkeypatch)
+        out = c.press_button("HMI_PB_AugerGimbalX", "HomePos")   # %MW5600 bit4 = 16
+        assert out["success"] is True
+        # FC06 reg = 5600 - 5000 = 600; pulse sets bit then clears
+        assert fake.writes == [(600, 16), (600, 0)]
+
+    def test_press_rejects_jog_button(self, monkeypatch):
+        c, fake = self._client(monkeypatch)
+        out = c.press_button("HMI_PB_AugerGimbalX", "JogFwd")
+        assert out["success"] is False and fake.writes == []
+
+    def test_press_rejects_unknown(self, monkeypatch):
+        c, fake = self._client(monkeypatch)
+        assert c.press_button("HMI_PB_Nope", "HomePos")["success"] is False
+        assert c.press_button("HMI_PB_AugerSlide", "Nope")["success"] is False
+        assert fake.writes == []
+
+    def test_write_word_floor(self, monkeypatch):
+        c, fake = self._client(monkeypatch)
+        assert c._write_word(4999, 1) is False   # below %MW5000 → refused
+        assert fake.writes == []
+
+    def test_jog_hold_and_stop(self, monkeypatch):
+        c, fake = self._client(monkeypatch)
+        c.jog("HMI_PB_AugerGimbalX", "JogFwd", "start")   # %MW5600 bit2 = 4
+        assert fake.writes[-1] == (600, 4) and c._jog[0] == 5600
+        c.jog("HMI_PB_AugerGimbalX", "JogFwd", "stop")
+        assert fake.writes[-1] == (600, 0) and c._jog is None
+
+    def test_jog_rejects_non_jog(self, monkeypatch):
+        c, fake = self._client(monkeypatch)
+        assert c.jog("HMI_PB_AugerGimbalX", "HomePos", "start")["success"] is False
+        assert fake.writes == []
+
+    def test_jog_deadman_clears_lapsed(self, monkeypatch):
+        c, fake = self._client(monkeypatch)
+        c._jog = (5600, 4, 0.0)          # expiry in the past
+        c.jog_deadman()
+        assert fake.writes[-1] == (5600 - 5000, 0) and c._jog is None
+
+    def test_jog_deadman_noop_when_idle(self, monkeypatch):
+        c, fake = self._client(monkeypatch)
+        c.jog_deadman()                  # no jog pending → no PLC I/O
+        assert fake.writes == []
+
+    def test_new_machine_commands_wired(self):
+        # JAW_METHOD_1/2 + AMR_OK_TO_PLANT must be allow-listed AND mapped to a
+        # write-area register, or the /api/plc/machine endpoint would 400 them.
+        for cmd in ("JAW_METHOD_1", "JAW_METHOD_2", "AMR_OK_TO_PLANT"):
+            assert cmd in plc_client.MACHINE_COMMANDS
+            var, _bit = plc_client._MACHINE_CMD_MAP[cmd]
+            _kind, addr = plc_client.PlcClient._parse(plc_client._REG[var])
+            assert addr >= plc_client._FENET_WRITE_WORD_BASE
+
+
 class TestBannerDecode:
     def test_decodes_little_endian_ascii(self):
         # LS PLC packs strings low-byte-first: 'A'=0x41,'B'=0x42 → word 0x4241.
