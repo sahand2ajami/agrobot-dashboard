@@ -164,7 +164,13 @@ fi
 # ── Shared: start the GNSS reader (best-effort; skipped if no receiver) ────────
 start_gnss() {
   local dev=""
-  for _p in /dev/gnss /dev/ttyUSB0 /dev/ttyUSB1 /dev/ttyACM0 /dev/ttyACM1 /dev/rfcomm0; do
+  # Use ONLY a dedicated GNSS device node — never a bare /dev/ttyUSB*/ttyACM*.
+  # Those are where the chassis (robot base) lives; grabbing one here would put
+  # two masters on the same serial line and knock the chassis offline (the
+  # exact failure we hit before). A USB receiver must be pinned to /dev/gnss by
+  # a udev rule (config/udev/99-agrobot-serial.rules); Bluetooth binds to
+  # /dev/rfcomm0. If neither exists the GPS map just shows "No Data" — safe.
+  for _p in /dev/gnss /dev/rfcomm0; do
     [[ -e "$_p" ]] && { dev="$_p"; break; }
   done
   mkdir -p "$SCRIPT_DIR/logs/gnss"
@@ -209,9 +215,30 @@ if [[ "$CHASSIS" == "agrobot" ]]; then
   # CPU; re-enable it here if you ever need RealSense distance-to-person again.
 
   log "[agrobot] Starting robot_base_node (Modbus RTU → /avatar_robot/speed_cmd)"
-  if [[ -e /dev/ttyUSB0 && ( ! -r /dev/ttyUSB0 || ! -w /dev/ttyUSB0 ) ]]; then
-    sudo chmod a+rw /dev/ttyUSB0 2>/dev/null || true
+  # Resolve the chassis serial port robustly. Prefer the stable udev symlink
+  # /dev/agrobot_base (pinned to the chassis FTDI by serial — see
+  # config/udev/99-agrobot-serial.rules); fall back to /dev/ttyUSB0 on a box
+  # without the rule installed. Wait up to 10 s for the device so a slow USB
+  # enumeration never leaves the node opening a not-yet-present port. The
+  # resolved path is exported so robot_base_node opens exactly this device.
+  BASE_PORT=""
+  for _try in $(seq 1 20); do
+    for _cand in /dev/agrobot_base /dev/ttyUSB0; do
+      [[ -e "$_cand" ]] && { BASE_PORT="$_cand"; break; }
+    done
+    [[ -n "$BASE_PORT" ]] && break
+    [[ "$_try" == 1 ]] && log "[agrobot] Waiting for chassis serial port (/dev/agrobot_base or /dev/ttyUSB0)…"
+    sleep 0.5
+  done
+  if [[ -n "$BASE_PORT" ]]; then
+    log "[agrobot] Chassis serial port: $BASE_PORT"
+    [[ -r "$BASE_PORT" && -w "$BASE_PORT" ]] || sudo chmod a+rw "$BASE_PORT" 2>/dev/null || true
+  else
+    log "[agrobot] WARNING: no chassis serial port after 10 s — check the USB cable. robot_base_node will keep retrying."
+    BASE_PORT="/dev/agrobot_base"
   fi
+  export AGROBOT_BASE_PORT="$BASE_PORT"
+
   pkill -f robot_base_node 2>/dev/null && sleep 1 || true
   ros2 run avatar_robot_base robot_base_node &
   sleep 2
@@ -303,5 +330,5 @@ log "Press Ctrl-C to stop."
     echo "  http://${_ip}:${PORT}"
   done
   echo ""
-} > /dev/tty
+} > /dev/tty 2>/dev/null || true   # no controlling terminal (systemd/nohup/ssh -T): skip, don't die under set -e
 wait "$SERVER_PID"

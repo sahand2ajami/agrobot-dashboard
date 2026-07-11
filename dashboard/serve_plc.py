@@ -69,7 +69,7 @@ def _serve_amr_write(handler):
     if data.get("reg") is None or data.get("value") is None:
         handler._json_response(400, b'{"error":"reg and value required"}')
         return
-    result = plc.amr_write(data["reg"], data["value"])
+    result = plc.amr_write(data["reg"], data["value"], pulse=bool(data.get("pulse")))
     ok = result.get("connected") and result.get("success")
     handler._json_response(200 if ok else 503, json.dumps(result).encode())
 

@@ -156,13 +156,13 @@ header {
 .vel-lbl { font-size: 12px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--dim); }
 .vel-num { font-family: var(--mono); font-size: 20px; font-weight: 700; color: var(--teal-d); }
 
-/* ── EXTRA CONTROLS (2m, REC, Det) ──────────────────────────── */
+/* ── EXTRA CONTROLS (2m Fwd/Bwd, REC, Det) ──────────────────── */
 .extra-controls {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; width: 100%; padding: 0 4px;
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; width: 100%; padding: 0 4px;
 }
 .ctrl-btn {
-  height: 46px; border: 1.5px solid #ccc; border-radius: 7px;
-  background: var(--panel); font-size: 14px; font-weight: 700; color: var(--muted);
+  height: 60px; border: 1.5px solid #ccc; border-radius: 7px;
+  background: var(--panel); font-size: 18px; font-weight: 700; color: var(--muted);
   cursor: pointer; text-align: center; transition: all 0.1s; line-height: 1.2;
   display: flex; align-items: center; justify-content: center;
 }
@@ -777,9 +777,10 @@ input[type=range] { width: 100%; accent-color: var(--teal); height: 6px; cursor:
         </div>
       </div>
 
-      <!-- Extra controls: 2m, REC, Det — uniform size -->
+      <!-- Extra controls: 2m Fwd/Bwd (row 1), REC/Det (row 2) -->
       <div class="extra-controls">
-        <button class="ctrl-btn" id="fwd2mBtn" onclick="moveForward2m()">2m Fwd</button>
+        <button class="ctrl-btn" id="fwd2mBtn" onclick="moveForward2m('forward')">2m Fwd</button>
+        <button class="ctrl-btn" id="bwd2mBtn" onclick="moveForward2m('backward')">2m Bwd</button>
         <button class="ctrl-btn ctrl-rec" id="trackRecBtn" onclick="toggleTrackRecord()"><span id="trackRecLabel">REC</span></button>
         <button class="ctrl-btn ctrl-det" id="detBtn" onclick="toggleDetectionBtn()">Det</button>
       </div>
@@ -1928,7 +1929,7 @@ setInterval(() => {
 }, 200);
 
 // ═══════════════════════════════════════════════════════════════
-// FORWARD 2 m
+// AUTO-DRIVE 2 m (forward / backward)
 // ═══════════════════════════════════════════════════════════════
 let _fwdInterval = null;
 
@@ -1936,14 +1937,20 @@ function _updateFwd2mLabel() {
   const lbl = _g('fwd2mLabel'); if (lbl && !_fwdInterval) lbl.textContent = '';
 }
 
-async function moveForward2m() {
+async function moveForward2m(direction = 'forward') {
   if (_fwdInterval) return;
+  const backward = direction === 'backward';
+  const sign  = backward ? -1 : 1;
+  const word  = backward ? 'backward' : 'forward';
   const speed = CFG.maxLinear;
-  const btn = _g('fwd2mBtn'), lbl = _g('fwd2mLabel');
+  const btns = [_g('fwd2mBtn'), _g('bwd2mBtn')];
+  const btn  = backward ? _g('bwd2mBtn') : _g('fwd2mBtn');
+  const lbl  = _g('fwd2mLabel');
   _fwdInterval = true;
-  if (btn) { btn.disabled = true; btn.classList.add('running'); }
+  btns.forEach(b => { if (b) b.disabled = true; });
+  if (btn) btn.classList.add('running');
   if (lbl) lbl.textContent = '0.00 / 2.00 m';
-  addLog('Robot', 'info', `Auto-forward 2m started — speed ${speed.toFixed(2)} m/s`,
+  addLog('Robot', 'info', `Auto-${word} 2m started — speed ${speed.toFixed(2)} m/s`,
     'Server controls stop. Press Space to cancel.');
 
   let _dispStartL = null, _dispStartR = null;
@@ -1951,7 +1958,7 @@ async function moveForward2m() {
     try {
       const o = await _fetchWithTimeout('/api/wheel_odom', { cache:'no-store' }).then(r => r.json());
       if (_dispStartL === null) { _dispStartL = o.left; _dispStartR = o.right; }
-      const traveled = ((o.left - _dispStartL) + (o.right - _dispStartR)) / 2;
+      const traveled = sign * (((o.left - _dispStartL) + (o.right - _dispStartR)) / 2);
       const pct = Math.min(traveled / TARGET_PULSES, 1);
       if (lbl) lbl.textContent = (pct * 2).toFixed(2) + ' / 2.00 m';
     } catch {}
@@ -1962,25 +1969,26 @@ async function moveForward2m() {
     const res = await _fetchWithTimeout('/api/fwd2m', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ speed }),
+      body: JSON.stringify({ speed, direction: word }),
     }, 35000);
     const data = await res.json();
     msg = data.done    ? `Done (${data.traveled_m} m)`
         : data.aborted ? 'Cancelled'
         : 'Timeout';
-    if (data.done) addLog('Robot', 'ok', `Auto-forward complete — ${data.traveled_m} m traveled`);
-    else if (data.aborted) addLog('Robot', 'warn', 'Auto-forward cancelled by user');
-    else addLog('Robot', 'warn', 'Auto-forward timed out before reaching 2m',
+    if (data.done) addLog('Robot', 'ok', `Auto-${word} complete — ${data.traveled_m} m traveled`);
+    else if (data.aborted) addLog('Robot', 'warn', `Auto-${word} cancelled by user`);
+    else addLog('Robot', 'warn', `Auto-${word} timed out before reaching 2m`,
       'Check wheel odometry: /api/wheel_odom. Robot base must be online.');
   } catch (e) {
     msg = 'Error';
-    addLog('Robot', 'err', 'Auto-forward request failed: ' + (e.message || 'unknown'),
+    addLog('Robot', 'err', `Auto-${word} request failed: ` + (e.message || 'unknown'),
       'Ensure serve.py is running and /api/fwd2m is reachable.');
   }
   finally {
     clearInterval(_dispInterval);
     _fwdInterval = null;
-    if (btn) { btn.disabled = false; btn.classList.remove('running'); }
+    btns.forEach(b => { if (b) b.disabled = false; });
+    if (btn) btn.classList.remove('running');
     if (lbl) lbl.textContent = msg;
     setTimeout(_updateFwd2mLabel, 2000);
   }
@@ -2391,83 +2399,104 @@ function applySettings() {
 // ═══════════════════════════════════════════════════════════════
 // ACTUATOR HANDSHAKE (Auger / Planter / Both)
 //
-// The sidebar buttons and the PLC-tab "Command" toggles drive the SAME
-// AMR↔PLC handshake registers and share one state:
-//   • Activate auger   → set %MW5110 bit 0   (AMR→PLC "start sequence")
-//   • Activate planter → set %MW5111 bit 0
-//   • Done → the PLC sets the "Cycle Complete" status bit
-//     (%MW5100 bit 2 / %MW5101 bit 2); we then auto-clear the command
-//     register so the button releases and is ready for the next press.
-// Everything is driven from the 500 ms _pollPlc() loop (the single source
-// of truth for the %MW5100–5112 block), so the two UIs never disagree.
+// Pressing a button FIRES one cycle: a momentary start pulse on the AMR→PLC
+// command word (auger %MW5110 bit 0, planter %MW5111 bit 0 — written 1 then
+// self-cleared to 0 server-side, so the machine can't free-run on a latched bit).
+//
+// The button then tracks the cycle via the "Clear of Ground" status bit
+// (auger %MW5100 bit 1, planter %MW5101 bit 1): 1 = implement home/raised,
+// 0 = down doing the cycle. A full cycle is 1 → 0 (started, working) → 1
+// (finished). So the button shows "Working" from the press until Clear-of-Ground
+// returns to 1, then pops back to Idle. All state changes come from the 500 ms
+// _pollPlc() loop, so the sidebar and PLC-tab buttons never disagree.
+//
+// (The old %MW5100/5101 bit 2 "Cycle Complete" is latched high even at idle on
+// this machine — useless as a per-cycle edge — so we do NOT use it. Manual/HMI
+// motion, and the automated cycle, both move Clear-of-Ground.)
 // ═══════════════════════════════════════════════════════════════
 let _plantMarkers = [];
-let _augerCompletePrev = false, _planterCompletePrev = false;
+const _COG_START_TIMEOUT = 8000;    // ms: Clear-of-Ground must drop after firing, or the cycle never started
+const _COG_RUN_TIMEOUT   = 180000;  // ms: overall cap once the cycle is running
+// Per-actuator arming state. armed = firing/working; ran = seen Clear-of-Ground drop.
+const _act = {
+  auger:   { armed:false, ran:false, firedAt:0, reg:5110, word:'mw5100', name:'Auger' },
+  planter: { armed:false, ran:false, firedAt:0, reg:5111, word:'mw5101', name:'Planter' },
+};
 
-// Sidebar buttons → toggle the same handshake command registers as the PLC tab.
+// Sidebar + PLC-tab buttons → fire one momentary start pulse and arm the watcher.
 function toggleActuator(which) {
+  if (which === 'both') { _fireActuator('auger'); _fireActuator('planter'); return; }
+  _fireActuator(which);
+}
+function _fireActuator(which) {
   if (_plcConn !== true) { showToast('PLC offline', true); return; }
-  if (which === 'auger')   { _toggle(5110, 'mw5110', 1); return; }
-  if (which === 'planter') { _toggle(5111, 'mw5111', 1); return; }
-  if (which === 'both') {
-    // If either command is active, clear both; otherwise start both together.
-    const anyOn = ((_cur.mw5110 ?? 0) & 1) || ((_cur.mw5111 ?? 0) & 1);
-    const target = anyOn ? 0 : 1;
-    _setCmd(5110, 'mw5110', target);
-    _setCmd(5111, 'mw5111', target);
-  }
+  const a = _act[which];
+  a.armed = true; a.ran = false; a.firedAt = Date.now();
+  _syncActuatorButtons(); _applyCmds(_cur);
+  _addLog('lw', `${a.name}: fired start pulse (%MW${a.reg} bit0 1 → 0)`);
+  _doWrite(a.reg, 1, { pulse: true }).then(d => {
+    if (d && d.success === false) {
+      a.armed = false; _syncActuatorButtons(); _applyCmds(_cur);
+      showToast(`${a.name} start failed`, true);
+    }
+  });
 }
 
-// Mirror the live command-bit state onto the three sidebar buttons.
+// Mirror the armed (working) state onto the three sidebar buttons.
 function _syncActuatorButtons() {
   const online = _plcConn === true;
-  const aOn = online && !!((_cur.mw5110 ?? 0) & 1);
-  const pOn = online && !!((_cur.mw5111 ?? 0) & 1);
-  _setActBtn('augerBtn',   'auger-status',   online, aOn);
-  _setActBtn('planterBtn', 'planter-status', online, pOn);
-  _setActBtn('bothBtn',    'both-status',    online, aOn || pOn);
+  _setActBtn('augerBtn',   'auger-status',   online, _act.auger.armed);
+  _setActBtn('planterBtn', 'planter-status', online, _act.planter.armed);
+  _setActBtn('bothBtn',    'both-status',    online, _act.auger.armed || _act.planter.armed);
 }
 function _setActBtn(btnId, statusId, online, on) {
   const btn = _g(btnId), st = _g(statusId);
   if (btn) { btn.disabled = !online; btn.classList.toggle('active', on); }
   if (st) {
-    st.textContent = !online ? 'Offline' : (on ? 'Running' : 'Idle');
+    st.textContent = !online ? 'Offline' : (on ? 'Working' : 'Idle');
     st.className = 'act-status' + (online && on ? ' cycle' : '');
   }
 }
 
-// Auto-release on the Cycle-Complete handshake bit. Called every poll from
+// Track each armed cycle via the Clear-of-Ground bit. Called every poll from
 // _pollPlc() with the freshly-read handshake registers.
 function _checkActuatorCompletion(data) {
-  if (data.connected === false) { _augerCompletePrev = _planterCompletePrev = false; return; }
-
-  const augerComplete   = data.mw5100 != null ? !!((data.mw5100 >> 2) & 1) : false;
-  const planterComplete = data.mw5101 != null ? !!((data.mw5101 >> 2) & 1) : false;
-  const augerCmd   = !!(((data.mw5110 ?? _cur.mw5110) ?? 0) & 1);
-  const planterCmd = !!(((data.mw5111 ?? _cur.mw5111) ?? 0) & 1);
-
-  // Rising edge of "Cycle Complete" while our start command is still set → done.
-  if (augerCmd && augerComplete && !_augerCompletePrev) {
-    _clearActuator(5110, 'mw5110');
-    showToast('Auger complete');
-    _addLog('lc', 'Auger cycle complete (%MW5100 bit 2) — %MW5110 auto-cleared');
-    addLog('PLC', 'ok', 'Auger cycle complete — command released, ready for next press');
+  if (data.connected === false) {
+    _act.auger.armed = _act.planter.armed = false;
+    _act.auger.ran   = _act.planter.ran   = false;
+    return;
   }
-  if (planterCmd && planterComplete && !_planterCompletePrev) {
-    _clearActuator(5111, 'mw5111');
-    showToast('Planter complete');
-    _addLog('lc', 'Planter cycle complete (%MW5101 bit 2) — %MW5111 auto-cleared');
-    _logPlant();
-  }
-  _augerCompletePrev   = augerComplete;
-  _planterCompletePrev = planterComplete;
+  _updateActuator('auger',   data.mw5100);
+  _updateActuator('planter', data.mw5101);
+  _syncActuatorButtons();
 }
-
-// Clear a handshake command register (release the button) and refresh both UIs.
-function _clearActuator(reg, key) {
-  _doWrite(reg, 0).then(d => {
-    if (d?.success) { _cur[key] = d.readback ?? 0; _applyCmds(_cur); _syncActuatorButtons(); }
-  });
+function _updateActuator(which, statusWord) {
+  const a = _act[which];
+  if (!a.armed) return;
+  const now = Date.now();
+  if (statusWord != null) {
+    const clearOfGround = !!((statusWord >> 1) & 1);   // bit1: 1 = home/raised, 0 = down/working
+    if (!clearOfGround) {
+      a.ran = true;                                     // left home → cycle running
+    } else if (a.ran) {
+      a.armed = false; a.ran = false;                   // back home → finished
+      showToast(`${a.name} cycle complete`);
+      _addLog('lc', `${a.name} cycle complete (Clear-of-Ground ${a.word==='mw5100'?'%MW5100':'%MW5101'} bit1 → 1)`);
+      addLog('PLC', 'ok', `${a.name} cycle complete — ready for next press`);
+      if (which === 'planter') _logPlant();
+      return;
+    }
+  }
+  // Safety disarms so a non-responding machine can't stick the button "Working".
+  if (!a.ran && now - a.firedAt > _COG_START_TIMEOUT) {
+    a.armed = false;
+    showToast(`${a.name} did not start`, true);
+    _addLog('le2', `${a.name}: Clear-of-Ground never dropped — cycle did not start (check Enable + Auto).`);
+  } else if (a.ran && now - a.firedAt > _COG_RUN_TIMEOUT) {
+    a.armed = false; a.ran = false;
+    showToast(`${a.name} timed out`, true);
+    _addLog('le2', `${a.name}: Clear-of-Ground never returned to 1 within ${_COG_RUN_TIMEOUT/1000}s.`);
+  }
 }
 
 // Planter finished a cycle → count it, drop a marker, log locally, push to server.
@@ -2521,10 +2550,10 @@ const STATUS_REGS = [
     bits:[{bit:0,label:'Sequence Start Handshake'},{bit:1,label:'Clear of Ground'},{bit:2,label:'Cycle Complete'}] },
 ];
 const CMD_REGS = [
-  { key:'mw5110', reg:5110, label:'Auger Command', type:'toggle', mask:1,
-    onLabel:'ACTIVE — Auger Start Set', offLabel:'Set Auger Start Sequence' },
-  { key:'mw5111', reg:5111, label:'Planter Command', type:'toggle', mask:1,
-    onLabel:'ACTIVE — Planter Start Set', offLabel:'Set Planter Start Sequence' },
+  { key:'mw5110', reg:5110, label:'Auger Command', type:'fire', which:'auger',
+    fireLabel:'Fire Auger Cycle', busyLabel:'Auger working…' },
+  { key:'mw5111', reg:5111, label:'Planter Command', type:'fire', which:'planter',
+    fireLabel:'Fire Planter Cycle', busyLabel:'Planter working…' },
   { key:'mw5112', reg:5112, label:'AMR State', type:'state',
     states:[{bit:0,value:1,label:'Stationary'},{bit:1,value:2,label:'Moving'}] },
 ];
@@ -2548,7 +2577,9 @@ function _buildPlcUI() {
   CMD_REGS.forEach(r => {
     const card = document.createElement('div'); card.className = 'reg-card';
     let inner = `<div class="reg-hdr"><span class="reg-name">${r.label}</span><span class="reg-addr">%MW${r.reg}</span><span class="reg-cur" id="cv-${r.key}">—</span></div>`;
-    if (r.type === 'toggle') {
+    if (r.type === 'fire') {
+      inner += `<div class="cmd-area"><button class="cmd-btn" id="cb-${r.key}" onclick="_fireActuator('${r.which}')">▶  ${r.fireLabel}</button></div>`;
+    } else if (r.type === 'toggle') {
       inner += `<div class="cmd-area"><button class="cmd-btn" id="cb-${r.key}" onclick="_toggle(${r.reg},'${r.key}',${r.mask})">▶  ${r.offLabel}</button></div>`;
     } else {
       inner +=
@@ -2584,7 +2615,11 @@ function _applyCmds(data) {
 
   CMD_REGS.forEach(r => {
     const v = data[r.key]; _set('cv-'+r.key, _fmtV(v));
-    if (r.type === 'toggle') {
+    if (r.type === 'fire') {
+      const busy = online && _act[r.which] && _act[r.which].armed;
+      const btn = _g('cb-'+r.key);
+      if (btn) { btn.className = 'cmd-btn'+(busy?' c-active':''); btn.textContent = busy?'■  '+r.busyLabel:'▶  '+r.fireLabel; }
+    } else if (r.type === 'toggle') {
       const on = online && v != null && !!(v & r.mask);
       const btn = _g('cb-'+r.key);
       if (btn) { btn.className = 'cmd-btn'+(on?' c-active':''); btn.textContent = on?'■  '+r.onLabel:'▶  '+r.offLabel; }
@@ -2619,11 +2654,13 @@ function _addLog(type, msg) {
 }
 function _clearLog() { _logBuf = []; _addLog('li', 'Log cleared.'); }
 
-async function _doWrite(reg, value) {
+async function _doWrite(reg, value, opts) {
   try {
-    const d = await _post('/api/amr/write', { reg, value }).then(r => r.json());
+    const body = { reg, value };
+    if (opts && opts.pulse) body.pulse = true;
+    const d = await _post('/api/amr/write', body).then(r => r.json());
     if (d.success) {
-      _addLog('lw', `wrote %MW${reg} = ${value}  (FC06 reg ${reg-WR})`);
+      _addLog('lw', `${d.pulsed?'pulsed':'wrote'} %MW${reg} = ${value}${d.pulsed?' → 0':''}  (FC06 reg ${reg-WR})`);
       if (d.readback != null) _addLog('lw', `readback %MW${reg} = ${d.readback}  (FC04 reg ${reg-RD})  ${d.confirmed?'✓ confirmed':'✗ mismatch'}`);
     } else { _addLog('le2', `FAILED write %MW${reg} = ${value}: ${d.message}`); }
     return d;

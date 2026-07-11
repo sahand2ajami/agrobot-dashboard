@@ -1554,9 +1554,13 @@ class PlcClient:
         out["port"] = self.port
         return out
 
-    def amr_write(self, plc_addr, value):
+    def amr_write(self, plc_addr, value, pulse=False, hold_s=0.3):
         """FC06 write one AMR-owned handshake word, then read it back to confirm.
-        Only %MW5110/5111/5112 are writable — everything else is PLC-owned."""
+        Only %MW5110/5111/5112 are writable — everything else is PLC-owned.
+
+        `pulse=True` (momentary): write `value`, hold ≥1 PLC scan (`hold_s`), then
+        write 0 — a rising-edge start request that never stays latched (a held
+        %MW5110/5111 bit makes the machine free-run). Ignored when value == 0."""
         try:
             plc_addr = int(plc_addr)
             value    = int(value) & 0xFFFF
@@ -1566,19 +1570,27 @@ class PlcClient:
         if plc_addr not in AMR_WRITABLE:
             return {"connected": True, "success": False,
                     "message": f"%MW{plc_addr} is not a writable handshake register"}
+        do_pulse = bool(pulse) and value != 0
         def fn():
             reg = plc_addr - _FENET_WRITE_WORD_BASE
             res = self._client.write_register(reg, value)
             ok  = not res.isError()
+            if ok and do_pulse:
+                time.sleep(hold_s)
+                res0 = self._client.write_register(reg, 0)
+                ok   = not res0.isError()
+            expected = 0 if do_pulse else value
             rb  = self._read_words_raw(plc_addr, 1)
             readback = rb[0] if rb else None
             return {"success": ok,
-                    "message": (f"wrote %MW{plc_addr} = {value} (FC06 reg {reg})"
+                    "message": (f"{'pulsed' if do_pulse else 'wrote'} %MW{plc_addr} = "
+                                f"{value}{' → 0' if do_pulse else ''} (FC06 reg {reg})"
                                 if ok else f"FC06 error at reg {reg}: {res}"),
                     "reg":           f"%MW{plc_addr}",
                     "value_written": value,
+                    "pulsed":        do_pulse,
                     "readback":      readback,
-                    "confirmed":     (readback == value) if readback is not None else None}
+                    "confirmed":     (readback == expected) if readback is not None else None}
         return self._op(fn)
 
     def amr_set_moving(self, moving):

@@ -128,6 +128,71 @@ TELEM = TelemetryStore(settings_defaults={
 })
 
 
+def drive_distance(direction, speed, meters=2.0, cancel=None):
+    """Server-side fixed-distance auto-drive shared by /api/fwd2m and the
+    battery-test auto-cycle. Runs a tight 50 Hz encoder loop (speed has no
+    effect on accuracy) and blocks until the target distance is reached, an
+    external velocity command overrides us, `cancel()` returns True, or a 30 s
+    deadline elapses. Writes velocity through TELEM.vel like a teleop command,
+    so the same deadman applies. Returns
+    {done, aborted, traveled_m[, error]} — error="encoder" if odom is stale.
+
+    `direction`: "forward" | "backward". `cancel`: optional zero-arg predicate
+    polled each tick so a caller (the battery test) can abort mid-drive.
+    """
+    sign  = -1.0 if direction == "backward" else 1.0
+    speed = max(0.05, min(MAX_LIN_INPUT, abs(speed)))
+
+    # Encoder calibration comes from the active chassis config; the module
+    # constant is only the fallback when no chassis is loaded (tests).
+    ppm = Handler.chassis.pulse_per_m if Handler.chassis is not None else PULSE_PER_M
+    target_pulses = meters * ppm
+    slow_pulses   = 0.5 * ppm   # final 0.5 m: crawl to kill coasting
+
+    start_l, start_r, last_odom, _ = TELEM.odom.snapshot()
+    if last_odom == 0 or (time.monotonic() - last_odom) > 3.0:
+        return {"done": False, "aborted": False, "traveled_m": 0.0, "error": "encoder"}
+
+    cmd_speed = sign * speed   # what we last wrote to vel.lin (signed)
+    TELEM.vel.set_command(cmd_speed, 0.0)
+
+    deadline = time.monotonic() + 30.0
+    traveled = 0.0
+    aborted  = False
+
+    try:
+        while time.monotonic() < deadline:
+            time.sleep(0.02)                   # 50 Hz encoder check
+
+            if cancel is not None and cancel():
+                aborted = True
+                break
+
+            cur_l, cur_r, _, _ = TELEM.odom.snapshot()
+            # Distance travelled in the *commanded* direction (always ≥0 as
+            # the robot progresses), so the planner is direction-agnostic.
+            traveled = sign * (((cur_l - start_l) + (cur_r - start_r)) / 2.0)
+
+            next_speed = auto_drive.plan_speed(
+                traveled, target_pulses, slow_pulses, speed, FWD_SLOW_SPEED)
+            if next_speed is None:   # target distance reached
+                break
+
+            with TELEM.vel.lock:
+                # Abort if an external command overrode our last commanded speed
+                if abs(TELEM.vel.lin - cmd_speed) > 0.01:
+                    aborted = True
+                    break
+                TELEM.vel.lin  = sign * next_speed
+                TELEM.vel.last = time.monotonic()   # keep deadman alive
+            cmd_speed = sign * next_speed
+    finally:
+        TELEM.vel.set_command(0.0, 0.0)   # single stop, then the deadman idles
+
+    done = (not aborted) and (traveled >= target_pulses)
+    return {"done": done, "aborted": aborted, "traveled_m": round(traveled / ppm, 3)}
+
+
 # ---------------------------------------------------------------------------
 # HTTP handler
 # ---------------------------------------------------------------------------
@@ -715,58 +780,16 @@ class Handler(SimpleHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", 0))
             body   = self.rfile.read(length) if length else b"{}"
             data   = json.loads(body)
-            speed  = float(data.get("speed", 0.5))
-            speed  = max(0.05, min(MAX_LIN_INPUT, abs(speed)))
+            speed     = float(data.get("speed", 0.5))
+            direction = "backward" if data.get("direction") == "backward" else "forward"
         except Exception as exc:
             self._json_response(400, json.dumps({"error": str(exc)}).encode())
             return
 
-        # Encoder calibration comes from the active chassis config; the module
-        # constant is only the fallback when no chassis is loaded (tests).
-        ppm = Handler.chassis.pulse_per_m if Handler.chassis is not None else PULSE_PER_M
-        target_pulses = 2.0 * ppm   # the full 2 m drive
-        slow_pulses   = 0.5 * ppm   # final 0.5 m: crawl to kill coasting
-
-        start_l, start_r, last_odom, _ = TELEM.odom.snapshot()
-
-        if last_odom == 0 or (time.monotonic() - last_odom) > 3.0:
+        result = drive_distance(direction, speed)
+        if result.get("error") == "encoder":
             self._json_response(503, b'{"error":"Encoder not connected"}')
             return
-
-        cmd_speed = speed   # what we last wrote to vel.lin
-
-        TELEM.vel.set_command(cmd_speed, 0.0)
-
-        deadline = time.monotonic() + 30.0
-        traveled = 0.0
-        aborted  = False
-
-        try:
-            while time.monotonic() < deadline:
-                time.sleep(0.02)                   # 50 Hz encoder check
-
-                cur_l, cur_r, _, _ = TELEM.odom.snapshot()
-                traveled = ((cur_l - start_l) + (cur_r - start_r)) / 2.0
-
-                next_speed = auto_drive.plan_speed(
-                    traveled, target_pulses, slow_pulses, speed, FWD_SLOW_SPEED)
-                if next_speed is None:   # target distance reached
-                    break
-
-                with TELEM.vel.lock:
-                    # Abort if an external command overrode our last commanded speed
-                    if abs(TELEM.vel.lin - cmd_speed) > 0.01:
-                        aborted = True
-                        break
-                    TELEM.vel.lin  = next_speed
-                    TELEM.vel.last = time.monotonic()   # keep deadman alive
-                cmd_speed = next_speed
-        finally:
-            TELEM.vel.set_command(0.0, 0.0)   # single stop, then the deadman idles
-
-        done   = (not aborted) and (traveled >= target_pulses)
-        result = {"done": done, "aborted": aborted,
-                  "traveled_m": round(traveled / ppm, 3)}
         self._json_response(200, json.dumps(result).encode())
 
     def _serve_track_save(self):

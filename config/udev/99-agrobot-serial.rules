@@ -1,0 +1,22 @@
+# Agrobot — stable /dev names for serial devices.
+#
+# Why: robot_base_node and the GNSS reader both live on USB serial. The kernel
+# assigns ttyUSB0/ttyUSB1/… in enumeration order, which is NOT stable across
+# reboots or replugs — so the GNSS receiver could take /dev/ttyUSB0 (the port
+# the chassis driver expects) and collide with it, knocking the chassis offline.
+# Pinning each device to a fixed symlink by its unique USB serial removes the
+# race entirely.
+#
+# Install:
+#   sudo cp config/udev/99-agrobot-serial.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+# Verify:
+#   ls -l /dev/agrobot_base   # -> ../ttyUSBn
+#
+# Chassis base controller — FTDI FT232R, unique serial BG046UTU.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", ATTRS{serial}=="BG046UTU", SYMLINK+="agrobot_base", GROUP="dialout", MODE="0660"
+#
+# GNSS receiver (GeoAstra RTU608BT) — not connected yet. When you plug it in,
+# find its identifiers with:  udevadm info -q property -n /dev/ttyUSBn | grep ID_
+# then uncomment and fill ATTRS{serial} (and idVendor/idProduct) below:
+# SUBSYSTEM=="tty", ATTRS{idVendor}=="XXXX", ATTRS{idProduct}=="YYYY", ATTRS{serial}=="ZZZZ", SYMLINK+="gnss", GROUP="dialout", MODE="0660"

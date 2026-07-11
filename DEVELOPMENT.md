@@ -40,7 +40,8 @@ pytest tests/                      # no hardware / no ROS required
 | `dashboard/chassis.py` | Chassis abstraction (see below). Transitional home; carries the `sys.path` shim that makes `agrobot_dashboard` importable from a checkout. |
 | `dashboard/plc_client.py` | The ONE Modbus TCP client to the PLC (register map `_REG`, command bit tables, AMR handshake block). |
 | `dashboard/serve_plc.py` | Adds `/api/amr/*` + `/api/hmi/*` (HMI mirror: read screens + control-page writes) routes + the %MW5112 auto-write and jog-deadman threads via `add_route` (no patching); serves `plc_combined.html`. |
-| `dashboard/index.html`, `plc_combined.html`, `dashboard/js/teleop.js` | The two pages + the shared teleop transport (the only JS allowed to POST `/api/cmd_vel`; clamps to chassis ceilings; pages hook in via `window.TELEOP_HOOKS`). |
+| `dashboard/serve_battery.py` | Adds `/api/battery_test/*` routes (and reuses `serve_plc`'s `/api/amr/{poll,write}` + `%MW5112` auto-writer, so the page's manual auger/planter/both buttons work) + serves `battery_test.html` via `add_route` (no patching). Owns the `BatteryTest` controller: a background thread that repeats **forward 2 m → auger → planter → backward 2 m → auger → planter** (drives via `serve.drive_distance`; auger/planter via `Handler.plc`, marking the AMR stationary/moving on `%MW5112`) until the pack voltage hits the cutoff. Strictly sequential — no drive/actuator overlap. Each plant fires a **momentary** start pulse (`amr_write(pulse=True)`, so no latched bit → no free-run) and waits for the cycle via the **Clear-of-Ground** handshake bit (`%MW5100`/`5101` bit1: 1 home → 0 working → 1 done — see [[agrobot-auger-planter-done-signal]]), with a `_PLANT_START_TIMEOUT` (never left home → cycle didn't start) and the `plant_timeout` hard cap so a machine not in AMR-gated cycle mode can never hang the test; no PLC → plant steps no-op and it degrades to fwd/back only. Tracks fwd/back/cycle + auger/planter/plant-timeout counters. |
+| `dashboard/index.html`, `plc_combined.html`, `battery_test.html`, `dashboard/js/teleop.js` | The three pages + the shared teleop transport (the only JS allowed to POST `/api/cmd_vel`; clamps to chassis ceilings; pages hook in via `window.TELEOP_HOOKS`). |
 | `src/avatar_robot_base/` | ROS package: `robot_base_node` (Modbus RTU driver), `protocol.py` (pure frame build/parse — tested without rclpy), `odom_calculation` (`car_type` ROS param: T3/T13/T17E), one parameterized `robot_launch.py`. |
 | `tests/` | Domain units, in-process HTTP endpoint tests, PLC register-map integrity, protocol frames. |
 
@@ -93,13 +94,14 @@ separate (jackal keeps cosmetic planter/auger buttons with no PLC).
 | GET | `/api/config` | Chassis name, comms, features, limits, scaling, battery gauge range, `ui.wide`. |
 | GET | `/api/chassis_battery` | `{voltage_v, connected}` — median-smoothed pack voltage (agrobot). |
 | POST | `/api/cmd_vel` | `{linear_x, angular_z}`; 400 if beyond the active chassis's limits. |
-| POST | `/api/fwd2m` | Server-side 2 m auto-drive (50 Hz encoder loop, `pulse_per_m` from the chassis YAML, two-phase crawl finish; stop decision on the server). 503 when `features.fwd2m` is false. |
+| POST | `/api/fwd2m` | Server-side 2 m auto-drive (50 Hz encoder loop, `pulse_per_m` from the chassis YAML, two-phase crawl finish; stop decision on the server). Body `{speed, direction: forward\|backward}`. 503 when `features.fwd2m` is false. Shares `serve.drive_distance` with the battery test. |
+| GET/POST | `/api/battery_test/{status,start,stop}` | Registered by `serve_battery.py`. `start {speed, stop_v?, plant_timeout?}` runs the server-side **forward 2 m → auger → planter → backward 2 m → auger → planter** endurance loop until the pack voltage ≤ `stop_v` (default `battery_min_v`); `stop` kills the loop, stops the robot, and releases the auger/planter command bits; `status` → `{running, phase (idle\|forward\|plant\|backward), plant_which, forward, backward, cycles, augers, planters, plant_timeouts, speed}`. 503 when `features.fwd2m` is false. |
 | GET | `/api/wheel_odom`, `/api/gnss`, `/api/settings`, `/api/events` | Telemetry / settings / event log. |
 | GET | `/api/camera/*`, `/api/zed/*`, `/api/detection/*` | Rear/front MJPEG (raw or with YOLO boxes) + detection JSON `{ts, count, detections:[{label, confidence, distance_m, bbox}]}`; detection runs on demand only (3 s idle timeout). |
 | POST | `/api/plc/{auger,planter,both}` | `{command: START\|STOP}` → handshake words %MW5110/%MW5111. |
 | POST | `/api/plc/machine`, `/api/plc/robot` | Pulsed pushbutton words (allow-listed commands, unknown → 400). |
 | GET | `/api/plc/{status,sequence,auger_motor,banner,tags}` | Machine status / sequence detail / auger motor / HMI banner / tag+symbol reference (works PLC-down). |
-| GET/POST | `/api/amr/{poll,ping,write}` | AMR↔PLC handshake block %MW5100–5112 (registered by `serve_plc.py`). |
+| GET/POST | `/api/amr/{poll,ping,write}` | AMR↔PLC handshake block %MW5100–5112 (registered by `serve_plc.py`). `write {reg,value,pulse?}` — `pulse:true` writes `value` then self-clears to 0 (momentary start for %MW5110/5111; a latched bit makes the machine free-run). |
 | GET | `/api/hmi/{screens,read}` | Live mirror of the machine HMI screens (registered by `serve_plc.py`; see [hmi.md](docs/hmi.md)). `read?screen=<id>` returns each screen's panels with a live value per row; numeric fields carry the C-more fractional-digit formatting. |
 | POST | `/api/hmi/press`, `/api/hmi/jog` | Control-page writes: `press {block,button}` pulses a momentary axis/motor pushbutton; `jog {block,button,action}` holds a jog bit with a server deadman. Allow-listed PB words (%MW5400–6500, FC06); writes below %MW5000 refused. 503 off-chassis, 400 unknown button. |
 
@@ -191,8 +193,15 @@ wrong map cannot silently come back.
 
 **Semantics**: `success:true` means the **Modbus write landed, not that the
 machine moved** — the ladder gates real motion on Auto mode + subsystem
-enables + safety, so the UI confirms completion by polling
-`get_sequence_detail` until `*_in_cycle` goes true→false. Pushbuttons are
+enables + safety. **Auger/planter completion is tracked via the Clear-of-Ground
+handshake bit** (`%MW5100`/`5101` bit1: 1 home → 0 working → 1 done), *not*
+`*_in_cycle`/`*_complete` — on this machine those only arm in the automated
+AMR cycle and `%MW5100/5101` bit2 "Complete" is latched high, so it gives no
+usable edge (bench-confirmed; see [[agrobot-auger-planter-done-signal]]). The
+auger/planter buttons and the battery test fire a **momentary** start pulse
+(`amr_write(pulse=True)` — write 1 → hold ≥1 scan → write 0; a latched
+%MW5110/5111 bit makes the machine free-run) and show "Working" until
+Clear-of-Ground returns to 1. Pushbuttons are
 pulsed (write bit value → hold 100 ms → write 0): machine via
 %MW5000/%MW5001, robot via %MW6200, auger motor via %MW6500. FEnet offsets:
 FC04 reads = addr−1000, FC06 writes = addr−5000, bit reads FC02 at offset 0;
@@ -211,6 +220,7 @@ LS Electric's XG5000 simulator (Windows; runs the real ladder).
 | `./launch_dashboard.sh [--chassis X] [--port N] [--headless] [--rear-camera src]` | Full dashboard for chassis X. `--headless` (or `DASHBOARD_HEADLESS=1`) serves only — view from another device at `http://<jetson-ip>:<port>`. |
 | `./launch_dashboard_wide.sh` | Same, with `serve.py --wide` (HD2K front ZED, letterboxed UI). No separate server or HTML fork. |
 | `./launch_dashboard_plc.sh` | Same + `/api/amr/*` and the 4-tab `plc_combined.html` (default port 8769) via `serve_plc.py`. |
+| `./launch_dashboard_battery_test.sh` | Battery drain-test page (`battery_test.html`, default port 8770) via `serve_battery.py`: 2 m Fwd/Bwd, **manual auger/planter/both buttons** (momentary fire + Clear-of-Ground tracking, drives locked out while an actuator runs), WASD, battery %, speed, Auto endurance loop (forward → auger → planter → backward → auger → planter), big always-live STOP + fwd/back/cycle/auger/planter counters. Every cycle step runs manually or automatically. |
 | `./start_all.sh`, `./teleop.sh` | agrobot-only ROS dev helpers (chassis stack + RViz / keyboard teleop); they exit early if the active chassis is not `agrobot`. |
 
 ---
