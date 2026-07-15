@@ -125,7 +125,12 @@ TELEM = TelemetryStore(settings_defaults={
     'maxAngular':  0.5,    # max turn rate rad/s
     'modbusSpeed': 1500,   # raw Modbus units for Normal preset (mirrors slLinear/4 * LINEAR_SCALE)
     'seedlingType': '',    # species label appended to every planted-seedling record
+    'driveDistance': 2.0,  # user-configurable Fwd/Bwd auto-drive distance (m); source of truth for /api/fwd2m
 })
+
+# Bounds for the configurable Fwd/Bwd auto-drive distance (metres).
+DRIVE_DISTANCE_MIN = 0.1
+DRIVE_DISTANCE_MAX = 20.0
 
 
 def drive_distance(direction, speed, meters=2.0, cancel=None):
@@ -782,11 +787,18 @@ class Handler(SimpleHTTPRequestHandler):
             data   = json.loads(body)
             speed     = float(data.get("speed", 0.5))
             direction = "backward" if data.get("direction") == "backward" else "forward"
+            # Distance comes from the saved setting (source of truth); the body may
+            # override it, but either way it is clamped to the allowed range.
+            with TELEM.settings.lock:
+                meters = float(TELEM.settings.data.get("driveDistance", 2.0))
+            if "distance" in data:
+                meters = float(data["distance"])
+            meters = max(DRIVE_DISTANCE_MIN, min(DRIVE_DISTANCE_MAX, meters))
         except Exception as exc:
             self._json_response(400, json.dumps({"error": str(exc)}).encode())
             return
 
-        result = drive_distance(direction, speed)
+        result = drive_distance(direction, speed, meters=meters)
         if result.get("error") == "encoder":
             self._json_response(503, b'{"error":"Encoder not connected"}')
             return
@@ -966,7 +978,8 @@ class Handler(SimpleHTTPRequestHandler):
 
         updates = {}
         for key, lo, hi in [('maxLinear', 0.05, 15.0), ('maxAngular', 0.05, 15.0),
-                             ('modbusSpeed', 0, 32767)]:
+                             ('modbusSpeed', 0, 32767),
+                             ('driveDistance', DRIVE_DISTANCE_MIN, DRIVE_DISTANCE_MAX)]:
             if key in data:
                 try:
                     v = float(data[key])

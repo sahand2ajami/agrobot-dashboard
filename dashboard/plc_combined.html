@@ -472,6 +472,11 @@ header {
 .sl-row { margin-bottom: 18px; }
 .sl-label { display: flex; justify-content: space-between; align-items: baseline; font-size: 17px; font-weight: 600; color: var(--muted); margin-bottom: 7px; }
 .sl-val { font-family: var(--mono); color: var(--text); font-weight: 700; font-size: 18px; }
+.sl-num { font-family: var(--mono); color: var(--text); font-weight: 700; font-size: 18px; width: 4.2em; text-align: right;
+  background: #fff; border: 1px solid var(--border); border-radius: 5px; padding: 2px 6px; }
+.sl-num:focus { outline: none; border-color: var(--teal-d); }
+.sl-num::-webkit-inner-spin-button { opacity: 1; }
+.sl-unit { font-family: var(--mono); color: var(--muted); font-weight: 700; font-size: 18px; margin-left: 4px; }
 input[type=range] { width: 100%; accent-color: var(--teal); height: 6px; cursor: pointer; }
 .sl-preview { font-size: 14px; color: var(--dim); margin-top: 5px; font-family: var(--mono); background: #f8f8f8; padding: 6px 10px; border-radius: 4px; }
 .apply-btn {
@@ -777,7 +782,7 @@ input[type=range] { width: 100%; accent-color: var(--teal); height: 6px; cursor:
         </div>
       </div>
 
-      <!-- Extra controls: 2m Fwd/Bwd (row 1), REC/Det (row 2) -->
+      <!-- Extra controls: configurable Fwd/Bwd (row 1), REC/Det (row 2) -->
       <div class="extra-controls">
         <button class="ctrl-btn" id="fwd2mBtn" onclick="moveForward2m('forward')">2m Fwd</button>
         <button class="ctrl-btn" id="bwd2mBtn" onclick="moveForward2m('backward')">2m Bwd</button>
@@ -995,7 +1000,11 @@ input[type=range] { width: 100%; accent-color: var(--teal); height: 6px; cursor:
           <div class="sl-row">
             <div class="sl-label">
               <span>Modbus Motor Speed</span>
-              <span class="sl-val" id="slModbusVal">750</span>
+              <span>
+                <input type="number" class="sl-num" id="slModbusInput" min="0" max="32767" step="50" value="750"
+                       oninput="onModbusInput(this.value)" onchange="onModbusInput(this.value)">
+                <span class="sl-unit">units</span>
+              </span>
             </div>
             <input type="range" id="slModbus" min="0" max="32767" step="50" value="750" oninput="onModbusSlider(this.value)">
             <div class="sl-preview">Normal: <span id="prevNormU">750</span> units (<span id="prevNormMs">0.25</span> m/s) &nbsp;·&nbsp; Fast: <span id="prevFastU">1125</span> &nbsp;·&nbsp; Slow: <span id="prevSlowU">375</span></div>
@@ -1004,7 +1013,11 @@ input[type=range] { width: 100%; accent-color: var(--teal); height: 6px; cursor:
           <div class="sl-row">
             <div class="sl-label">
               <span>Forward Speed (max)</span>
-              <span class="sl-val" id="slLinVal">1.00 m/s</span>
+              <span>
+                <input type="number" class="sl-num" id="slLinInput" min="0.1" max="10.0" step="0.05" value="1.0"
+                       oninput="onLinearInput(this.value)" onchange="onLinearInput(this.value)">
+                <span class="sl-unit">m/s</span>
+              </span>
             </div>
             <input type="range" id="slLinear" min="0.1" max="10.0" step="0.05" value="1.0" oninput="onLinearSlider(this.value)">
             <div class="sl-preview">Slow: <span id="prevSlow">0.25</span> &nbsp;·&nbsp; Normal: <span id="prevNorm">0.50</span> &nbsp;·&nbsp; Fast: <span id="prevFast">1.00</span> m/s</div>
@@ -1013,9 +1026,26 @@ input[type=range] { width: 100%; accent-color: var(--teal); height: 6px; cursor:
           <div class="sl-row">
             <div class="sl-label">
               <span>Turn Speed (max angular)</span>
-              <span class="sl-val" id="slAngVal">0.50 rad/s</span>
+              <span>
+                <input type="number" class="sl-num" id="slAngInput" min="0.1" max="3.0" step="0.05" value="0.5"
+                       oninput="onAngularInput(this.value)" onchange="onAngularInput(this.value)">
+                <span class="sl-unit">rad/s</span>
+              </span>
             </div>
             <input type="range" id="slAngular" min="0.1" max="3.0" step="0.05" value="0.5" oninput="onAngularSlider(this.value)">
+          </div>
+
+          <div class="sl-row">
+            <div class="sl-label">
+              <span>Drive Distance (Fwd/Bwd buttons)</span>
+              <span>
+                <input type="number" class="sl-num" id="slDistInput" min="0.1" max="20.0" step="0.1" value="2.0"
+                       oninput="onDistanceInput(this.value)" onchange="onDistanceChange(this.value)">
+                <span class="sl-unit">m</span>
+              </span>
+            </div>
+            <input type="range" id="slDistance" min="0.1" max="20.0" step="0.1" value="2.0" oninput="onDistanceSlider(this.value)">
+            <div class="sl-preview">Type a value or drag the slider &mdash; sidebar <b>Fwd</b>/<b>Bwd</b> buttons move the robot this distance.</div>
           </div>
 
           <button class="apply-btn" id="applyBtn" onclick="applySettings()">Apply &amp; Update Robot</button>
@@ -1085,7 +1115,7 @@ const CFG = {
 // the UI must never carry its own copy (they used to drift).
 let MODBUS_LINEAR_SCALE = 3000;
 let PULSE_PER_M   = 3211;
-let TARGET_PULSES = 2.0 * PULSE_PER_M;
+let DRIVE_DISTANCE = 2.0;   // user-configurable Fwd/Bwd distance (m); from /api/settings
 window.CFG = CFG;   // read by /js/teleop.js for the velocity clamp
 
 let _battRange = { minV: 42, maxV: 58 };
@@ -1094,14 +1124,22 @@ fetch('/api/config').then(r => r.ok ? r.json() : {}).then(c => {
   if (c.limits?.maxLinear  != null) { CFG.maxLinear = c.limits.maxLinear; CFG.maxLinearBack = c.limits.maxLinear; CFG.hardMaxLinear = c.limits.maxLinear; }
   if (c.limits?.maxAngular != null) { CFG.maxAngular = c.limits.maxAngular; CFG.hardMaxAngular = c.limits.maxAngular; }
   if (c.scaling?.linearScale) MODBUS_LINEAR_SCALE = c.scaling.linearScale;
-  if (c.scaling?.pulsePerM)   { PULSE_PER_M = c.scaling.pulsePerM; TARGET_PULSES = 2.0 * PULSE_PER_M; }
+  if (c.scaling?.pulsePerM)   { PULSE_PER_M = c.scaling.pulsePerM; }
   if (c.battery?.minV != null) _battRange.minV = c.battery.minV;
   if (c.battery?.maxV != null) _battRange.maxV = c.battery.maxV;
+}).catch(() => {});
+
+// Pull the saved Fwd/Bwd distance on load so the sidebar buttons reflect it.
+fetch('/api/settings').then(r => r.ok ? r.json() : {}).then(s => {
+  if (s.driveDistance != null) { DRIVE_DISTANCE = s.driveDistance; _updateDriveDistanceUI(); }
 }).catch(() => {});
 
 // ── Helpers ─────────────────────────────────────────────────────
 const _g   = id => document.getElementById(id);
 const _set = (id, v) => { const e = _g(id); if (e) e.textContent = v; };
+// Like _set, but writes an <input>'s value — and never clobbers a field the
+// user is actively editing (so slider→field sync doesn't fight the caret).
+const _setInput = (id, v) => { const e = _g(id); if (e && document.activeElement !== e) e.value = v; };
 
 // _fetchWithTimeout, publishCmdVel and publishStop come from /js/teleop.js.
 const _post = (url, body) => fetch(url, {
@@ -1937,20 +1975,63 @@ function _updateFwd2mLabel() {
   const lbl = _g('fwd2mLabel'); if (lbl && !_fwdInterval) lbl.textContent = '';
 }
 
+// Clamp to the same range the server enforces (0.1–20 m).
+function _clampDist(v) {
+  v = parseFloat(v);
+  if (!isFinite(v)) return DRIVE_DISTANCE;
+  return Math.min(20.0, Math.max(0.1, v));
+}
+
+// Reflect the configured Fwd/Bwd distance on the sidebar buttons + settings row.
+// Never overwrites a control the user is actively editing (the focused field or
+// the slider mid-drag).
+function _updateDriveDistanceUI() {
+  const d = DRIVE_DISTANCE;
+  const txt = (Number.isInteger(d) ? d.toFixed(0) : d.toFixed(1)) + 'm';
+  const fb = _g('fwd2mBtn'); if (fb) fb.textContent = txt + ' Fwd';
+  const bb = _g('bwd2mBtn'); if (bb) bb.textContent = txt + ' Bwd';
+  const sl  = _g('slDistance');
+  const inp = _g('slDistInput');
+  if (sl  && document.activeElement !== sl)  sl.value  = d;
+  if (inp && document.activeElement !== inp) inp.value = d;
+}
+
+// Slider dragged → sync the number field.
+function onDistanceSlider(val) {
+  DRIVE_DISTANCE = _clampDist(val);
+  _updateDriveDistanceUI();
+}
+
+// Number typed → sync the slider live (don't rewrite the field mid-type).
+function onDistanceInput(val) {
+  if (val === '' || isNaN(parseFloat(val))) return;   // wait for a complete number
+  DRIVE_DISTANCE = _clampDist(val);
+  _updateDriveDistanceUI();
+}
+
+// Field committed (blur / Enter) → normalise it to the clamped value.
+function onDistanceChange(val) {
+  DRIVE_DISTANCE = _clampDist(val);
+  const inp = _g('slDistInput'); if (inp) inp.value = DRIVE_DISTANCE;
+  _updateDriveDistanceUI();
+}
+
 async function moveForward2m(direction = 'forward') {
   if (_fwdInterval) return;
   const backward = direction === 'backward';
   const sign  = backward ? -1 : 1;
   const word  = backward ? 'backward' : 'forward';
   const speed = CFG.maxLinear;
+  const dist  = DRIVE_DISTANCE;
+  const targetPulses = dist * PULSE_PER_M;
   const btns = [_g('fwd2mBtn'), _g('bwd2mBtn')];
   const btn  = backward ? _g('bwd2mBtn') : _g('fwd2mBtn');
   const lbl  = _g('fwd2mLabel');
   _fwdInterval = true;
   btns.forEach(b => { if (b) b.disabled = true; });
   if (btn) btn.classList.add('running');
-  if (lbl) lbl.textContent = '0.00 / 2.00 m';
-  addLog('Robot', 'info', `Auto-${word} 2m started — speed ${speed.toFixed(2)} m/s`,
+  if (lbl) lbl.textContent = `0.00 / ${dist.toFixed(2)} m`;
+  addLog('Robot', 'info', `Auto-${word} ${dist.toFixed(2)}m started — speed ${speed.toFixed(2)} m/s`,
     'Server controls stop. Press Space to cancel.');
 
   let _dispStartL = null, _dispStartR = null;
@@ -1959,8 +2040,8 @@ async function moveForward2m(direction = 'forward') {
       const o = await _fetchWithTimeout('/api/wheel_odom', { cache:'no-store' }).then(r => r.json());
       if (_dispStartL === null) { _dispStartL = o.left; _dispStartR = o.right; }
       const traveled = sign * (((o.left - _dispStartL) + (o.right - _dispStartR)) / 2);
-      const pct = Math.min(traveled / TARGET_PULSES, 1);
-      if (lbl) lbl.textContent = (pct * 2).toFixed(2) + ' / 2.00 m';
+      const pct = Math.min(traveled / targetPulses, 1);
+      if (lbl) lbl.textContent = (pct * dist).toFixed(2) + ` / ${dist.toFixed(2)} m`;
     } catch {}
   }, 200);
 
@@ -1969,7 +2050,7 @@ async function moveForward2m(direction = 'forward') {
     const res = await _fetchWithTimeout('/api/fwd2m', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ speed, direction: word }),
+      body: JSON.stringify({ speed, direction: word, distance: dist }),
     }, 35000);
     const data = await res.json();
     msg = data.done    ? `Done (${data.traveled_m} m)`
@@ -1977,7 +2058,7 @@ async function moveForward2m(direction = 'forward') {
         : 'Timeout';
     if (data.done) addLog('Robot', 'ok', `Auto-${word} complete — ${data.traveled_m} m traveled`);
     else if (data.aborted) addLog('Robot', 'warn', `Auto-${word} cancelled by user`);
-    else addLog('Robot', 'warn', `Auto-${word} timed out before reaching 2m`,
+    else addLog('Robot', 'warn', `Auto-${word} timed out before reaching ${dist.toFixed(2)}m`,
       'Check wheel odometry: /api/wheel_odom. Robot base must be online.');
   } catch (e) {
     msg = 'Error';
@@ -2281,7 +2362,7 @@ let _modbusMasterDragging = false;
 function onModbusSlider(val) {
   _modbusMasterDragging = true;
   const units = parseInt(val, 10);
-  _set('slModbusVal', units.toLocaleString());
+  _setInput('slModbusInput', units);
   _set('prevNormU', units.toLocaleString());
   _set('prevFastU', Math.round(units * 1.5).toLocaleString());
   _set('prevSlowU', Math.round(units * 0.5).toLocaleString());
@@ -2297,7 +2378,7 @@ function onModbusSlider(val) {
 
 function onLinearSlider(val) {
   const v = parseFloat(val);
-  _set('slLinVal', v.toFixed(2) + ' m/s');
+  _setInput('slLinInput', v.toFixed(2));
   _set('prevSlow', (v / 4).toFixed(2));
   _set('prevNorm', (v / 2).toFixed(2));
   _set('prevFast', v.toFixed(2));
@@ -2306,7 +2387,7 @@ function onLinearSlider(val) {
     const clamped = Math.min(32767, Math.max(0, normalUnits));
     const slModbus = _g('slModbus');
     if (slModbus) slModbus.value = clamped;
-    _set('slModbusVal', clamped.toLocaleString());
+    _setInput('slModbusInput', clamped);
     _set('prevNormU', clamped.toLocaleString());
     _set('prevFastU', Math.round(clamped * 1.5).toLocaleString());
     _set('prevSlowU', Math.round(clamped * 0.5).toLocaleString());
@@ -2315,7 +2396,32 @@ function onLinearSlider(val) {
 }
 
 function onAngularSlider(val) {
-  _set('slAngVal', parseFloat(val).toFixed(2) + ' rad/s');
+  _setInput('slAngInput', parseFloat(val).toFixed(2));
+}
+
+// ── Number-field entry for the speed sliders (typed value drives the slider) ──
+// Each pushes the clamped value into its range input, then reruns the slider
+// handler so previews + coupled controls update. The handler's _setInput calls
+// skip the focused field, so typing is never interrupted; on blur it normalises.
+function onModbusInput(val) {
+  if (val === '' || isNaN(parseInt(val, 10))) return;
+  const units = Math.min(32767, Math.max(0, parseInt(val, 10)));
+  const sl = _g('slModbus'); if (sl) sl.value = units;
+  onModbusSlider(units);
+}
+
+function onLinearInput(val) {
+  if (val === '' || isNaN(parseFloat(val))) return;
+  const v = Math.min(10.0, Math.max(0.1, parseFloat(val)));
+  const sl = _g('slLinear'); if (sl) sl.value = v;
+  onLinearSlider(v);
+}
+
+function onAngularInput(val) {
+  if (val === '' || isNaN(parseFloat(val))) return;
+  const v = Math.min(3.0, Math.max(0.1, parseFloat(val)));
+  const sl = _g('slAngular'); if (sl) sl.value = v;
+  onAngularSlider(v);
 }
 
 function _loadSettingsPanel() {
@@ -2332,6 +2438,7 @@ function _loadSettingsPanel() {
       const units = d.modbusSpeed ?? Math.round((d.maxLinear ?? 2.0) / 4 * MODBUS_LINEAR_SCALE);
       const slMod = _g('slModbus'); if (slMod) slMod.value = units;
       onModbusSlider(units);
+      if (d.driveDistance != null) { DRIVE_DISTANCE = d.driveDistance; _updateDriveDistanceUI(); }
       const stEl = _g('seedlingTypeInput');
       if (stEl) stEl.value = d.seedlingType ?? '';
     })
@@ -2360,28 +2467,33 @@ function saveSeedlingType() {
 }
 
 function applySettings() {
-  const maxLin = parseFloat(_g('slLinear')?.value ?? 1.0);
-  const maxAng = parseFloat(_g('slAngular')?.value ?? 0.5);
+  // Read the number fields (the value the user actually typed) rather than the
+  // step-snapped range inputs, so precise entries are saved exactly. Falls back
+  // to the slider, then a default, if a field is missing.
+  const maxLin = Math.min(10.0, Math.max(0.1, parseFloat(_g('slLinInput')?.value ?? _g('slLinear')?.value ?? 1.0)));
+  const maxAng = Math.min(3.0,  Math.max(0.1, parseFloat(_g('slAngInput')?.value ?? _g('slAngular')?.value ?? 0.5)));
+  const mbus   = Math.min(32767, Math.max(0, parseInt(_g('slModbusInput')?.value ?? _g('slModbus')?.value ?? 750, 10)));
+  const dist   = _clampDist(_g('slDistInput')?.value ?? DRIVE_DISTANCE);
   CFG.maxLinear = maxLin / 4;
   CFG.maxLinearBack = maxLin / 4;
   CFG.maxAngular = maxAng;
+  DRIVE_DISTANCE = dist;
+  _updateDriveDistanceUI();
   const btn = _g('applyBtn');
   if (btn) { btn.disabled = true; btn.textContent = 'Applying…'; }
   _fetchWithTimeout('/api/settings', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ maxLinear: maxLin, maxAngular: maxAng,
-                           modbusSpeed: parseInt(_g('slModbus')?.value ?? 750, 10) }),
+                           modbusSpeed: mbus,
+                           driveDistance: dist }),
   })
     .then(r => r.ok ? r.json() : Promise.reject(new Error('Server rejected')))
     .then(() => {
       if (btn) { btn.classList.add('applied'); btn.textContent = 'Applied'; }
       showToast('Settings applied');
-      const lin  = parseFloat(_g('slLinear')?.value ?? 1.0);
-      const ang  = parseFloat(_g('slAngular')?.value ?? 0.5);
-      const mbus = parseInt(_g('slModbus')?.value ?? 750, 10);
       addLog('Settings', 'ok',
-        `Settings applied — maxLinear: ${lin.toFixed(2)} m/s, maxAngular: ${ang.toFixed(2)} rad/s, modbusSpeed: ${mbus}`,
+        `Settings applied — maxLinear: ${maxLin.toFixed(2)} m/s, maxAngular: ${maxAng.toFixed(2)} rad/s, modbusSpeed: ${mbus}, driveDistance: ${dist.toFixed(2)} m`,
         'Values POSTed to /api/settings and saved server-side.');
     })
     .catch(e => {
