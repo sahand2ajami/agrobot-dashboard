@@ -2086,6 +2086,18 @@ function _cancelFwd() {
 let _trackRecording = false;
 let _trackPoints = [], _trackStartedAt = null;
 let _trackClearTimer = null, _trackPolyline = null;
+let _trackFlushTimer = null;   // periodic GPS flush so a crash loses ≤30 s of track
+
+// Persist the track accumulated so far (rewrites gnss.jsonl for this session).
+// Called on a 30 s cadence while recording so GPS survives a crash, mirroring
+// the video segment cadence; also called once on stop.
+function _flushTrack() {
+  if (_trackPoints.length === 0) return;
+  fetch('/api/track/save', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ points:_trackPoints, started_at:_trackStartedAt, ended_at:new Date().toISOString() }),
+  }).catch(() => {});
+}
 let _plantCount = 0;
 
 function _redrawTrackPolyline() {
@@ -2112,8 +2124,10 @@ function toggleTrackRecord() {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ started_at: _trackStartedAt }),
     }).catch(() => {});
+    _trackFlushTimer = setInterval(_flushTrack, 30000);
   } else {
     _trackRecording = false;
+    if (_trackFlushTimer) { clearInterval(_trackFlushTimer); _trackFlushTimer = null; }
     if (btn) btn.classList.remove('recording');
     if (lbl) lbl.textContent = 'REC';
     const endedAt = new Date().toISOString();
