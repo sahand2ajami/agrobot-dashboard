@@ -635,6 +635,7 @@ class Handler(SimpleHTTPRequestHandler):
         self._json_response(200, data)
 
     ui_wide = False   # set by --wide in main(); the UI letterboxes video when true
+    no_teleop = False # set by --no-teleop in main(); UI hides all wheel-drive controls
 
     def _serve_config(self):
         """GET /api/config — chassis name, comms, feature flags, and limits so
@@ -650,6 +651,10 @@ class Handler(SimpleHTTPRequestHandler):
                 "limits":   {"maxLinear": MAX_LIN_INPUT, "maxAngular": MAX_ANG_INPUT},
             }
         cfg["ui"] = {"wide": Handler.ui_wide}
+        # teleop feature gates all dashboard-side wheel-drive controls (WASD,
+        # speed presets, 2 m Fwd/Bwd). --no-teleop (mobile mode) turns it off so
+        # the page publishes no wheel command and the wireless remote owns the base.
+        cfg.setdefault("features", {})["teleop"] = not Handler.no_teleop
         self._json_response(200, json.dumps(cfg).encode())
 
     # ── PLC Gateway relay ────────────────────────────────────────────────────
@@ -1071,9 +1076,14 @@ def main():
     ap.add_argument("--wide", action="store_true",
                     help="front ZED at HD2K — full ~110° FOV at 15 fps; the UI "
                          "letterboxes video instead of cropping")
+    ap.add_argument("--no-teleop", dest="no_teleop", action="store_true",
+                    help="hide all dashboard wheel-drive controls (WASD, speed "
+                         "presets, 2 m Fwd/Bwd) so the page never commands the "
+                         "wheels — used by launch_mobile.sh for wireless-remote driving")
     args = ap.parse_args()
 
     Handler.gnss_file = args.gnss
+    Handler.no_teleop = args.no_teleop
     if args.wide:
         cameras.ZED_FRONT_RESOLUTION = "HD2K"
         cameras.ZED_FRONT_FPS        = 15    # HD2K hardware cap

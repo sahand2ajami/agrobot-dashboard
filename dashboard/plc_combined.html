@@ -156,6 +156,45 @@ header {
 .vel-lbl { font-size: 12px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--dim); }
 .vel-num { font-family: var(--mono); font-size: 20px; font-weight: 700; color: var(--teal-d); }
 
+/* Mobile mode (server --no-teleop): the Jetson never commands the wheels — the
+   wireless remote drives. Hide every dashboard drive control (WASD keys, speed
+   presets, velocity readout, 2 m Fwd/Bwd) but keep REC / Det in extra-controls. */
+body.no-drive .wasd-grid,
+body.no-drive .speed-row,
+body.no-drive .vel-row,
+body.no-drive #fwd2mBtn,
+body.no-drive #bwd2mBtn { display: none !important; }
+
+/* Big auger / planter / both buttons on the PLC page — mobile mode only. */
+.big-act-block { display: none; }
+body.no-drive .big-act-block {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: 14px; margin-bottom: 16px;
+}
+.big-act-btn {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 8px; min-height: 128px; padding: 14px;
+  border: 2px solid var(--teal); border-radius: 16px;
+  background: var(--teal-lt); color: var(--teal-d);
+  font-size: 28px; font-weight: 800; letter-spacing: 0.5px;
+  cursor: pointer; transition: all 0.15s; text-align: center;
+}
+.big-act-btn:hover:not(:disabled) { background: var(--teal); color: #fff; }
+.big-act-btn:active:not(:disabled) { transform: scale(0.98); }
+.big-act-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.big-act-btn.active { background: var(--teal-d); border-color: var(--teal-d); color: #fff; }
+/* status span starts as .big-act-status; _setActBtn rewrites it to .act-status */
+.big-act-btn .big-act-status,
+.big-act-btn .act-status {
+  font-size: 15px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
+  opacity: 0.85;
+}
+.big-act-btn .act-status.cycle { color: #fde68a; opacity: 1; }
+@media (max-width: 720px) {
+  body.no-drive .big-act-block { grid-template-columns: 1fr; }
+  .big-act-btn { min-height: 88px; font-size: 24px; }
+}
+
 /* ── EXTRA CONTROLS (2m Fwd/Bwd, REC, Det) ──────────────────── */
 .extra-controls {
   display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; width: 100%; padding: 0 4px;
@@ -899,6 +938,21 @@ input[type=range] { width: 100%; accent-color: var(--teal); height: 6px; cursor:
 
     <!-- PLC HANDSHAKE VIEW -->
     <div id="view-plc" class="view">
+      <!-- Big actuator buttons (mobile mode only; shown via body.no-drive) -->
+      <div id="plcBigActuators" class="big-act-block">
+        <button class="big-act-btn" id="augerBtnBig" onclick="toggleActuator('auger')">
+          <span class="big-act-name">Auger</span>
+          <span class="big-act-status" id="auger-status-big">Idle</span>
+        </button>
+        <button class="big-act-btn" id="planterBtnBig" onclick="toggleActuator('planter')">
+          <span class="big-act-name">Planter</span>
+          <span class="big-act-status" id="planter-status-big">Idle</span>
+        </button>
+        <button class="big-act-btn" id="bothBtnBig" onclick="_fireBothStaged()">
+          <span class="big-act-name">Auger + Planter</span>
+          <span class="big-act-status" id="both-status-big">Idle</span>
+        </button>
+      </div>
       <div class="plc-split">
         <div class="plc-col">
           <div class="plc-col-hdr">
@@ -1054,10 +1108,10 @@ input[type=range] { width: 100%; accent-color: var(--teal); height: 6px; cursor:
         <div class="settings-section">
           <h3>Planting</h3>
           <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
-            <label for="seedlingTypeInput" style="color:#7d8590;font-size:13px;white-space:nowrap">Seedling Type</label>
-            <input type="text" id="seedlingTypeInput" placeholder="e.g. Jack Pine" maxlength="100"
+            <label for="jobCodeInput" style="color:#7d8590;font-size:13px;white-space:nowrap">Job Code</label>
+            <input type="text" id="jobCodeInput" placeholder="e.g. J-2026-003" maxlength="100"
                    style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;padding:6px 10px;font-size:13px;outline:none">
-            <button class="apply-btn" style="margin:0;padding:6px 16px" onclick="saveSeedlingType()">Save</button>
+            <button class="apply-btn" style="margin:0;padding:6px 16px" onclick="saveJobCode()">Save</button>
           </div>
           <div style="color:#7d8590;font-size:11px">Saved for this session; added to every planted seedling record pushed to the server.</div>
         </div>
@@ -1127,6 +1181,15 @@ fetch('/api/config').then(r => r.ok ? r.json() : {}).then(c => {
   if (c.scaling?.pulsePerM)   { PULSE_PER_M = c.scaling.pulsePerM; }
   if (c.battery?.minV != null) _battRange.minV = c.battery.minV;
   if (c.battery?.maxV != null) _battRange.maxV = c.battery.maxV;
+  // Mobile mode: server reports features.teleop === false → hide all drive
+  // controls, stop the page from ever publishing a wheel command, land on the
+  // PLC page, and show the big auger/planter actuator buttons.
+  CFG.teleop = c.features?.teleop !== false;
+  if (!CFG.teleop) {
+    document.body.classList.add('no-drive');
+    switchView('plc');
+    _syncActuatorButtons();   // paint the big buttons' initial state
+  }
 }).catch(() => {});
 
 // Pull the saved Fwd/Bwd distance on load so the sidebar buttons reflect it.
@@ -1946,14 +2009,18 @@ function _ku(k) {
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
   const k = e.key.toLowerCase();
+  if (CFG.teleop === false) return;   // mobile mode — no dashboard wheel commands
   if (KMAP[k]) { e.preventDefault(); _kd(k); }
   if (k === ' ') { e.preventDefault(); _cancelFwd(); }
 });
-document.addEventListener('keyup', e => { const k = e.key.toLowerCase(); if (KMAP[k]) _ku(k); });
+document.addEventListener('keyup', e => {
+  if (CFG.teleop === false) return;
+  const k = e.key.toLowerCase(); if (KMAP[k]) _ku(k);
+});
 
 // 50 Hz drive loop
 setInterval(() => {
-  if (!pressed.size) return;
+  if (CFG.teleop === false || !pressed.size) return;
   publishCmdVel(linVel, angVel).catch(() => {});
 }, 50);
 
@@ -2453,8 +2520,8 @@ function _loadSettingsPanel() {
       const slMod = _g('slModbus'); if (slMod) slMod.value = units;
       onModbusSlider(units);
       if (d.driveDistance != null) { DRIVE_DISTANCE = d.driveDistance; _updateDriveDistanceUI(); }
-      const stEl = _g('seedlingTypeInput');
-      if (stEl) stEl.value = d.seedlingType ?? '';
+      const jcEl = _g('jobCodeInput');
+      if (jcEl) jcEl.value = d.jobCode ?? '';
     })
     .catch(() => {
       const liveUnits = Math.round(CFG.maxLinear * MODBUS_LINEAR_SCALE);
@@ -2463,21 +2530,21 @@ function _loadSettingsPanel() {
     });
 }
 
-function saveSeedlingType() {
-  const el = _g('seedlingTypeInput');
+function saveJobCode() {
+  const el = _g('jobCodeInput');
   if (!el) return;
-  const seedlingType = el.value.trim();
+  const jobCode = el.value.trim();
   _fetchWithTimeout('/api/settings', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ seedlingType }),
+    body: JSON.stringify({ jobCode }),
   })
     .then(r => r.ok ? r.json() : Promise.reject())
     .then(() => {
-      showToast(seedlingType ? `Seedling type: ${seedlingType}` : 'Seedling type cleared');
-      addLog('Settings', 'ok', seedlingType ? `Seedling type set: "${seedlingType}"` : 'Seedling type cleared');
+      showToast(jobCode ? `Job code: ${jobCode}` : 'Job code cleared');
+      addLog('Settings', 'ok', jobCode ? `Job code set: "${jobCode}"` : 'Job code cleared');
     })
-    .catch(() => showToast('Failed to save seedling type', true));
+    .catch(() => showToast('Failed to save job code', true));
 }
 
 function applySettings() {
@@ -2554,6 +2621,15 @@ function toggleActuator(which) {
   if (which === 'both') { _fireActuator('auger'); _fireActuator('planter'); return; }
   _fireActuator(which);
 }
+
+// Big "Auger + Planter" button: fire auger, then planter after a short stagger
+// (a moment apart rather than the exact same instant). _fireActuator no-ops when
+// the PLC is offline, so the delayed planter is guarded too.
+const _BOTH_STAGGER_MS = 600;
+function _fireBothStaged() {
+  _fireActuator('auger');
+  setTimeout(() => _fireActuator('planter'), _BOTH_STAGGER_MS);
+}
 function _fireActuator(which) {
   if (_plcConn !== true) { showToast('PLC offline', true); return; }
   const a = _act[which];
@@ -2574,6 +2650,10 @@ function _syncActuatorButtons() {
   _setActBtn('augerBtn',   'auger-status',   online, _act.auger.armed);
   _setActBtn('planterBtn', 'planter-status', online, _act.planter.armed);
   _setActBtn('bothBtn',    'both-status',    online, _act.auger.armed || _act.planter.armed);
+  // Big PLC-page buttons (mobile mode) — _setActBtn no-ops when absent.
+  _setActBtn('augerBtnBig',   'auger-status-big',   online, _act.auger.armed);
+  _setActBtn('planterBtnBig', 'planter-status-big', online, _act.planter.armed);
+  _setActBtn('bothBtnBig',    'both-status-big',    online, _act.auger.armed || _act.planter.armed);
 }
 function _setActBtn(btnId, statusId, online, on) {
   const btn = _g(btnId), st = _g(statusId);

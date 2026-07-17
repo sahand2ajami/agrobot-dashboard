@@ -214,34 +214,46 @@ if [[ "$CHASSIS" == "agrobot" ]]; then
   # always-on RealSense object_detector.py (a second YOLO + depth) was dropped to cut
   # CPU; re-enable it here if you ever need RealSense distance-to-person again.
 
-  log "[agrobot] Starting robot_base_node (Modbus RTU → /avatar_robot/speed_cmd)"
-  # Resolve the chassis serial port robustly. Prefer the stable udev symlink
-  # /dev/agrobot_base (pinned to the chassis FTDI by serial — see
-  # config/udev/99-agrobot-serial.rules); fall back to /dev/ttyUSB0 on a box
-  # without the rule installed. Wait up to 10 s for the device so a slow USB
-  # enumeration never leaves the node opening a not-yet-present port. The
-  # resolved path is exported so robot_base_node opens exactly this device.
-  BASE_PORT=""
-  for _try in $(seq 1 20); do
-    for _cand in /dev/agrobot_base /dev/ttyUSB0; do
-      [[ -e "$_cand" ]] && { BASE_PORT="$_cand"; break; }
-    done
-    [[ -n "$BASE_PORT" ]] && break
-    [[ "$_try" == 1 ]] && log "[agrobot] Waiting for chassis serial port (/dev/agrobot_base or /dev/ttyUSB0)…"
-    sleep 0.5
-  done
-  if [[ -n "$BASE_PORT" ]]; then
-    log "[agrobot] Chassis serial port: $BASE_PORT"
-    [[ -r "$BASE_PORT" && -w "$BASE_PORT" ]] || sudo chmod a+rw "$BASE_PORT" 2>/dev/null || true
-  else
-    log "[agrobot] WARNING: no chassis serial port after 10 s — check the USB cable. robot_base_node will keep retrying."
-    BASE_PORT="/dev/agrobot_base"
-  fi
-  export AGROBOT_BASE_PORT="$BASE_PORT"
-
+  # Always clear any stale robot_base_node a previous run left behind. In mobile
+  # mode this is what frees the chassis Modbus speed bus for the wireless remote;
+  # in normal mode it avoids two nodes fighting over the serial port.
   pkill -f robot_base_node 2>/dev/null && sleep 1 || true
-  ros2 run avatar_robot_base robot_base_node &
-  sleep 2
+
+  # DASHBOARD_NO_BASE=1 (set by launch_mobile.sh): do NOT start robot_base_node.
+  # With nothing writing the chassis speed registers, the T10 wireless remote
+  # keeps full control of the wheels. Trade-off: no chassis battery / wheel-odom
+  # telemetry (both come from this node). The PLC over TCP is unaffected.
+  if [[ "${DASHBOARD_NO_BASE:-0}" == "1" ]]; then
+    log "[agrobot] MOBILE mode — robot_base_node NOT started; drive the wheels with the wireless remote."
+  else
+    log "[agrobot] Starting robot_base_node (Modbus RTU → /avatar_robot/speed_cmd)"
+    # Resolve the chassis serial port robustly. Prefer the stable udev symlink
+    # /dev/agrobot_base (pinned to the chassis FTDI by serial — see
+    # config/udev/99-agrobot-serial.rules); fall back to /dev/ttyUSB0 on a box
+    # without the rule installed. Wait up to 10 s for the device so a slow USB
+    # enumeration never leaves the node opening a not-yet-present port. The
+    # resolved path is exported so robot_base_node opens exactly this device.
+    BASE_PORT=""
+    for _try in $(seq 1 20); do
+      for _cand in /dev/agrobot_base /dev/ttyUSB0; do
+        [[ -e "$_cand" ]] && { BASE_PORT="$_cand"; break; }
+      done
+      [[ -n "$BASE_PORT" ]] && break
+      [[ "$_try" == 1 ]] && log "[agrobot] Waiting for chassis serial port (/dev/agrobot_base or /dev/ttyUSB0)…"
+      sleep 0.5
+    done
+    if [[ -n "$BASE_PORT" ]]; then
+      log "[agrobot] Chassis serial port: $BASE_PORT"
+      [[ -r "$BASE_PORT" && -w "$BASE_PORT" ]] || sudo chmod a+rw "$BASE_PORT" 2>/dev/null || true
+    else
+      log "[agrobot] WARNING: no chassis serial port after 10 s — check the USB cable. robot_base_node will keep retrying."
+      BASE_PORT="/dev/agrobot_base"
+    fi
+    export AGROBOT_BASE_PORT="$BASE_PORT"
+
+    ros2 run avatar_robot_base robot_base_node &
+    sleep 2
+  fi
 
   log "[agrobot] Starting rosbridge_websocket on ws://localhost:9090"
   ros2 launch rosbridge_server rosbridge_websocket_launch.xml port:=9090 \
