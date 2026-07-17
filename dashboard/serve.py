@@ -124,7 +124,7 @@ TELEM = TelemetryStore(settings_defaults={
     'maxLinear':   2.0,    # absolute max forward speed m/s (= Fast preset)
     'maxAngular':  0.5,    # max turn rate rad/s
     'modbusSpeed': 1500,   # raw Modbus units for Normal preset (mirrors slLinear/4 * LINEAR_SCALE)
-    'seedlingType': '',    # species label appended to every planted-seedling record
+    'jobCode': '',         # job code appended to every planted-seedling record
     'driveDistance': 2.0,  # user-configurable Fwd/Bwd auto-drive distance (m); source of truth for /api/fwd2m
 })
 
@@ -871,9 +871,9 @@ class Handler(SimpleHTTPRequestHandler):
         chassis_name = Handler.chassis.name if Handler.chassis else "unknown"
 
         with TELEM.settings.lock:
-            seedling_type = TELEM.settings.data.get('seedlingType', '')
+            job_code = TELEM.settings.data.get('jobCode', '')
 
-        slug = '_'.join(seedling_type.lower().split()) or 'unknown'
+        slug = '_'.join(job_code.lower().split()) or 'unknown'
         seedling_id = f"{slug}_{lat:.4f}_{lon:.4f}"
 
         seed_dir = DASHBOARD_DIR.parent / "logs" / "planted_seedlings"
@@ -893,16 +893,16 @@ class Handler(SimpleHTTPRequestHandler):
             "sats":         data.get("sats"),
             "hdop":         data.get("hdop"),
             "alt":          data.get("alt"),
-            "seedling_type": seedling_type,
+            "job_code":     job_code,
             "seedling_id":  seedling_id,
         }
         seed_log = seed_dir / "seedlings.jsonl"
         try:
             with open(seed_log, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-            log.info("[seedling] #%s at %s %s (%s) type=%r → %s",
+            log.info("[seedling] #%s at %s %s (%s) job=%r → %s",
                      data["count"], entry["lat_dms"], entry["lon_dms"],
-                     chassis_name, seedling_type, seed_log)
+                     chassis_name, job_code, seed_log)
             threading.Thread(target=push_seedling, args=(entry,),
                              daemon=True, name="seedling-push").start()
             self._json_response(200, json.dumps({
@@ -992,9 +992,9 @@ class Handler(SimpleHTTPRequestHandler):
                     return
                 updates[key] = int(v) if key == 'modbusSpeed' else round(v, 3)
 
-        if 'seedlingType' in data:
-            st = str(data['seedlingType']).strip()[:100]
-            updates['seedlingType'] = st
+        if 'jobCode' in data:
+            jc = str(data['jobCode']).strip()[:100]
+            updates['jobCode'] = jc
 
         with TELEM.settings.lock:
             TELEM.settings.data.update(updates)

@@ -1268,10 +1268,10 @@
     <div class="sp-section" data-chassis-feature="actuators">
       <div class="sp-section-title">Planting</div>
       <div style="display:flex;gap:8px;align-items:center">
-        <label for="seedlingTypeInput" style="color:#7d8590;font-size:13px;white-space:nowrap">Seedling Type</label>
-        <input type="text" id="seedlingTypeInput" placeholder="e.g. Jack Pine" maxlength="100"
+        <label for="jobCodeInput" style="color:#7d8590;font-size:13px;white-space:nowrap">Job Code</label>
+        <input type="text" id="jobCodeInput" placeholder="e.g. J-2026-003" maxlength="100"
                style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;padding:6px 10px;font-size:13px;outline:none">
-        <button class="sp-btn" onclick="saveSeedlingType()">Save</button>
+        <button class="sp-btn" onclick="saveJobCode()">Save</button>
       </div>
       <div style="color:#7d8590;font-size:11px;margin-top:-10px">Saved for this session; added to every planted seedling record pushed to the server.</div>
     </div>
@@ -2737,8 +2737,8 @@ function _loadSettingsPanel() {
       const units = d.modbusSpeed ?? Math.round((d.maxLinear ?? 2.0) / 4 * MODBUS_LINEAR_SCALE);
       document.getElementById('slModbus').value = units;
       onModbusSlider(units);
-      const stEl = document.getElementById('seedlingTypeInput');
-      if (stEl) stEl.value = d.seedlingType ?? '';
+      const jcEl = document.getElementById('jobCodeInput');
+      if (jcEl) jcEl.value = d.jobCode ?? '';
     })
     .catch(() => {
       // Fallback: seed from live CFG
@@ -2791,18 +2791,18 @@ function applySettings() {
     });
 }
 
-function saveSeedlingType() {
-  const el = document.getElementById('seedlingTypeInput');
+function saveJobCode() {
+  const el = document.getElementById('jobCodeInput');
   if (!el) return;
-  const seedlingType = el.value.trim();
+  const jobCode = el.value.trim();
   _fetchWithTimeout('/api/settings', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ seedlingType }),
+    body: JSON.stringify({ jobCode }),
   })
     .then(r => r.ok ? r.json() : Promise.reject())
-    .then(() => showToast(seedlingType ? `Seedling type set: ${seedlingType}` : 'Seedling type cleared'))
-    .catch(() => showToast('Failed to save seedling type', true));
+    .then(() => showToast(jobCode ? `Job code set: ${jobCode}` : 'Job code cleared'))
+    .catch(() => showToast('Failed to save job code', true));
 }
 
 /* ── Event Log ──────────────────────────────────────────────────────── */
