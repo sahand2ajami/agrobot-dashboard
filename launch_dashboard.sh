@@ -185,23 +185,63 @@ start_gnss() {
   fi
 }
 
+# ── Shared: put the Jetson on the robot's wired subnet WITHOUT stealing WiFi ────
+# The robot device (agrobot PLC at robot_ip on eno1; or the Jackal) lives on a wired
+# subnet. Normally we add the host /24 so that whole subnet is on-link via eno1.
+#
+# The catch: field WiFi is often on the SAME 192.168.1.0/24 (e.g. the Agrobot26010
+# router hands out 192.168.1.x). A competing /24 on eno1 then OUTRANKS the WiFi
+# route, so every reply to a WiFi client — a phone/laptop viewing the dashboard —
+# is routed into eno1, which is down whenever the robot is off. The page then
+# loads on the Jetson itself but never from another device (the bug we hit).
+#
+# So: if some OTHER (WiFi) interface already owns this subnet, we do NOT claim the
+# /24. eno1 gets the host address as a /32 and we reach the robot with a single
+# /32 host route on eno1. A /32 is more specific than the WiFi /24, so the robot
+# is reached over the wire whenever its link is up — while phones, laptops and the
+# gateway stay on WiFi. No WiFi conflict → original /24 behaviour (Jackal/DDS
+# unchanged). Every step is idempotent and safe to re-run.
+setup_robot_subnet() {
+  local iface="$1" host_cidr="$2" robot_ip="$3" label="$4"
+  [[ -n "$iface" && -n "$host_cidr" ]] || return 0
+  local host_ip="${host_cidr%%/*}"
+  local subnet="${host_ip%.*}."                 # e.g. 192.168.1.
+
+  # Is another (WiFi) interface already on this subnet?  (exclude eno1 itself)
+  local owner
+  owner="$(ip -o -4 addr show 2>/dev/null \
+             | awk -v s="$subnet" -v i="$iface" '$2 != i && $4 ~ ("^" s) {print $2; exit}')"
+
+  if [[ -z "$owner" ]]; then
+    # No conflict — claim the whole /24 on the wired port (original behaviour).
+    if ! ip -4 addr show "$iface" 2>/dev/null | grep -qw "$host_ip"; then
+      log "[$label] Adding $host_cidr to $iface (to reach robot at ${robot_ip:-?})"
+      sudo ip addr add "$host_cidr" dev "$iface" 2>/dev/null || \
+        log "  (could not add IP — may already exist or need sudo)"
+    fi
+  else
+    # Conflict — $owner (WiFi) already uses this subnet. Keep the WiFi subnet
+    # intact; reach the robot with a host-scoped /32 address + /32 route on $iface.
+    log "[$label] ${subnet}0/24 already on $owner (WiFi) — reaching robot via /32 host route on $iface so WiFi clients stay reachable"
+    sudo ip addr del "$host_ip/24" dev "$iface" 2>/dev/null || true   # drop any hijacking /24
+    sudo ip addr add "$host_ip/32" dev "$iface" 2>/dev/null || true   # ignore 'already exists'
+    if [[ -n "$robot_ip" ]]; then
+      sudo ip route replace "$robot_ip/32" dev "$iface" src "$host_ip" 2>/dev/null || \
+        log "  (could not add host route to $robot_ip on $iface — need sudo?)"
+    fi
+  fi
+}
+
 # ── Per-chassis service startup ───────────────────────────────────────────────
 if [[ "$CHASSIS" == "agrobot" ]]; then
   # The agrobot robot exposes its base over Modbus RTU; we run the full sensor stack.
 
-  # The auger/planter/robot-arm PLC sits on the LAN (192.168.1.0/24, via the gRPC
-  # gateway → Modbus TCP at robot_ip:502). Ensure the Jetson has an address on that
-  # subnet so the gateway can reach the PLC. Idempotent — skips if already present
-  # (it is normally persisted on eno1 via NetworkManager).
-  if [[ -n "${CH_IFACE:-}" && -n "${CH_HOSTIP:-}" ]]; then
-    ip_only="${CH_HOSTIP%%/*}"
-    subnet="${ip_only%.*}."
-    if ! ip addr show "$CH_IFACE" 2>/dev/null | grep -q "$subnet"; then
-      log "[agrobot] Adding $CH_HOSTIP to $CH_IFACE (to reach PLC at ${CH_ROBOTIP:-192.168.1.2})"
-      sudo ip addr add "$CH_HOSTIP" dev "$CH_IFACE" 2>/dev/null || \
-        log "  (could not add IP — may already exist or need sudo)"
-    fi
-  fi
+  # The auger/planter/robot-arm PLC sits on the wired LAN (Modbus TCP at
+  # robot_ip:502 on eno1). Put the Jetson on that subnet so it can reach the PLC —
+  # but never at the cost of WiFi dashboard access when both share 192.168.1.0/24
+  # (see setup_robot_subnet). The PLC being off is fine: the /32 host route just
+  # sits idle on the down link until the cable/PLC comes up.
+  setup_robot_subnet "${CH_IFACE:-}" "${CH_HOSTIP:-}" "${CH_ROBOTIP:-192.168.1.2}" agrobot
 
   # Cameras: ZED 2i front (pyzed SDK, color+depth) + ZED 2i rear (pyzed SDK, color).
   # Both are opened by serve.py directly — no ROS camera driver needed.
@@ -270,15 +310,7 @@ elif [[ "$CHASSIS" == "jackal" ]]; then
   unset FASTRTPS_DEFAULT_PROFILES_FILE 2>/dev/null || true
   log "[jackal] ROS_DOMAIN_ID=$ROS_DOMAIN_ID  robot=$CH_ROBOTIP"
 
-  if [[ -n "${CH_IFACE:-}" && -n "${CH_HOSTIP:-}" ]]; then
-    ip_only="${CH_HOSTIP%%/*}"
-    subnet="${ip_only%.*}."
-    if ! ip addr show "$CH_IFACE" 2>/dev/null | grep -q "$subnet"; then
-      log "[jackal] Adding $CH_HOSTIP to $CH_IFACE (to reach Jackal at $CH_ROBOTIP)"
-      sudo ip addr add "$CH_HOSTIP" dev "$CH_IFACE" 2>/dev/null || \
-        log "  (could not add IP — may already exist or need sudo)"
-    fi
-  fi
+  setup_robot_subnet "${CH_IFACE:-}" "${CH_HOSTIP:-}" "${CH_ROBOTIP:-}" jackal
 
   start_gnss
 
@@ -331,13 +363,18 @@ fi
 log "Press Ctrl-C to stop."
 # Write the URL directly to /dev/tty so it reaches the terminal regardless
 # of the log redirect and regardless of what background processes print after.
-# Skips: loopback, link-local, docker/172.*, PLC subnet (192.168.*),
-# Tailscale (100.*), and IPv6 — leaving only the main LAN/WiFi address.
+# Skips: loopback, link-local, docker/172.*, Tailscale (100.*), IPv6, and the
+# wired robot-subnet alias ($CH_HOSTIP on eno1 — the PLC/Jackal side, not a
+# dashboard access address). We intentionally do NOT blanket-skip 192.168.* any
+# more: field WiFi (e.g. Agrobot26010) lives there, and that's the address a phone
+# or laptop must use.  Whatever's left is the real LAN/WiFi address(es).
+CH_HOST_ONLY="${CH_HOSTIP%%/*}"
 {
   echo ""
   for _ip in $(hostname -I 2>/dev/null); do
     case "$_ip" in
-      127.*|169.254.*|172.*|192.168.*|100.*|*:*) continue ;;
+      127.*|169.254.*|172.*|100.*|*:*) continue ;;
+      "$CH_HOST_ONLY")                 continue ;;   # eno1 robot-subnet alias, not for browsers
     esac
     echo "  http://${_ip}:${PORT}"
   done
