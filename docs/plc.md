@@ -6,7 +6,7 @@ The Agrobot tree-planting robot uses an **LS Electric PLC** to control the auger
 Browser ──REST :8766──► serve.py ──Modbus TCP :502──► LS Electric PLC (192.168.1.2)
 ```
 
-> This document covers everything needed to understand, debug, and extend the PLC integration. For the broader robot and camera system, see [README.md](README.md) and [DEVELOPMENT.md](DEVELOPMENT.md).
+> This document covers everything needed to understand, debug, and extend the PLC integration. For the broader robot and camera system, see [README.md](../README.md) and [DEVELOPMENT.md](../DEVELOPMENT.md).
 
 ---
 
@@ -65,6 +65,44 @@ arp -n 192.168.1.2
 # MAC must NOT start with 00:0b:29 (VMware OUI)
 # If it does: power off the VM, or unplug the laptop's LAN cable
 ```
+
+### Sharing the subnet with WiFi (field networks)
+
+The PLC lives on `192.168.1.0/24`, reached over the wired `eno1` port. In the
+field the Jetson is *also* on WiFi (`wlP1p1s0`) so phones and laptops can open the
+dashboard — and some field routers (e.g. **Agrobot26010**) hand out `192.168.1.x`
+addresses too. Now **both interfaces claim the same subnet**, which used to break
+things: adding the Jetson's `192.168.1.100/24` to `eno1` made the wired route
+outrank the WiFi route, so every reply to a WiFi client (a phone loading the page)
+was dumped into `eno1` — dead whenever the PLC is off. The page loaded on the
+Jetson itself but from nowhere else.
+
+`launch_dashboard.sh` now detects this collision (`setup_robot_subnet`) and, when
+WiFi already owns the subnet, puts `eno1` on a **host-scoped `/32`** plus a single
+`/32` host route to the PLC:
+
+```bash
+# What the launcher installs when WiFi shares 192.168.1.0/24:
+ip addr add 192.168.1.100/32 dev eno1
+ip route replace 192.168.1.2/32 dev eno1 src 192.168.1.100
+```
+
+A `/32` host route is more specific than the WiFi `/24`, so:
+
+- **the PLC (`192.168.1.2`) is always reached over the wire** whenever its link is up, and
+- **everything else on `192.168.1.x` — phones, laptops, the gateway — stays on WiFi.**
+
+When there is no WiFi collision (the PLC on its own dedicated switch) the launcher
+keeps the original `/24` behaviour. Verify which way traffic is going:
+
+```bash
+ip route get 192.168.1.2      # → dev eno1   (PLC over the wire)
+ip route get <phone-ip>       # → dev wlP…   (dashboard client over WiFi)
+```
+
+> With the PLC powered off, the `/32` route just sits idle on the down `eno1` link;
+> it activates automatically when the PLC comes on and the cable is plugged in — no
+> re-launch needed.
 
 ---
 
@@ -146,16 +184,25 @@ These registers are written by the dashboard to command the machine.
 | `HMI_PB_Robot` / `ROBOT_PB_CMD` | `%MW6200` | reg 1200 | Robot arm pushbutton word |
 | `HMI_PB_Auger` | `%MW6500` | reg 1500 | Auger pushbutton word (legacy — dashboard now uses AMR handshake) |
 
-### AMR handshake (`%MW100`/`%MW101` — AMR writes; `%MW5100`–`%MW5112` — bidirectional)
+### AMR handshake (`%MW5100`–`%MW5112`)
 
-These are the low-level AMR↔PLC interface. The dashboard is the AMR.
+These are the low-level AMR↔PLC command/status words — the dashboard *is* the AMR.
+The full block is documented in [AMR ↔ PLC Handshake Registers](#amr--plc-handshake-registers)
+below. The three words the dashboard **writes** are:
 
 | Symbol | Address | FC06 reg | Description |
 |--------|---------|----------|-------------|
-| `AMR_2_PLC[0]` | `%MW100` | — below FC06 base | Auger command: write 1 = start, 0 = stop |
-| `AMR_2_PLC[1]` | `%MW101` | — below FC06 base | Planter command: write 1 = start, 0 = stop |
+| `AUGER_AMR_WORD` | `%MW5110` | 110 | Auger command — bit 0 = Start Sequence (1 = start, 0 = clear) |
+| `PLANTER_AMR_WORD` | `%MW5111` | 111 | Planter command — bit 0 = Start Sequence (1 = start, 0 = clear) |
+| `AMR_STATE` | `%MW5112` | 112 | AMR state — 1 = Stationary, 2 = Moving (auto-written by `serve_plc.py`) |
 
-> **Note:** `%MW100` and `%MW101` are below the FC06 base (`%MW5000`), so they cannot be written with a standard FC06 register write. The PLC engineer must lower the FEnet Write Word Area base to `%MW0` in XG5000, or the dashboard must use FC16 (write multiple registers) starting from reg 0. Verify this on the bench before deploying.
+> **Historical note — `%MW100` / `%MW101` were the OLD, WRONG map. Do not use them.**
+> An earlier revision of this document put the auger/planter commands at `%MW100`
+> and `%MW101`. Those addresses sit **below** the FEnet write base (`%MW5000`) and
+> **can never be written over Modbus** on this PLC. The bench-confirmed command
+> words are `%MW5110` / `%MW5111` (inside the `%MW5100`–`%MW5112` handshake block).
+> `dashboard/plc_client.py` writes only these, and `tests/test_plc_client.py`
+> rejects any write target below `%MW5000`, so the old map cannot silently return.
 
 ---
 
@@ -291,12 +338,12 @@ sequenceDiagram
 
     B->>S: POST /api/plc/auger {command: START}
     S->>P: plc.control_auger("START")
-    P->>PLC: FC06 write %MW100 = 1  (AMR_2_PLC[0].0 = 1)
+    P->>PLC: FC06 write %MW5110 = 1  (Auger Start Sequence, bit 0)
     PLC-->>P: ack
     P-->>S: {success: true, auger_active: true}
     S-->>B: 200 {success: true}
 
-    Note over PLC: PLC ladder sees AMR_2_PLC[0].0 = 1<br/>Starts auger sequence<br/>Sets %MW5100 bit 0 (handshake)
+    Note over PLC: PLC ladder sees %MW5110 bit 0 = 1<br/>Starts auger sequence<br/>Sets %MW5100 bit 0 (handshake)
 
     loop Poll every 500 ms
         B->>S: GET /api/plc/sequence
@@ -327,12 +374,22 @@ The PLC tracks each subsystem's state. The dashboard reads `AugerSeq` (`%MW2700`
 stateDiagram-v2
     [*] --> Home : powered on
     Home --> ReadyToStart : setup_ok + ok_to_start
-    ReadyToStart --> InCycle : AMR_2_PLC[0].0 = 1
+    ReadyToStart --> InCycle : %MW5110 bit 0 = 1
     InCycle --> Complete : sequence finishes
     Complete --> Home : reset or next cycle
     InCycle --> Faulted : E-stop / gate / drive fault
     Faulted --> Home : FAULT_RESET command
 ```
+
+> **Bench reality — how the dashboard actually detects "done".** The diagram above
+> shows the idealised `AUGER_IN_CYCLE` → `AUGER_COMPLETE` flow. On the current
+> machine those bits only arm inside the fully-automated AMR cycle, and
+> `%MW5100`/`%MW5101` **bit 2 ("Complete") is latched high**, so neither gives a
+> usable edge. The dashboard and the battery-test loop therefore track completion
+> with the **Clear-of-Ground handshake bit** — `%MW5100`/`%MW5101` **bit 1**, which
+> reads `1` (home) → `0` (working) → `1` (done). A button shows **"Working"** until
+> Clear-of-Ground returns to `1`. See [DEVELOPMENT.md](../DEVELOPMENT.md) for the full
+> rationale (the "Clear-of-Ground handshake bit" note).
 
 ---
 
@@ -365,9 +422,9 @@ The PLC ladder gates all actuator motion on these conditions. **Writing `success
 
 | HTTP endpoint | `PlcClient` method | What it does |
 |---|---|---|
-| `POST /api/plc/auger` | `control_auger(command)` | Write `%MW100` = 1 or 0 |
-| `POST /api/plc/planter` | `control_planter(command)` | Write `%MW101` = 1 or 0 |
-| `POST /api/plc/both` | `control_both(command)` | Write both `%MW100` and `%MW101` |
+| `POST /api/plc/auger` | `control_auger(command)` | Write `%MW5110` bit 0 = 1 (start) or 0 (clear) |
+| `POST /api/plc/planter` | `control_planter(command)` | Write `%MW5111` bit 0 = 1 (start) or 0 (clear) |
+| `POST /api/plc/both` | `control_both(command)` | Write both `%MW5110` and `%MW5111` |
 | `POST /api/plc/machine` | `machine_command(command)` | Pulse `%MW5000` or `%MW5001` |
 | `POST /api/plc/robot` | `control_robot(command)` | Pulse `%MW6200` |
 | `GET /api/plc/status` | `get_machine_status()` | Read `%MW1000` + safety bits |
@@ -379,7 +436,7 @@ All methods return a plain dict with `connected` and `success` keys. They never 
 
 ### `serve_plc.py` — AMR handshake extensions
 
-`launch_dashboard_plc.sh` runs `serve_plc.py` (which monkey-patches `serve.py`). It adds:
+`launch_dashboard_plc.sh` runs `serve_plc.py`, which registers its extra routes on the shared HTTP handler via `Handler.add_route` (monkey-patching is forbidden in this codebase). It adds:
 
 | HTTP endpoint | Description |
 |---|---|
@@ -395,104 +452,83 @@ All PLC panels are hidden when `plc.enabled: false` in the chassis YAML (i.e. on
 
 ---
 
-## Command-Line Tools
+## Inspecting the Handshake Without the Web UI
 
-Three tools are available for debugging without the web dashboard. Use them in the order shown.
+Two ways to poke the handshake without the browser: the dashboard's **HTTP API**
+(sections 1–4, needs the PLC dashboard running — `./launch_dashboard_plc.sh`,
+default port **8769**) and the **standalone bench scripts** `scripts/plc_read.py`
+/ `scripts/plc_test.py` (section 5, talk straight to the PLC, no dashboard needed).
+The old `launch_plc2.sh` is gone — its live HMI is now the PLC dashboard's
+**⚙ PLC Handshake** tab (section 3).
 
-### 1. `plc_read.py` — Quick connectivity check
+### 1. Read the whole handshake block
 
-Reads the full set of handshake registers and prints their current values. Read-only — never writes to the PLC.
-
-```bash
-cd /home/jetson/dual/dual-robot-dashboard
-python3 plc_read.py
-```
-
-Output:
-```
-%MW5100 = 4  (FC04 reg 4100)    # Auger Cycle Complete bit set
-%MW5101 = 0  (FC04 reg 4101)    # Planter idle
-%MW5110 = 0  (FC04 reg 4110)    # Auger command idle
-%MW5111 = 0  (FC04 reg 4111)    # Planter command idle
-%MW5112 = 1  (FC04 reg 4112)    # AMR Stationary
-```
-
-Values are always decimal. Use this first to confirm the LAN cable and Modbus connection are working.
-
----
-
-### 2. `plc_test.py` — Interactive read/write terminal
-
-The lowest-level tool. Reads any register and writes any value, then prints an immediate readback confirmation. Best way to verify that writes reach the PLC ladder.
+`GET /api/amr/poll` reads `%MW5100`–`%MW5112` in one FC04 burst and returns them
+as JSON (read-only — never writes to the PLC):
 
 ```bash
-cd /home/jetson/dual/dual-robot-dashboard
-python3 plc_test.py
+curl -s http://localhost:8769/api/amr/poll | python3 -m json.tool
 ```
 
-| Command | What it does | Example |
-|---------|---|---|
-| `r <plc_addr>` | Read one word (FC04) | `r 5100` |
-| `<plc_addr> <value>` | Write one word (FC06), then readback | `5110 1` |
-| `q` | Quit | — |
+A downed PLC returns `{"connected": false}` with HTTP 200 — not an error. Run this
+first to confirm the LAN cable and Modbus connection are working.
 
-All addresses are **PLC addresses** (`%MW` number without the `%MW` prefix). The tool computes the Modbus register for you.
+### 2. Write a command word
 
-**Example: start the auger sequence**
-```
-> r 5100
-  %MW5100 = 0  (FC04 reg 4100)          ← auger idle
-
-> 5110 1
-  wrote %MW5110 = 1  (FC06 write reg 110)
-  readback %MW5110 = 1  (FC04 read reg 4110)  ✓ confirmed
-
-> r 5100
-  %MW5100 = 1  (FC04 reg 4100)          ← PLC confirmed sequence start
-
-> 5110 0
-  wrote %MW5110 = 0  (FC06 write reg 110)
-  readback %MW5110 = 0  (FC04 read reg 4110)  ✓ confirmed
-```
-
-**Example: report AMR state**
-```
-> 5112 2
-  wrote %MW5112 = 2  (FC06 write reg 112)
-  readback %MW5112 = 2  (FC04 read reg 4112)  ✓ confirmed   ← AMR Moving
-
-> 5112 1
-  wrote %MW5112 = 1  (FC06 write reg 112)
-  readback %MW5112 = 1  (FC04 read reg 4112)  ✓ confirmed   ← AMR Stationary
-```
-
-A `✗ mismatch` on readback means the PLC ladder wrote a different value to the register in the ~10 ms between the FC06 write and the FC04 readback — expected if the PLC program clears command bits after acknowledging them.
-
----
-
-### 3. `launch_plc2.sh` — Live handshake dashboard
-
-Starts a local web server with a browser HMI showing all handshake registers live and buttons to write command values.
+`POST /api/amr/write` writes one of the AMR-owned words (`%MW5110`, `%MW5111`,
+`%MW5112` only — anything below `%MW5000` is refused by design). Add
+`"pulse": true` to write the value then self-clear it to `0` — the **momentary
+start** pattern (a *latched* `%MW5110`/`%MW5111` bit makes the machine free-run):
 
 ```bash
-cd /home/jetson/dual/dual-robot-dashboard
-./launch_plc2.sh
-# → http://localhost:8768
-# → http://192.168.1.100:8768  (from another device on the LAN)
+# Momentary auger start: write %MW5110 = 1, then auto-clear to 0
+curl -s -XPOST http://localhost:8769/api/amr/write \
+  -d '{"reg":5110,"value":1,"pulse":true}'
+
+# Report AMR state: 2 = Moving, 1 = Stationary
+curl -s -XPOST http://localhost:8769/api/amr/write -d '{"reg":5112,"value":2}'
 ```
 
-| Option | Default | Description |
-|--------|---------|---|
-| `--port N` | 8768 | HTTP listen port |
-| `--plc-host H` | 192.168.1.2 | PLC Modbus TCP host |
-| `--plc-port N` | 502 | PLC Modbus TCP port |
-| `--headless` | off | Skip opening a browser |
+Each write is read back over FC04 to confirm the value landed. Remember:
+**a successful write means the Modbus write reached PLC memory — not that the
+machine moved.** The ladder still gates real motion on Auto mode + subsystem
+enables + safety (see [Safety Interlocks](#safety-interlocks)).
 
-**Dashboard panels:**
+### 3. The PLC Handshake tab (browser)
 
-- **PLC → AMR (left):** Live LED indicators for each bit of `%MW5100` and `%MW5101`. Green LED = bit set. Polled every 500 ms.
-- **AMR → PLC (right):** Buttons to write values to `%MW5110`, `%MW5111`, `%MW5112`. Current value is read back and shown after each write.
-- **Event log (bottom):** Every poll change and write logged with timestamps and exact Modbus register numbers in `plc_test.py` format.
+`./launch_dashboard_plc.sh` serves `plc_combined.html` (default port 8769). Its
+**⚙ PLC Handshake** tab shows every bit of `%MW5100` / `%MW5101` as live LEDs
+(polled every 500 ms), gives buttons that write `%MW5110` / `%MW5111` / `%MW5112`,
+and logs each poll change and write with its exact Modbus register number in the
+event panel. See the [UI guide](ui-guide.md) for a full walk-through of every
+control on every page.
+
+### 4. Quick reachability check
+
+```bash
+ping 192.168.1.2                              # PLC CPU Ethernet port
+curl -s http://localhost:8769/api/amr/ping    # connectivity + round-trip latency
+```
+
+### 5. Standalone bench scripts (no dashboard required)
+
+These talk directly to the PLC over Modbus TCP (host `192.168.1.2:502`), so they
+work even with the dashboard stopped. They re-declare the FEnet offset formulas
+themselves — cross-check against `plc_client._REG` before trusting output.
+
+```bash
+python3 scripts/plc_read.py   # read-only: interactively read %MW words (FC04, min %MW1000)
+python3 scripts/plc_test.py   # read AND write: write a word (FC06), then read it back to confirm
+```
+
+Both take a PLC address (the `%MW` number without the prefix) and compute the
+Modbus register for you. `plc_test.py` is the lowest-level way to confirm a write
+lands: e.g. `5110 1` writes `%MW5110 = 1` (auger start) then reads it back.
+
+> Reminder: these write to the real command words `%MW5110` / `%MW5111` /
+> `%MW5112`. Any address below `%MW5000` is outside the FEnet write window —
+> that's the old `%MW100`/`%MW101` map, which cannot be written (see the
+> [historical note](#amr-handshake-mw5100mw5112) above).
 
 ---
 
@@ -514,7 +550,7 @@ XG5000 can simulate the real ladder program with the full register map and safet
 1. Open `docs/plc/GTS_Tree_Planter_26006_20260608.xgwx` in XG5000.
 2. Run → Simulator → Start.
 3. Change `plc.host` in `agrobot.yaml` to the Windows machine's IP.
-4. Verify with `plc_read.py`.
+4. Verify with `curl http://localhost:8769/api/amr/poll` (or the **PLC Handshake** tab).
 
 ---
 
@@ -522,12 +558,13 @@ XG5000 can simulate the real ladder program with the full register map and safet
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `"PLC offline"` / `plc_test.py` "CONNECT FAILED" | No route to PLC | `ping 192.168.1.2` — check LAN cable and that Jetson's `eno1` has `192.168.1.100/24` (`ip addr show eno1`) |
+| `"PLC offline"` in the UI / `/api/amr/ping` fails | No route to PLC | `ping 192.168.1.2` — check the LAN cable and that the Jetson's `eno1` has an address on the PLC subnet (`ip route get 192.168.1.2` should say `dev eno1`; see [Network Setup](#network-setup)) |
 | **Reads return 0 for everything** | VMware VM at `192.168.1.2` intercepts packets | `arp -n 192.168.1.2` — if MAC starts with `00:0b:29`, power off the VM |
 | **`✓ confirmed` but machine doesn't move** | Write reached PLC M-memory but ladder gates are closed | Check safety interlocks in XG5000 monitor: E-stop, gate, Auto mode, subsystem enables |
 | **`✗ mismatch` on readback** | PLC ladder immediately cleared the command bit | Normal behaviour — the PLC acknowledges the command by clearing it; motion should follow |
 | **Connection drops mid-session** | FEnet closes idle TCP connections after ~15 s | All tools reconnect automatically on the next operation — no restart needed |
 | **`FAULT_RESET` does nothing** | Active fault is still present | Resolve the physical fault first (E-stop, sensor, drive fault), then reset |
-| **`%MW100`/`%MW101` writes rejected** | FC06 write base is `%MW5000`; `%MW100` is below it | PLC engineer must lower FEnet Write Word Area base to `%MW0` in XG5000 Modbus settings |
+| **Write to a `%MW` below 5000 refused** | By design — the FEnet FC06 write base is `%MW5000`, and `tests/test_plc_client.py` enforces it | Use the real command words `%MW5110` / `%MW5111` / `%MW5112` — never `%MW100`/`%MW101` (the old, wrong map) |
+| **Dashboard unreachable from a phone/laptop on WiFi** | WiFi shares the `192.168.1.0/24` subnet with the PLC; an old `/24` on `eno1` hijacked the route | Fixed in the launcher (`/32` host route to the PLC only). Confirm with `ip route get <phone-ip>` → `dev wlP…`; see [Network Setup → Sharing the subnet with WiFi](#sharing-the-subnet-with-wifi-field-networks) |
 | **`SET_AUTO` appears to work but mode stays Manual** | Bit indices in `HMI_PB` not bench-confirmed | Verify each command bit in XG5000 ladder monitor: press button, watch the matching bit flip |
 | **Detection shows wrong register values** | FC03 used instead of FC04 | All reads must use FC04 (input registers). FC03 returns 0 on this FEnet — confirmed quirk |

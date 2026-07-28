@@ -107,7 +107,7 @@ graph TD
 ## Repository Layout
 
 ```
-dual-robot-dashboard/
+agrobot/
 │
 ├── config/
 │   ├── active_chassis.yaml         ← persisted default chassis (edit to change)
@@ -184,6 +184,8 @@ Files marked ★ are the best starting points for understanding the codebase.
 > **Who this section is for:** anyone deploying on a physical NVIDIA Jetson for the first time. If you are only exploring the code or running a demo on a laptop, skip to [Install & Build](#install--build).
 
 This section sets up the host operating system — remote access and WiFi. It needs to be done **once** on a fresh Jetson. It is completely separate from installing the dashboard software.
+
+> **New to the hardware?** [docs/jetson.md](docs/jetson.md) describes this exact unit — the Jetson AGX Orin 64 GB, its JetPack/CUDA stack, its network interfaces, and the serial devices attached — for a first-time reader. Start there if you have never worked on this box.
 
 ```bash
 # Run from the project root — interactive, takes about 5–10 minutes
@@ -529,27 +531,27 @@ ROBOT_CHASSIS=jackal ./launch_dashboard.sh
 
 ### Per-chassis YAML fields
 
-Everything chassis-specific lives in `config/chassis/<name>.yaml`. The server and UI never hard-code robot details — the server reads the YAML; the browser reads `/api/config`.
+Everything chassis-specific lives in `config/chassis/<name>.yaml`. The server and UI never hard-code robot details — the server reads the YAML; the browser reads `/api/config`. The **Default** column shows the value shipped in `config/chassis/agrobot.yaml` and `config/chassis/jackal.yaml`; where the two chassis differ, both are listed.
 
-| Field | Applies to | Description |
-|-------|------------|-------------|
-| `comms` | both | `modbus_speed` or `ros_twist` — selects the publisher type |
-| `max_linear`, `max_angular` | both | Velocity ceilings (m/s, rad/s); server rejects commands beyond this |
-| `linear_scale`, `angular_scale`, `speed_max` | agrobot | Twist → wheel-speed unit scaling |
-| `pulse_per_m` | agrobot | Encoder pulses per metre (for auto-forward 2 m) |
-| `speed_cmd_topic` | both | ROS topic the velocity command is published on |
-| `wheel_odom_topic` | agrobot | Subscribed for mileage and Chassis-Link heartbeat |
-| `battery_topic` | agrobot | `Float32` pack voltage from `robot_base_node` |
-| `battery_min_v`, `battery_max_v` | agrobot | Voltage range → 0–100 % gauge (default 42–58 V for 14S pack) |
-| `camera_topic` | jackal | ROS camera image topic |
-| `rear_camera` | both | `zed` \| `realsense` \| `webcam` \| `none`. `zed` = pyzed SDK (agrobot default). `realsense` = ROS camera topic (jackal default). `webcam` = direct V4L2. `none` = rear view disabled. |
-| `rear_camera_device` | both | Optional explicit V4L2 device (e.g. `/dev/video2`) |
-| `serial_port`, `baud`, `slave_id` | agrobot | Modbus serial settings |
-| `chassis_variant` | agrobot | `T3` \| `T13` \| `T17E` — wheel geometry for odometry |
-| `host_iface`, `host_ip`, `robot_ip` | both | LAN configuration applied by the launcher |
-| `ros_domain_id` | jackal | ROS domain (Jackal is hard-wired to 0) |
-| `plc.enabled`, `plc.host`, `plc.port` | agrobot | PLC Modbus TCP endpoint |
-| `features.*` | both | Booleans that show/hide individual UI panels |
+| Field | Applies to | Default | Description |
+|-------|------------|---------|-------------|
+| `comms` | both | agrobot: `modbus_speed` · jackal: `ros_twist` | Selects the publisher type: `modbus_speed` converts Twist → wheel speeds; `ros_twist` publishes `geometry_msgs/Twist` unchanged |
+| `max_linear`, `max_angular` | both | agrobot: `15.0`, `15.0` · jackal: `3.0`, `3.0` | Velocity ceilings (m/s, rad/s); server rejects commands beyond this. agrobot is high on purpose so the Modbus slider reaches the full INT16 range |
+| `linear_scale`, `angular_scale`, `speed_max` | agrobot | `3000`, `1000`, `32767` | Twist → wheel-speed unit scaling (`speed_max` = INT16 max) |
+| `pulse_per_m` | agrobot | `3211.0` | Encoder pulses per metre (for auto-forward 2 m), calibrated |
+| `speed_cmd_topic` | both | agrobot: `/avatar_robot/speed_cmd` · jackal: `/jackal1/cmd_vel` | ROS topic the velocity command is published on |
+| `wheel_odom_topic` | agrobot | `/avatar_robot/wheel_odom` | Subscribed for mileage and Chassis-Link heartbeat |
+| `battery_topic` | agrobot | `/avatar_robot/battery` | `Float32` pack voltage from `robot_base_node` |
+| `battery_min_v`, `battery_max_v` | agrobot | `42.0`, `58.0` | Voltage range → 0–100 % gauge (≈48 V 14S pack: 42 V empty, 58 V full) |
+| `camera_topic` | jackal | agrobot: `''` (unused) · jackal: `/jackal1/sensors/camera_0/color/image` | ROS camera image topic |
+| `rear_camera` | both | agrobot: `zed` · jackal: `realsense` | `zed` \| `realsense` \| `webcam` \| `none`. `zed` = pyzed SDK. `realsense` = ROS camera topic. `webcam` = direct V4L2. `none` = rear view disabled |
+| `rear_camera_device` | both | *(unset)* | Optional explicit V4L2 device (e.g. `/dev/video2`) |
+| `serial_port`, `baud`, `slave_id` | agrobot | `/dev/ttyUSB0`, `38400`, `1` | Modbus RTU serial settings (recorded for reference; `robot_base_node` resolves `/dev/agrobot_base` first) |
+| `chassis_variant` | agrobot | `T13` | `T3` \| `T13` \| `T17E` — wheel geometry for odometry |
+| `host_iface`, `host_ip`, `robot_ip` | both | `eno1`, `192.168.1.100/24`, `192.168.1.2` (agrobot) · `192.168.1.200` (jackal `robot_ip`) | LAN configuration applied by the launcher (see the [WiFi-vs-PLC subnet note](#remote--headless-drive-from-a-laptop)) |
+| `ros_domain_id` | jackal | `0` | ROS domain (Jackal is hard-wired to 0) |
+| `plc.enabled`, `plc.host`, `plc.port` | agrobot | agrobot: `true`, `192.168.1.2`, `502` · jackal: `false` | PLC Modbus TCP endpoint |
+| `features.*` | both | agrobot: all `true` · jackal: `actuators` `true`, rest `false` | Booleans that show/hide individual UI panels (`battery`, `oil`, `wheel_odom`, `fwd2m`, `modbus_slider`, `actuators`) |
 
 ---
 
@@ -580,11 +582,13 @@ You should see **Chassis Link** go green, **Chassis Battery** show a voltage, an
 #   📷 Camera  ·  🗺 GPS  ·  📡 Connectivity  ·  ⚙ PLC Handshake
 ```
 
-The dashboard is also published on the Jetson's LAN/WiFi address — currently
-**http://10.136.225.44:8769** — so it can be opened from any other device
-(laptop, tablet, phone) on the same network, not just the Jetson itself. The
-launcher prints the current address at startup; if the Jetson's IP changes,
-use the printed one.
+The dashboard is also published on the Jetson's LAN/WiFi address, so it opens from
+any other device (laptop, tablet, phone) on the same network — not just the Jetson
+itself. **The launcher prints the exact URL at startup** — use whatever it prints,
+since the IP changes with the network. For example, on the field WiFi `Agrobot26010`
+it prints `http://192.168.1.89:8769`. If nothing loads from your phone, see the
+subnet-sharing note under [Remote / headless](#remote--headless-drive-from-a-laptop)
+below.
 
 ### Jackal
 
@@ -614,7 +618,16 @@ tailscale ip -4
 
 Open whichever address shares a network with your laptop. The full UI works in any modern browser. This removes the Jetson's browser-rendering cost, leaving more CPU for cameras and control loops.
 
-> **Note:** The launcher omits `192.168.*` (PLC/Jackal subnet) **and** `100.*` (Tailscale) from the printed list — only the main WiFi/LAN address appears. Use `tailscale ip -4` to find the Tailscale address. If your laptop is on the same `192.168.1.*` LAN (e.g. connected to the same switch), open `http://192.168.1.100:8766` directly — the dashboard is reachable there, it's just not printed.
+> **Note:** The launcher prints the Jetson's main WiFi/LAN address(es), skipping
+> loopback, Docker (`172.*`), Tailscale (`100.*`), IPv6, and the wired PLC/Jackal
+> alias (`eno1`'s `192.168.1.100`). It **does** print a WiFi address in the
+> `192.168.1.x` range — common on field routers like `Agrobot26010` that hand out that
+> subnet. That shared-subnet case used to make the page unreachable from
+> phones/laptops (the wired `eno1` route hijacked replies to WiFi clients); the
+> launcher now installs a `/32` host route to the PLC instead of claiming the whole
+> subnet, so the PLC **and** WiFi clients both work. Full explanation:
+> [docs/plc.md → Sharing the subnet with WiFi](docs/plc.md#sharing-the-subnet-with-wifi-field-networks).
+> For the Tailscale address run `tailscale ip -4`.
 
 ### Common flags
 
@@ -632,6 +645,8 @@ Open whichever address shares a network with your laptop. The full UI works in a
 ---
 
 ## Using the Dashboard
+
+> **Every button explained:** [docs/ui-guide.md](docs/ui-guide.md) is a complete, first-time-reader catalog of every button, panel, indicator, and keyboard shortcut across all three pages (main dashboard, PLC dashboard, battery-test page), with screenshot slots.
 
 ### Drive controls
 
@@ -706,34 +721,39 @@ sequenceDiagram
     participant PLC as LS Electric PLC<br/>192.168.1.2:502
 
     B->>S: POST /api/plc/auger {command: START}
-    S->>P: plc.auger_sequence("START")
-    P->>PLC: Modbus write %MW6500 = 1   (START bit)
-    Note over P,PLC: hold 100 ms
-    P->>PLC: Modbus write %MW6500 = 0   (release)
+    S->>P: plc.control_auger("START")
+    P->>PLC: Modbus write %MW5110 = 1   (Auger Start Sequence, bit 0)
+    Note over P,PLC: momentary pulse — self-clears to 0
+    P->>PLC: Modbus write %MW5110 = 0   (release)
     P-->>S: {success: true, connected: true}
     S-->>B: 200 {success: true}
 
     loop Poll every 500 ms
-        B->>S: GET /api/plc/sequence
-        S->>P: plc.get_sequence_detail()
-        P->>PLC: Modbus read %MW1100 (sequence status)
-        P-->>S: {auger_in_cycle: false, ...}
-        S-->>B: 200 {auger_in_cycle: false}
+        B->>S: GET /api/amr/poll
+        S->>P: read %MW5100 (auger status)
+        P->>PLC: Modbus read %MW5100  (Clear-of-Ground bit)
+        P-->>S: {mw5100: …}
+        S-->>B: 200 {mw5100: …}
     end
-    Note over B: toast "Auger complete" when in_cycle goes false
+    Note over B: shows "Working" until Clear-of-Ground (%MW5100 bit 1) returns to 1
 ```
 
 ### Key Modbus registers
 
+> Full register map, offsets, and bit tables: **[docs/plc.md](docs/plc.md)**. Manufacturer manuals: **[docs/plc/manufacturer-docs.md](docs/plc/manufacturer-docs.md)**.
+
 | Register | Symbol | Used for |
 |----------|--------|---------|
-| `%MW6500` | Auger pushbutton word | START=1, STOP=2 (pulsed) |
+| `%MW5110` | Auger command (AMR handshake) | bit 0 = Start Sequence (1 = start, 0 = clear); written by `/api/plc/auger` as a momentary pulse |
+| `%MW5111` | Planter command (AMR handshake) | bit 0 = Start Sequence; written by `/api/plc/planter` |
+| `%MW5112` | AMR state | 1 = stationary, 2 = moving (auto-written on movement transitions) |
+| `%MW5100` / `%MW5101` | Auger / planter status (read) | Clear-of-Ground handshake bit tracks completion: 1 home → 0 working → 1 done |
 | `%MW5000` | Machine PB word | Machine commands (START, STOP, HOME_ALL, FAULT_RESET, …) |
 | `%MW5001` | Machine PB word 2 | ENABLE/DISABLE subsystems |
 | `%MW6200` | Robot PB word | HOME, START, STOP, PAUSE, MOTORS_ON/OFF |
+| `%MW6500` | Auger pushbutton word (legacy) | Superseded by the `%MW5110` handshake — **not** used by `/api/plc/auger` |
 | `%MW1000` | HMI indicators | E-stop, gate, fault, mode, per-subsystem enables (read) |
-| `%MW1100` | Sequence status | Auger/planter cycle active flags (read) |
-| `%MW5100–5112` | AMR handshake | Moving/stationary state, PLC↔AMR signals |
+| `%MW2700` / `%MW2800` | AugerSeq / PlanterSeq (read) | Sequence step + in-cycle bits (`%MX43204` / `%MX44804`) |
 
 ### Setup for real operations
 

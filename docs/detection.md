@@ -65,10 +65,10 @@ python3 -c "import torch; print(torch.cuda.is_available())"
 
 ### 3 — YOLO model file
 
-The model file `yolov8n.pt` must be in the project root directory (`/home/jetson/dual/dual-robot-dashboard/`). It is already present in this repo. If it is missing, download it:
+The model file `yolov8n.pt` must be in the project root directory (the repo root, e.g. `/home/jetson/agrobot/`). It is already present in this repo. If it is missing, download it:
 
 ```bash
-cd /home/jetson/dual/dual-robot-dashboard
+cd "$(git rev-parse --show-toplevel)"   # the project root
 python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
 ```
 

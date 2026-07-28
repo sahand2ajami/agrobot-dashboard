@@ -15,6 +15,12 @@ Runs on Ubuntu 22.04 + ROS 2 Humble (Jetson). Read
 codebase (layering, dependency rule, how to extend safely, remaining risks).
 `reference/` holds read-only clones of the pre-merge repos (gitignored).
 
+**Docs map:** [architecture.md](docs/architecture.md) (codebase map) ·
+[jetson.md](docs/jetson.md) (the AGX Orin unit: specs, network, serial devices) ·
+[plc.md](docs/plc.md) (PLC integration) + [plc/manufacturer-docs.md](docs/plc/manufacturer-docs.md)
+(LS Electric manuals) · [ui-guide.md](docs/ui-guide.md) (every button/panel) ·
+[hmi.md](docs/hmi.md) (HMI mirror) · [detection.md](docs/detection.md) (YOLO).
+
 ---
 
 ## Build & test
