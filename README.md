@@ -172,7 +172,7 @@ agrobot/
 ├── requirements.txt                ← Python deps (ROS msgs come from apt, not pip)
 ├── Dockerfile                      ← 3-stage build: ROS base → pip deps → app
 ├── docker-compose.yml              ← Jetson deployment (GPU, host networking, ZED)
-└── DEVELOPMENT.md                       ← detailed developer / implementation guide
+└── DEVELOPMENT.md                  ← detailed developer / implementation guide
 ```
 
 Files marked ★ are the best starting points for understanding the codebase.

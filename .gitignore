@@ -25,9 +25,6 @@ dist/
 .env
 .env.*
 
-# Local editor settings
-.editor/settings.local.json
-.editor/worktrees/
 
 # Read-only upstream clones, kept for traceability — never modified, never committed
 reference/

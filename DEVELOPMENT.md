@@ -1,4 +1,4 @@
-# DEVELOPMENT.md — Dual-Robot Dashboard Developer Guide
+# Developer Guide — Agrobot Dashboard
 
 ## What this project is
 
