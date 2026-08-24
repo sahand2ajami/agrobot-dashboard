@@ -41,7 +41,7 @@ pytest tests/                      # no hardware / no ROS required
 |------|------|
 | `agrobot_dashboard/domain/` | Pure business logic (kinematics, odometry, battery filter, fwd2m planner, geo). No I/O, no threads, no ROS. |
 | `agrobot_dashboard/services/` | `telemetry.py` (**TelemetryStore** — ALL mutable shared state lives here, one locked object per subsystem), `events.py` (browser event log), `detection.py` (shared YOLO singleton + GPU lock), `recording.py`. |
-| `agrobot_dashboard/adapters/` | `cameras.py` (ZED front/rear + webcam capture threads; take the store as an argument), `cloud.py` (Supabase upload, key from `$AGROBOT_SUPABASE_KEY`). |
+| `agrobot_dashboard/adapters/` | `cameras.py` (ZED front/rear + webcam capture threads; take the store as an argument), `cloud.py` (HTTP ingest upload, key from `$AGROBOT_INGEST_KEY`). |
 | `dashboard/serve.py` | HTTP layer + composition root (`main()`); ~1,270 lines. Declarative routing: `GET_EXACT`/`GET_PREFIX`/`POST_EXACT` (exact first, then longest prefix — order can't shadow routes). Extensions register via `Handler.add_route`; **monkey-patching is forbidden**. |
 | `dashboard/chassis.py` | Chassis abstraction (see below). Transitional home; carries the `sys.path` shim that makes `agrobot_dashboard` importable from a checkout. |
 | `dashboard/plc_client.py` | The ONE Modbus TCP client to the PLC (register map `_REG`, command bit tables, AMR handshake block). |
@@ -172,8 +172,8 @@ Publishes Twist to `/jackal1/cmd_vel`; camera from
   See [detection.md](docs/detection.md).
 - **Recording / plant logging** — `agrobot_dashboard/services/recording.py` →
   MP4s under `logs/recordings/`; seedling records to
-  `logs/planted_seedlings/seedlings.jsonl` and (when `AGROBOT_SUPABASE_KEY` is
-  set) to Supabase via `agrobot_dashboard/adapters/cloud.py`.
+  `logs/planted_seedlings/seedlings.jsonl` and (when `AGROBOT_INGEST_KEY` is
+  set) to the configured ingest endpoint via `agrobot_dashboard/adapters/cloud.py`.
 
 ---
 
@@ -238,7 +238,7 @@ LS Electric's XG5000 simulator (Windows; runs the real ladder).
 - The ROS executor is `MultiThreadedExecutor(num_threads=4)`. The 20 Hz
   velocity publisher runs on its **own dedicated thread** so a busy callback
   queue can never jitter teleop commands.
-- Secrets: `AGROBOT_SUPABASE_KEY` (and optional `AGROBOT_SUPABASE_URL`) come from
+- Secrets: `AGROBOT_INGEST_KEY` and `AGROBOT_INGEST_URL` (both required; no default endpoint) come from
   the environment. Never commit keys.
 - New static assets go under a whitelisted prefix (`/logo/`, `/js/`) or an
   explicit addition to `Handler.STATIC_PREFIXES`.

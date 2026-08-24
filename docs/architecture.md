@@ -29,7 +29,7 @@ a higher one.
 |---|---|---|---|
 | **domain** | `agrobot_dashboard/domain/` | Pure logic: kinematics, odometry accumulation, battery median filter, fwd2m speed planner, DMS formatting. No I/O, no threads, no ROS. | stdlib only |
 | **services** | `agrobot_dashboard/services/` | Stateful runtime: `TelemetryStore` (ALL mutable shared state), event log, YOLO singleton, recording loop. Own their locks/threads. | domain |
-| **adapters** | `agrobot_dashboard/adapters/` | Hardware/network I/O: camera capture threads (`cameras.py`), Supabase upload (`cloud.py`). `dashboard/plc_client.py` and `dashboard/chassis.py` belong to this layer (they move into the package in a future step). | domain, services |
+| **adapters** | `agrobot_dashboard/adapters/` | Hardware/network I/O: camera capture threads (`cameras.py`), HTTP ingest upload (`cloud.py`). `dashboard/plc_client.py` and `dashboard/chassis.py` belong to this layer (they move into the package in a future step). | domain, services |
 | **web / app** | `dashboard/serve.py` | HTTP routing (declarative tables), request handlers, `main()` composition root. | everything above |
 
 Key objects:
@@ -78,7 +78,7 @@ config/chassis/<name>.yaml ─► chassis.Chassis ─► serve.py (limits, scali
 
 Selection precedence: `--chassis` flag → `$ROBOT_CHASSIS` →
 `config/active_chassis.yaml` → `agrobot`. Secrets come only from the
-environment (`AGROBOT_SUPABASE_KEY`).
+environment (`AGROBOT_INGEST_KEY`).
 
 ## 2. How to understand the project
 
@@ -169,8 +169,8 @@ Rules that keep the architecture intact:
 6. **`plc_combined.html` still duplicates some page scaffolding** with
    `index.html` (~200 lines of camera/settings helpers). Fold into shared
    `js/` modules as they stabilize.
-7. **The leaked Supabase key** must be rotated server-side; it remains in
-   git history.
+7. **The previously committed ingest key** must be rotated server-side. It is
+   no longer present in this repo or its history, but treat it as exposed.
 8. **`scripts/plc_read.py` / `plc_test.py`** are standalone bench tools that
    re-declare the FEnet offset formulas; acceptable for diagnostics, but
    check them against `plc_client._REG` before trusting output.

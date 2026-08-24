@@ -105,7 +105,7 @@ these is essential — one of them has a real-world gotcha described below.
 | Interface | Type | Role |
 |-----------|------|------|
 | `eno1` | Wired Ethernet | Connects to the **PLC** (agrobot chassis) or the **Clearpath Jackal**, on the `192.168.1.0/24` subnet. The launch script gives the Jetson `192.168.1.100` here; the PLC CPU is at `192.168.1.2:502`. |
-| `wlP1p1s0` | WiFi | How phones/laptops reach the dashboard in the field (e.g. via the "Agrobot26010" router). |
+| `wlP1p1s0` | WiFi | How phones/laptops reach the dashboard in the field (e.g. via the field WiFi router). |
 | `tailscale0` | Tailscale VPN | Remote access over the internet using a `100.x.y.z` address. |
 
 Terminology: a **subnet** like `192.168.1.0/24` is a block of 256 addresses
@@ -115,7 +115,7 @@ uses to talk to the PLC.
 
 ### The WiFi / PLC subnet collision (important)
 
-There is a genuine trap here. The field WiFi router (e.g. "Agrobot26010") **also
+There is a genuine trap here. The field WiFi router **also
 hands out `192.168.1.x` addresses** — the *same* subnet the wired PLC link uses.
 If the Jetson claims the entire `192.168.1.0/24` block on the wired `eno1` port,
 that route outranks the WiFi route, so replies meant for a WiFi client (a phone

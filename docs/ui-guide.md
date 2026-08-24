@@ -60,7 +60,7 @@ Three icon buttons sit at the right of the header:
 | Gear — **Advanced Settings** | `gearBtn` | Opens the Advanced Settings side panel. | `openSettings()`; loads `GET /api/settings`, polls `GET /api/*` status endpoints while open. | Always visible. |
 
 The Agrobot logo sits at the left; if the SVG fails to load it falls back to the
-text "AGROBOT ROBOTICS".
+text "AGROBOT".
 
 ### 2.2 Camera area
 

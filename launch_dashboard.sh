@@ -151,7 +151,7 @@ if command -v fuser &>/dev/null && ss -ltn 2>/dev/null | grep -q ":$PORT "; then
 fi
 
 # ── Logo (copy from Downloads if a newer version is present) ─────────────────
-LOGO_SRC="$HOME/Downloads/logo_agrobot_robotics/svg/white_transparent.svg"
+LOGO_SRC="$HOME/Downloads/logo_agrobot/svg/white_transparent.svg"
 LOGO_DST="$SCRIPT_DIR/dashboard/logo/svg/white_transparent.svg"
 if [[ ! -f "$LOGO_DST" && -f "$LOGO_SRC" ]]; then
   mkdir -p "$(dirname "$LOGO_DST")"
@@ -189,7 +189,7 @@ start_gnss() {
 # The robot device (agrobot PLC at robot_ip on eno1; or the Jackal) lives on a wired
 # subnet. Normally we add the host /24 so that whole subnet is on-link via eno1.
 #
-# The catch: field WiFi is often on the SAME 192.168.1.0/24 (e.g. the Agrobot26010
+# The catch: field WiFi is often on the SAME 192.168.1.0/24 (e.g. the field WiFi
 # router hands out 192.168.1.x). A competing /24 on eno1 then OUTRANKS the WiFi
 # route, so every reply to a WiFi client — a phone/laptop viewing the dashboard —
 # is routed into eno1, which is down whenever the robot is off. The page then
@@ -366,7 +366,7 @@ log "Press Ctrl-C to stop."
 # Skips: loopback, link-local, docker/172.*, Tailscale (100.*), IPv6, and the
 # wired robot-subnet alias ($CH_HOSTIP on eno1 — the PLC/Jackal side, not a
 # dashboard access address). We intentionally do NOT blanket-skip 192.168.* any
-# more: field WiFi (e.g. Agrobot26010) lives there, and that's the address a phone
+# more: field WiFi (e.g. a field router) lives there, and that's the address a phone
 # or laptop must use.  Whatever's left is the real LAN/WiFi address(es).
 CH_HOST_ONLY="${CH_HOSTIP%%/*}"
 {

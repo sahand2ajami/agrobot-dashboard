@@ -70,7 +70,7 @@ arp -n 192.168.1.2
 
 The PLC lives on `192.168.1.0/24`, reached over the wired `eno1` port. In the
 field the Jetson is *also* on WiFi (`wlP1p1s0`) so phones and laptops can open the
-dashboard — and some field routers (e.g. **Agrobot26010**) hand out `192.168.1.x`
+dashboard — and some field routers (e.g. many consumer routers) hand out `192.168.1.x`
 addresses too. Now **both interfaces claim the same subnet**, which used to break
 things: adding the Jetson's `192.168.1.100/24` to `eno1` made the wired route
 outrank the WiFi route, so every reply to a WiFi client (a phone loading the page)

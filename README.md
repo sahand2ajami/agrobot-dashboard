@@ -123,7 +123,7 @@ agrobot/
 │   │                                  battery filter, fwd2m planner, geo (no I/O)
 │   ├── services/                   ← telemetry.py (TelemetryStore — ALL shared state),
 │   │                                  events.py, detection.py (YOLO), recording.py
-│   └── adapters/                   ← cameras.py (ZED/webcam capture), cloud.py (Supabase)
+│   └── adapters/                   ← cameras.py (ZED/webcam capture), cloud.py (HTTP ingest)
 │
 ├── dashboard/
 │   ├── serve.py                    ← HTTP layer + composition root (main)  ★
@@ -585,7 +585,7 @@ You should see **Chassis Link** go green, **Chassis Battery** show a voltage, an
 The dashboard is also published on the Jetson's LAN/WiFi address, so it opens from
 any other device (laptop, tablet, phone) on the same network — not just the Jetson
 itself. **The launcher prints the exact URL at startup** — use whatever it prints,
-since the IP changes with the network. For example, on the field WiFi `Agrobot26010`
+since the IP changes with the network. For example, on a field WiFi router
 it prints `http://192.168.1.89:8769`. If nothing loads from your phone, see the
 subnet-sharing note under [Remote / headless](#remote--headless-drive-from-a-laptop)
 below.
@@ -621,7 +621,7 @@ Open whichever address shares a network with your laptop. The full UI works in a
 > **Note:** The launcher prints the Jetson's main WiFi/LAN address(es), skipping
 > loopback, Docker (`172.*`), Tailscale (`100.*`), IPv6, and the wired PLC/Jackal
 > alias (`eno1`'s `192.168.1.100`). It **does** print a WiFi address in the
-> `192.168.1.x` range — common on field routers like `Agrobot26010` that hand out that
+> `192.168.1.x` range — common on field routers that hand out that
 > subnet. That shared-subnet case used to make the page unreachable from
 > phones/laptops (the wired `eno1` route hijacked replies to WiFi clients); the
 > launcher now installs a `/32` host route to the PLC instead of claiming the whole
