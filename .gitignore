@@ -34,3 +34,7 @@ reference/
 
 # Scratch files
 _tmp_*
+
+# Machine-builder PLC files — kept local, never redistributed
+docs/plc/GTS_Tree_Planter*
+*.xgwx

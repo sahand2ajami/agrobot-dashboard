@@ -58,7 +58,7 @@ _UNAVAILABLE = "PLC client unavailable"
 # auger_motor) and every field ``key`` matches a JSON key in that response, so the UI
 # can show live values next to the mapping. Each *write* group lists the command set
 # that pulses its bits. Structs/addresses are verified against the PLC global symbol
-# table (docs/plc/GTS_Tree_Planter_symbols.csv); the exact bit index within each shared
+# table (the PLC's global symbol CSV); the exact bit index within each shared
 # word and the Modbus address base are the two live-PLC open items (docs/plc/README.md).
 PLC_TAG_MAP = {
     "read": [
@@ -513,7 +513,7 @@ HMI_UDT = {
 }
 
 # Read-relevant UDT instances (symbol → (udt, PLC %MW base)). Mirrors the read
-# rows of GTS_Tree_Planter_symbols.csv; the write-only *PB instances are omitted.
+# rows of the PLC symbol table; the write-only *PB instances are omitted.
 HMI_BLOCKS = {
     "HMI_IND":                 ("ud_HMI_IND", 1000),
     "AugerSeq":                ("ud_sequence", 2700),

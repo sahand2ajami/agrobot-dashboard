@@ -9,10 +9,17 @@ official [LS Electric manufacturer documentation](manufacturer-docs.md).
 
 | File | What it is |
 |------|------------|
-| `GTS_Tree_Planter_26006_20260608.xgwx` | The LS Electric XG5000 PLC project from the controls engineer (binary container). |
-| `GTS_Tree_Planter_26006_20260608.csv` | Full tag / comment export from the `.xgwx` project. |
-| `GTS_Tree_Planter_symbols.csv` | The PLC's global symbol table (name / type / `%MW` address), the equivalent of XG5000's "export variables to CSV". |
 | [`manufacturer-docs.md`](manufacturer-docs.md) | Official LS Electric websites + XGT / FEnet / XG5000 manuals. |
+
+> **Machine-builder files are not distributed here.** The XG5000 ladder project
+> (`.xgwx`), its full tag export, and the global symbol-table CSV belong to the
+> machine builder and are not redistributed in this repository. The register map
+> and handshake documented below and in [`../plc.md`](../plc.md) are this
+> project's own integration notes and are sufficient to work with the dashboard.
+>
+> If you have the symbol-table CSV, drop it at `docs/plc/GTS_Tree_Planter_symbols.csv`
+> and the PLC panel will populate its symbol list automatically; without it the
+> panel simply shows the curated tag map and an empty symbol list.
 
 ## Compatibility status (verified against this project)
 

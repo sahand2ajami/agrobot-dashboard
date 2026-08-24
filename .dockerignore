@@ -31,7 +31,7 @@ reference/
 .idea/
 
 # ── Developer docs / reports (not needed at runtime) ─────────────────────────
-# NOTE: docs/ is intentionally included — docs/plc/GTS_Tree_Planter_symbols.csv
+# NOTE: docs/ is intentionally included — the optional PLC symbol-table CSV
 # is read at runtime by the /api/plc/tags endpoint.
 documents/
 *.md

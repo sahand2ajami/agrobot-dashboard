@@ -14,11 +14,9 @@ third-party mirrors. It does **not** repeat our project-specific wiring:
 - **Our Modbus register map and address offsets** (FC04 reads at address − 1000,
   FC06 writes at address − 5000, the `%MW5100–5112` handshake block, etc.) are
   documented in [`../plc.md`](../plc.md).
-- **The actual PLC project files** — the XG5000 project
-  `GTS_Tree_Planter_26006_20260608.xgwx` (`.xgwx` is XG5000's project format) and
-  the symbol/tag exports `GTS_Tree_Planter_26006_20260608.csv` and
-  `GTS_Tree_Planter_symbols.csv` — live alongside this file in
-  [`docs/plc/`](.).
+- **The actual PLC project files** — the XG5000 project (`.xgwx` is XG5000's
+  project format) and its symbol/tag exports — belong to the machine builder and
+  are **not redistributed in this repository**. See [`README.md`](README.md).
 
 > All links below are on LS Electric's own domains (`ls-electric.com` and its
 > automation portal `sol.ls-electric.com`). Prefer these over the many
@@ -66,7 +64,7 @@ picking the exact manual to follow:
    module in the control cabinet:
    - CPU module — e.g. `XGK-CPUx…`, `XGI-CPUx…`, or `XGB-…`.
    - FEnet/Ethernet module — e.g. `XGL-EFMTB` (XGT) or `XBL-EMTA` (XGB).
-2. **XG5000 project.** Open `GTS_Tree_Planter_26006_20260608.xgwx` in XG5000 and
+2. **XG5000 project.** Open the machine builder's `.xgwx` project in XG5000 and
    look at the **I/O configuration / base module list** — the configured CPU and
    the FEnet module in each slot are named there.
 3. **Online in XG5000.** With XG5000 connected to the live PLC
@@ -97,6 +95,6 @@ detail in [`../plc.md`](../plc.md)):
   Modbus addresses. The FEnet module manual is where that mapping is specified;
   our concrete register table is in [`../plc.md`](../plc.md).
 - **XG5000 for the ladder.** XG5000 (from the Download Center) is the tool used
-  to open our `.xgwx` project, read/edit the ladder, and — via LS Electric's
+  to open the `.xgwx` project, read/edit the ladder, and — via LS Electric's
   XG5000 simulator — run the program without the physical machine when
   bench-testing the dashboard against it.

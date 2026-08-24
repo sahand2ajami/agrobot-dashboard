@@ -547,7 +547,7 @@ Change `plc.host` in `config/chassis/agrobot.yaml` to point at the simulator's I
 
 XG5000 can simulate the real ladder program with the full register map and safety interlock logic. It exposes a Modbus TCP server on the Windows machine's IP. This is the most accurate way to develop and test without the physical PLC.
 
-1. Open `docs/plc/GTS_Tree_Planter_26006_20260608.xgwx` in XG5000.
+1. Open the machine builder's XG5000 project (`.xgwx`) in XG5000.
 2. Run → Simulator → Start.
 3. Change `plc.host` in `agrobot.yaml` to the Windows machine's IP.
 4. Verify with `curl http://localhost:8769/api/amr/poll` (or the **PLC Handshake** tab).

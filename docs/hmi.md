@@ -53,7 +53,7 @@ whole mapping as the single source of truth:
   (Cross-check: `EstopOkFL @4.0` in `ud_HMI_IND` → %MW1000 word 2 bit 0 →
   %MX16032, which is exactly `_REG["IND_ESTOP_OK_FL"]`.)
 - **`HMI_BLOCKS`** — the read-relevant UDT *instances* (symbol → type + %MW
-  base), mirroring the read rows of `docs/plc/GTS_Tree_Planter_symbols.csv`.
+  base), mirroring the read rows of the PLC's global symbol table.
   The write-only `*PB` instances are intentionally excluded.
 - **`HMI_SINGLES`** — standalone tags not inside a UDT. Currently
   `NodeCommsNOk` (%MW1048): one *not-OK* bit per EtherNet/IP node, inverted so

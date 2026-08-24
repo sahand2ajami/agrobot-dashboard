@@ -720,8 +720,10 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _serve_plc_tags(self):
         """GET /api/plc/tags — static PLC tag/register reference for the UI's PLC panel:
-        the curated read/write/reserved tag map (PLC_TAG_MAP) plus the full PLC symbol
-        table read from docs/plc/, each symbol annotated with its integration role. No
+        the curated read/write/reserved tag map (PLC_TAG_MAP) plus the PLC symbol
+        table read from docs/plc/ *if present*, each symbol annotated with its
+        integration role. The symbol CSV is the machine builder's and is not shipped
+        with this repo; when it is absent the endpoint returns an empty symbol list. No
         gateway call — works whether or not the gateway is up; only gated on the chassis
         having a PLC (jackal → 503, via _plc_client)."""
         if self._plc_client() is None:

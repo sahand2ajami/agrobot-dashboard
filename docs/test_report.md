@@ -183,7 +183,7 @@ Allow-lists are `frozenset` (immutable, correct):
 
 - `PLC_TAG_MAP` keys: `read`, `write`, `reserved`, `notes` ✓
 - `read` group: 4 entries; `write` group: 4 entries
-- `docs/plc/GTS_Tree_Planter_symbols.csv` **exists** ✓
+- PLC symbol table CSV present (optional; the panel degrades to an empty symbol list without it)
 - `symbol_roles()` returns 9 annotated entries ✓
 - No gateway call required — works gateway-down ✓
 
